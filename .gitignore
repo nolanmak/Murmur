@@ -8,3 +8,6 @@ packaging/build/
 .local/
 *.pcm
 *.wav
+
+__pycache__/
+*.pyc

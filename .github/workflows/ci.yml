@@ -18,8 +18,12 @@ jobs:
         with:
           components: rustfmt, clippy
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config libdbus-1-dev
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config libdbus-1-dev python3-gi gir1.2-gtk-3.0 xvfb pipewire-bin libspa-0.2-modules
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked --workspace
       - run: python3 scripts/check-repo.py
+      - if: runner.os == 'Linux'
+        run: xvfb-run -a python3 scripts/test-linux-ui.py
+      - if: runner.os == 'Linux'
+        run: python3 scripts/test-linux-native.py
