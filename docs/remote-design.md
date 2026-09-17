@@ -45,8 +45,33 @@ consumed synchronously with their fresh destination check; queuing a command for
 later execution would require another check. Native callbacks should enqueue
 observations for the main-thread controller rather than run blocking operations.
 
-The controller is not connected to the app UI or a native transport yet.
+The controller is not connected to the app UI or RustDesk transport yet.
 The existing local insertion path is unchanged.
+
+## Clipboard implementation and limits
+
+`remote_clipboard::Lease` keeps recovery data only in memory, scoped to an attempt.
+It preserves a partial-write recovery snapshot, rejects stale cleanup, and retains
+the copied transcript when receipt is unknown. Explicit restoration checks the
+clipboard revision. A changed owner ends recovery without overwriting that owner.
+There is no timer-based restoration or implicit write in `Drop`.
+
+`platform::macos_clipboard::MacClipboard` implements the same clipboard interface
+using NSPasteboard. It preserves materialized supported text/rich-text/image
+formats, including observed macOS text aliases; it rejects multiple items,
+unknown formats, failed materialization, and snapshots exceeding 16 MiB. It
+requires the main thread because macOS may synchronously fulfill format promises.
+
+**Native limitation:** NSPasteboard does not provide atomic compare-and-replace.
+The adapter checks change counts immediately before mutation, between format
+writes, and afterward, but another process can race the check and declaration.
+The fake adapter's atomic conflict tests do not prove the absence of that native
+race. A native design that satisfies the issue's absolute ownership guarantee is
+still unresolved; do not enable unattended remote clipboard automation on this
+evidence. Reading promised data also lacks a cancellable native deadline.
+
+No local or remote general clipboard was modified during the native adapter
+tests. Each test creates and clears its own uniquely named pasteboard.
 
 ## TDD evidence
 
@@ -57,13 +82,23 @@ Command: `cargo test --locked --test remote`.
   and paste profiles.
 - Green implementation: the same 12 tests pass without weakening assertions.
 - These are controller tests. No native RustDesk acceptance row is marked passed.
+- Clipboard red commit `f890fa9`: all 10 clipboard lifecycle tests failed against
+  the compiling stub. Green commit `ba5d56f`: those tests pass, including exact
+  Unicode payloads, multi-format restoration, stale attempts, partial copy/restore
+  failures, ownership changes, and explicit recovery without receipt.
+- Native adapter red commit `f78c3ac`: four real NSPasteboard contracts failed
+  against the compiling stub. The implementation passes all four via
+  `cargo test --locked --test macos_clipboard`: Unicode/rich-text round-trip,
+  newer-owner preservation, multiple-item rejection, and empty restoration.
+  Its custom harness runs on the main thread. Non-macOS runs explicitly skip.
+  This proves local clipboard behavior, not transport delivery or remote paste.
 
 ## Remaining work
 
 - Establish version-specific active-session and clipboard-receipt observability;
   test clipboard isolation with multiple sessions.
-- Implement and test clipboard ownership, lossless snapshots, recovery, and
-  injectable adapter contracts.
+- Integrate the implemented clipboard lease and resolve native race/deadline
+  limitations; build session, transport, and paste dispatcher contracts.
 - Connect transcript review, opt-in remote mode, destination selection, paste
   profiles, and error states to the native app.
 - Validate local hotkey forwarding behavior inside RustDesk.
