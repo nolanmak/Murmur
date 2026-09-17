@@ -10,9 +10,13 @@ use std::time::Duration;
 struct Sink {
     producer: Producer<f32>,
     failed: Arc<AtomicBool>,
+    receiving: Arc<AtomicBool>,
 }
 impl FrameSink for Sink {
     fn on_frames(&mut self, pcm: &[f32], _: CaptureTimestamp, _: FrameFlags) {
+        if !pcm.is_empty() {
+            self.receiving.store(true, Ordering::Release);
+        }
         for sample in pcm {
             if self.producer.push(*sample).is_err() {
                 self.failed.store(true, Ordering::Release);
@@ -45,6 +49,22 @@ pub async fn run_with_endpoint(
     control: Arc<AtomicU8>,
     endpoint: fotw_stt::DeepgramEndpoint,
 ) -> Result<String, String> {
+    run_observed(
+        tap,
+        key,
+        control,
+        endpoint,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .await
+}
+pub async fn run_observed(
+    tap: Box<dyn AudioTap>,
+    key: String,
+    control: Arc<AtomicU8>,
+    endpoint: fotw_stt::DeepgramEndpoint,
+    receiving: Arc<AtomicBool>,
+) -> Result<String, String> {
     if control.load(Ordering::Acquire) != 0 {
         return Err("Cancelled before microphone startup".into());
     }
@@ -56,11 +76,14 @@ pub async fn run_with_endpoint(
         .start(Box::new(Sink {
             producer,
             failed: failed.clone(),
+            receiving,
         }))
         .map_err(|_| "Cannot start microphone; check permission and input device")?;
     let mut resampler =
         Resampler16k::new(format.sample_rate_hz, 1).map_err(|_| "Unsupported microphone format")?;
-    let (tx, rx) = tokio::sync::mpsc::channel(32);
+    // Ten seconds of 10 ms chunks covers the bounded eight-second TLS handshake.
+    // The previous 320 ms queue overflowed before a live connection could open.
+    let (tx, rx) = tokio::sync::mpsc::channel(1024);
     let network = crate::streaming::transcribe(key, rx, endpoint, Duration::from_secs(8));
     tokio::pin!(network);
     let started = std::time::Instant::now();
