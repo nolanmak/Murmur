@@ -1,0 +1,74 @@
+[
+  {
+    "number": 1,
+    "title": "Foundation: standalone Apache-2.0 workspace and private CI",
+    "milestone": "M1",
+    "url": "https://github.com/nolanmak/Text-to-speech/issues/1"
+  },
+  {
+    "number": 2,
+    "title": "Hold-Space dictation with normal typing preserved and Escape cancellation",
+    "milestone": "M1",
+    "url": "https://github.com/nolanmak/Text-to-speech/issues/2"
+  },
+  {
+    "number": 3,
+    "title": "Microphone-only audio pipeline using FlyOnTheWall capture and resampling",
+    "milestone": "M1",
+    "url": "https://github.com/nolanmak/Text-to-speech/issues/3"
+  },
+  {
+    "number": 4,
+    "title": "Deepgram transcription with explicit end-of-dictation finalization",
+    "milestone": "M1",
+    "url": "https://github.com/nolanmak/Text-to-speech/issues/4"
+  },
+  {
+    "number": 5,
+    "title": "Reuse local FlyOnTheWall credentials and support explicit .env configuration",
+    "milestone": "M1",
+    "url": "https://github.com/nolanmak/Text-to-speech/issues/5"
+  },
+  {
+    "number": 6,
+    "title": "Safe insertion into the original focused macOS text field",
+    "milestone": "M1",
+    "url": "https://github.com/nolanmak/Text-to-speech/issues/6"
+  },
+  {
+    "number": 7,
+    "title": "Menu bar, recording indicator and first-run permission setup",
+    "milestone": "M1",
+    "url": "https://github.com/nolanmak/Text-to-speech/issues/7"
+  },
+  {
+    "number": 8,
+    "title": "Optional AI cleanup with faithful raw-transcript fallback",
+    "milestone": "M2",
+    "url": "https://github.com/nolanmak/Text-to-speech/issues/8"
+  },
+  {
+    "number": 9,
+    "title": "Personal vocabulary, snippets and language settings",
+    "milestone": "M2",
+    "url": "https://github.com/nolanmak/Text-to-speech/issues/9"
+  },
+  {
+    "number": 10,
+    "title": "Retry, optional local history and recovery controls",
+    "milestone": "M2",
+    "url": "https://github.com/nolanmak/Text-to-speech/issues/10"
+  },
+  {
+    "number": 11,
+    "title": "Signed app, release QA and readiness for eventual public source release",
+    "milestone": "M3",
+    "url": "https://github.com/nolanmak/Text-to-speech/issues/11"
+  },
+  {
+    "number": 12,
+    "title": "Additional local/cloud STT backends and Windows/Linux platform adapters",
+    "milestone": "M3",
+    "url": "https://github.com/nolanmak/Text-to-speech/issues/12"
+  }
+]
