@@ -20,8 +20,12 @@ impl<T> Default for Selection<T> {
     }
 }
 impl<T> Selection<T> {
-    pub fn observe(&mut self, _foreground: Foreground<T>) {
-        self.target = None;
+    pub fn observe(&mut self, foreground: Foreground<T>) {
+        match foreground {
+            Foreground::Destination(target) => self.target = Some(target),
+            Foreground::ReviewUi => {}
+            Foreground::Other => self.target = None,
+        }
     }
     pub fn take(&mut self) -> Option<T> {
         self.target.take()

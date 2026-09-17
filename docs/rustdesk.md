@@ -6,7 +6,8 @@ copies reviewed text; you perform the paste in RustDesk yourself.
 
 ## Use the fallback
 
-1. Open the **Control** menu and enable **Remote review mode**.
+1. Open the **Control** menu (or right-click the floating status bar) and enable
+   **Remote review mode**.
 2. Use **Start dictation** and **Stop dictation** in the menu. Remote mode does not
    use the Control dictation hotkey, since the current listener cannot suppress
    modifier events sent to RustDesk. Ordinary keyboard events still reach the
@@ -53,3 +54,9 @@ paste profile reset on app restart; no transcript or destination is saved.
 `cargo run --locked -- review-preview` opens the actual review dialog using
 synthetic text. It never reads credentials, records audio, or modifies a clipboard.
 This checks the local review layout; it does not test remote insertion.
+
+For a native integration test, launch the built app with `run --remote-fixture`.
+It starts in remote review mode with a labeled synthetic transcript. Unlike the
+UI-only preview, its explicit **Copy for manual paste** action uses the real
+clipboard. Prepare a disposable remote editor and isolate the intended session
+before confirming. Restart normally after testing to clear the fixture.
