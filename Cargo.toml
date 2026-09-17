@@ -49,3 +49,6 @@ tokio-tungstenite = "0.29"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+[[test]]
+name = "macos_clipboard"
+harness = false
