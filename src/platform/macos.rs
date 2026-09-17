@@ -33,7 +33,6 @@ unsafe extern "C" {
     fn AXUIElementCreateSystemWide() -> CF;
     fn AXUIElementCopyAttributeValue(element: CF, attribute: CF, value: *mut CF) -> i32;
     fn AXUIElementSetAttributeValue(element: CF, attribute: CF, value: CF) -> i32;
-    fn AXUIElementIsAttributeSettable(element: CF, attribute: CF, settable: *mut u8) -> i32;
     fn AXUIElementGetPid(element: CF, pid: *mut i32) -> i32;
     fn CGEventTapCreate(
         tap: u32,
@@ -47,6 +46,9 @@ unsafe extern "C" {
     fn CGEventGetIntegerValueField(event: CF, field: u32) -> i64;
     fn CGEventTapEnable(tap: CF, enable: bool);
     fn CGPreflightListenEventAccess() -> bool;
+    fn CGEventCreateKeyboardEvent(source: CF, key: u16, down: bool) -> CF;
+    fn CGEventSetFlags(event: CF, flags: u64);
+    fn CGEventPost(tap: u32, event: CF);
 }
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
@@ -66,7 +68,9 @@ unsafe extern "C" {}
 struct Owned(CF);
 impl Drop for Owned {
     fn drop(&mut self) {
-        unsafe { CFRelease(self.0) }
+        if !self.0.is_null() {
+            unsafe { CFRelease(self.0) }
+        }
     }
 }
 fn cfstr(s: &str) -> Owned {
@@ -119,12 +123,8 @@ impl Focus {
             || subrole.contains("Secure")
             || role.contains("Password")
             || subrole.contains("Password");
-        let name = cfstr("AXSelectedText");
-        let mut settable = 0;
-        let editable = unsafe { AXUIElementIsAttributeSettable(element.0, name.0, &mut settable) }
-            == 0
-            && settable != 0
-            && matches!(role.as_str(), "AXTextField" | "AXTextArea" | "AXComboBox");
+        let editable = crate::insertion::text_role(&role, &subrole);
+        eprintln!("focus role={role} editable={editable} secure={secure}");
         let target = Target {
             pid,
             element: unsafe { CFHash(element.0) } as u64,
@@ -146,10 +146,56 @@ impl Focus {
         let key = cfstr("AXSelectedText");
         let value = cfstr(text);
         if unsafe { AXUIElementSetAttributeValue(now.element.0, key.0, value.0) } != 0 {
-            return Err("This field does not accept text. Use Copy Last Transcript.".into());
+            return paste_text(text);
         }
         Ok(())
     }
+}
+fn paste_text(text: &str) -> Result<(), String> {
+    let paste = NSPasteboard::generalPasteboard();
+    if paste.pasteboardItems().is_some_and(|items| items.len() > 1) {
+        return Err("Use Copy Last Transcript (clipboard has multiple items)".into());
+    }
+    let mut saved = Vec::new();
+    if let Some(types) = paste.types() {
+        for kind in types.iter() {
+            let data = paste
+                .dataForType(&kind)
+                .ok_or("Cannot preserve clipboard; use Copy Last Transcript")?;
+            saved.push((kind, data));
+        }
+    }
+    let down = Owned(unsafe { CGEventCreateKeyboardEvent(ptr::null(), 9, true) });
+    let up = Owned(unsafe { CGEventCreateKeyboardEvent(ptr::null(), 9, false) });
+    if down.0.is_null() || up.0.is_null() {
+        return Err("Cannot create paste shortcut".into());
+    }
+    paste.clearContents();
+    paste.setString_forType(
+        &NSString::from_str(text),
+        &NSString::from_str("public.utf8-plain-text"),
+    );
+    let count = paste.changeCount();
+    unsafe {
+        CGEventSetFlags(down.0, 1 << 20);
+        CGEventSetFlags(up.0, 1 << 20);
+        CGEventPost(1, down.0);
+        CGEventPost(1, up.0);
+    }
+    // Restore only if no other app or person has changed the clipboard meanwhile.
+    let block = RcBlock::new(move |_: NonNull<NSTimer>| {
+        let paste = NSPasteboard::generalPasteboard();
+        if paste.changeCount() == count {
+            paste.clearContents();
+            for (kind, data) in &saved {
+                paste.setData_forType(Some(data), kind);
+            }
+        }
+    });
+    unsafe {
+        NSTimer::scheduledTimerWithTimeInterval_repeats_block(1.0, false, &block);
+    }
+    Ok(())
 }
 #[derive(Clone, Copy)]
 enum Input {

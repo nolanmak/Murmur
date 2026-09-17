@@ -1,4 +1,9 @@
 //! Native implementations must retain and compare the actual AX element too.
+pub fn text_role(role: &str, subrole: &str) -> bool {
+    matches!(role, "AXTextField" | "AXTextArea" | "AXComboBox")
+        && !subrole.contains("Secure")
+        && !subrole.contains("Password")
+}
 #[derive(Clone, Debug)]
 pub struct Target {
     pub pid: i32,
