@@ -1,6 +1,20 @@
 use std::collections::HashMap;
 use text_to_speech::config::resolve;
 #[test]
+fn finder_launch_finds_env_beside_app_even_with_unrelated_working_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir
+        .path()
+        .join("Text-to-speech.app/Contents/MacOS/text-to-speech");
+    let env = dir.path().join(".env");
+    std::fs::write(&env, "DEEPGRAM_API_KEY=fixture\n").unwrap();
+    assert_eq!(text_to_speech::config::bundle_env(&exe), Some(env));
+    assert_eq!(
+        text_to_speech::config::bundle_env(&dir.path().join("target/debug/text-to-speech")),
+        None
+    );
+}
+#[test]
 fn process_key_wins_over_file_and_keychain_without_logging_secrets() {
     let mut vars = HashMap::new();
     vars.insert("DEEPGRAM_API_KEY".into(), "process-secret".into());
