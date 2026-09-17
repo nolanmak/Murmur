@@ -7,7 +7,7 @@
   },
   {
     "number": 2,
-    "title": "Hold-Space dictation with normal typing preserved and Escape cancellation",
+    "title": "Hold-Control dictation with normal keyboard behavior and Escape cancellation",
     "milestone": "M1",
     "url": "https://github.com/nolanmak/Text-to-speech/issues/2"
   },
