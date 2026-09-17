@@ -9,7 +9,7 @@ async fn main() -> Result<(), String> {
     if bytes.len() % 2 != 0 {
         return Err("Expected signed-16-bit PCM".into());
     }
-    let credentials = text_to_speech::config::load()?;
+    let credentials = murmur::config::load()?;
     let (tx, rx) = tokio::sync::mpsc::channel(32);
     let producer = tokio::spawn(async move {
         for chunk in bytes.chunks(3200) {
@@ -22,7 +22,7 @@ async fn main() -> Result<(), String> {
             }
         }
     });
-    let text = text_to_speech::streaming::transcribe(
+    let text = murmur::streaming::transcribe(
         credentials.key.expose().into(),
         rx,
         fotw_stt::DeepgramEndpoint::production(),

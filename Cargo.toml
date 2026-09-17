@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0"
-repository = "https://github.com/nolanmak/Text-to-speech"
+repository = "https://github.com/nolanmak/Murmur"
 [workspace.dependencies]
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
@@ -16,7 +16,7 @@ ulid = "1"
 tokio = { version = "1", default-features = false }
 futures-util = { version = "0.3", default-features = false }
 [package]
-name = "text-to-speech"
+name = "murmur"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

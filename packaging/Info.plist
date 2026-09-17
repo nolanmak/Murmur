@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleName</key><string>Text-to-speech</string>
-<key>CFBundleDisplayName</key><string>Text-to-speech</string>
+<key>CFBundleName</key><string>Murmur</string>
+<key>CFBundleDisplayName</key><string>Murmur</string>
 <key>CFBundleIdentifier</key><string>com.shipsystems.texttospeech</string>
-<key>CFBundleExecutable</key><string>text-to-speech</string>
+<key>CFBundleExecutable</key><string>murmur</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>
 <key>CFBundleVersion</key><string>1</string>

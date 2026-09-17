@@ -1,5 +1,5 @@
+use murmur::remote::*;
 use std::time::Duration;
-use text_to_speech::remote::*;
 fn t(ms: u64) -> Duration {
     Duration::from_millis(ms)
 }

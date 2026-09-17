@@ -16,5 +16,5 @@ snapshot-only tests or tests that simply repeat implementation details.
 
 Keep native code in src/platform; no unsafe code in the application core. Preserve
 upstream attribution when adapting vendor sources. Never commit .env, audio,
-transcripts, signing material or build artifacts. Keep this repository private
-until the owner explicitly authorizes publishing it.
+transcripts, signing material or build artifacts. This repository is public;
+use synthetic examples and keep personal data out of code, issues, and evidence.

@@ -1,5 +1,5 @@
-use text_to_speech::core::Phase;
-use text_to_speech::indicator::*;
+use murmur::core::Phase;
+use murmur::indicator::*;
 #[test]
 fn shell_messages_map_to_success_cancel_or_notice() {
     for m in ["Text inserted", "Transcript copied"] {

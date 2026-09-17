@@ -1,7 +1,7 @@
 # RustDesk acceptance audit
 
-Scope: [issue #13](https://github.com/nolanmak/Text-to-speech/issues/13).
-Implementation review: [draft PR #14](https://github.com/nolanmak/Text-to-speech/pull/14).
+Scope: [issue #13](https://github.com/nolanmak/Murmur/issues/13).
+Implementation review: [draft PR #14](https://github.com/nolanmak/Murmur/pull/14).
 This audit records incomplete work; it is not a release sign-off.
 
 ## Phase 0

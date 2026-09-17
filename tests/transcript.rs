@@ -1,4 +1,4 @@
-use text_to_speech::transcript::Transcript;
+use murmur::transcript::Transcript;
 #[test]
 fn partial_revisions_are_replaced_and_finals_are_not_duplicated() {
     let mut t = Transcript::default();

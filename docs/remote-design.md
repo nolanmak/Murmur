@@ -1,6 +1,6 @@
 # RustDesk remote dictation — implementation evidence
 
-Issue: [#13](https://github.com/nolanmak/Text-to-speech/issues/13).
+Issue: [#13](https://github.com/nolanmak/Murmur/issues/13).
 
 ## Transport investigation
 
@@ -155,7 +155,7 @@ it is not native delivery evidence.
 - Complete the macOS and Linux native matrix in #13 using disposable inputs.
 - Complete the native fallback checks; receipt remains unobservable and no
   automatic insertion is claimed.
-- Complete [draft PR #14](https://github.com/nolanmak/Text-to-speech/pull/14) after
+- Complete [draft PR #14](https://github.com/nolanmak/Murmur/pull/14) after
   the outstanding checks in the [acceptance audit](remote-acceptance.md).
 
 No end-to-end estimate is revised yet: the transport feasibility gate is open.

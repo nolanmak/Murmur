@@ -1,9 +1,9 @@
-# Text-to-speech
+# Murmur
 
 A macOS voice dictation app built from FlyOnTheWall's Rust audio and transcription stack.
-**Hold Control, speak, release to insert. Esc cancels.** Despite the project name, this is
-speech-to-text, inspired by the dictation workflow of [Wispr Flow](https://wisprflow.ai/features).
-It is an independent Apache-2.0 project, with its repository private during development.
+**Hold Control, speak, release to insert. Esc cancels.** Murmur turns your speech
+into text, inspired by the dictation workflow of [Wispr Flow](https://wisprflow.ai/features).
+It is an independent, open-source Apache-2.0 project.
 
 ## Status
 
@@ -13,7 +13,7 @@ a nonactivating indicator, and insertion through macOS Accessibility. It is **no
 feature-complete or release-validated**. Native permissions and app compatibility
 still require the [manual QA checklist](docs/QA.md).
 
-The [13 GitHub issues](https://github.com/nolanmak/Text-to-speech/issues) contain
+The [13 GitHub issues](https://github.com/nolanmak/Murmur/issues) contain
 acceptance criteria, dependencies and test-first work. AI cleanup, vocabulary,
 snippets, optional history, signed releases, RustDesk remote paste and additional platforms are follow-on
 work. No claim of full Wispr Flow parity is made.
@@ -26,10 +26,10 @@ Requires macOS 14.4+, Xcode command-line tools and Rust 1.95.0 (pinned).
 cargo test --locked --workspace
 cargo clippy --locked --all-targets -- -D warnings
 ./scripts/build-app.sh
-open Text-to-speech.app
+open Murmur.app
 ```
 
-The script uses an ad-hoc developer signature by default. Set TTS_SIGN_IDENTITY
+The script uses an ad-hoc developer signature by default. Set MURMUR_SIGN_IDENTITY
 to an existing development certificate for stable signing across rebuilds.
 It does not install a trust certificate or require a signing account. Start capture from the app bundle,
 not a shell process, so macOS assigns permissions to this app.
@@ -49,15 +49,19 @@ not a shell process, so macOS assigns permissions to this app.
 Same provider and Keychain namespace as FlyOnTheWall, read-only. Resolution order:
 
 1. Nonempty `DEEPGRAM_API_KEY` in the process environment.
-2. The file explicitly named by `FOTW_ENV_FILE`, otherwise `.env` in the working directory.
+2. The file explicitly named by `FOTW_ENV_FILE`, otherwise `.env` beside the app
+   bundle, then `.env` in the working directory.
 3. FlyOnTheWall's Keychain entry: service `com.flyonthewall.fotw`, account `apikey:deepgram`.
 
-A `.env` was not found in the source FlyOnTheWall checkout. No unknown file or
-secret was copied. The application uses the existing Keychain fallback. If your
-.env is elsewhere, specify its path with `FOTW_ENV_FILE`; contents are parsed as
-data, never executed. Use `.env.example` as the schema. Secrets are never bundled
-or committed. Finder launches should use Keychain; their working directory is not
-the repository. Keychain may request permission for the new app's signing identity.
+Use `.env.example` as the schema for your local `.env`. If your file is elsewhere,
+specify its path with `FOTW_ENV_FILE`; contents are parsed as data, never executed.
+Secrets are never bundled or committed. Finder launches can read `.env` beside
+`Murmur.app`. Keychain may request permission for the app's signing identity.
+
+Murmur retains its original internal bundle identifier, `com.shipsystems.texttospeech`,
+for macOS permission continuity. Existing `TTS_SIGN_IDENTITY` configuration remains
+supported; `MURMUR_SIGN_IDENTITY` takes precedence. Ad-hoc rebuilds may still require
+permission renewal.
 
 ```sh
 cargo run -- doctor  # shows credential source, never the value

@@ -3,7 +3,7 @@
 Automated tests cannot establish macOS TCC behavior or compatibility with real editors.
 Run these through the built .app, with harmless text and an approved provider key.
 
-- [ ] Microphone prompt identifies Text-to-speech; declining it prevents capture.
+- [ ] Microphone prompt identifies Murmur; declining it prevents capture.
 - [ ] Accessibility/Input Monitoring denied: actionable menu state, no insertion.
 - [ ] Control held 350 ms starts one session; repeated flags do not duplicate it.
 - [ ] Quick Control taps preserve normal keyboard behavior.

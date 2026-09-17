@@ -78,7 +78,7 @@ map=[]
 for number,(title,milestone,deps,criteria,tdd) in enumerate(issues,1):
  body=f'## Outcome\n{title}.\n\n## Milestone\n{milestone}\n\n## Dependencies\n'+(', '.join(f'#{d}' for d in deps) if deps else 'None.')+'\n\n## Acceptance criteria\n'+'\n'.join('- [ ] '+c for c in criteria)+'\n\n## Test-first implementation\n'+tdd+'\n\n## Definition of done\n- [ ] Record a failing behavioral test before implementation (red).\n- [ ] Implement the smallest change that passes (green).\n- [ ] Refactor with tests green; no live API keys in CI.\n- [ ] Run formatting, Clippy and relevant regression/integration tests.\n- [ ] Link evidence to each acceptance criterion; document manual checks and unresolved limitations.\n'
  path=root/'docs/issues'/f'{number:02d}.md';path.write_text(body)
- result=subprocess.run(['gh','issue','create','--repo','nolanmak/Text-to-speech','--title',title,'--body-file',str(path)],capture_output=True,text=True,check=True)
+ result=subprocess.run(['gh','issue','create','--repo','nolanmak/Murmur','--title',title,'--body-file',str(path)],capture_output=True,text=True,check=True)
  url=result.stdout.strip();map.append({'number':number,'title':title,'milestone':milestone,'url':url})
  print(url,flush=True)
 (root/'docs/issue-map.json').write_text(json.dumps(map,indent=2)+'\n')

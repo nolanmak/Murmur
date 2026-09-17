@@ -1,11 +1,9 @@
 #[cfg(target_os = "macos")]
 mod native {
+    use murmur::{platform::macos_clipboard::MacClipboard, remote::Attempt, remote_clipboard::*};
     use objc2::{rc::Retained, runtime::ProtocolObject};
     use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardWriting};
     use objc2_foundation::{NSArray, NSData, NSString};
-    use text_to_speech::{
-        platform::macos_clipboard::MacClipboard, remote::Attempt, remote_clipboard::*,
-    };
 
     struct Board(Retained<NSPasteboard>);
     impl Board {

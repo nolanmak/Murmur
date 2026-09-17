@@ -65,7 +65,7 @@ async fn cancelled_start_never_opens_microphone_or_provider() {
     let (tap, control, started, _) = fixture(48000, 2);
     let receiving = Arc::new(AtomicBool::new(false));
     assert!(
-        text_to_speech::capture::run_observed(
+        murmur::capture::run_observed(
             tap,
             "test-key".into(),
             control,
@@ -82,7 +82,7 @@ async fn cancelled_start_never_opens_microphone_or_provider() {
 async fn invalid_actual_format_closes_microphone_before_network() {
     let (tap, control, started, stopped) = fixture(0, 0);
     assert!(
-        text_to_speech::capture::run(tap, "test-key".into(), control)
+        murmur::capture::run(tap, "test-key".into(), control)
             .await
             .unwrap_err()
             .contains("format")
@@ -121,7 +121,7 @@ async fn release_drains_microphone_through_resampler_and_closes_capture() {
     let receiving = Arc::new(AtomicBool::new(false));
     let text = tokio::time::timeout(
         Duration::from_secs(3),
-        text_to_speech::capture::run_observed(
+        murmur::capture::run_observed(
             tap,
             "test-key".into(),
             control,

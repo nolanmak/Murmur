@@ -605,7 +605,7 @@ impl Shell {
         let stop = MenuItem::with_id("stop", "Stop dictation", true, None);
         let copy = MenuItem::with_id("copy", "Copy Last Transcript", true, None);
         let setup = MenuItem::with_id("setup", "Set up permissions", true, None);
-        let quit = MenuItem::with_id("quit", "Quit Text-to-speech", true, None);
+        let quit = MenuItem::with_id("quit", "Quit Murmur", true, None);
         let remote_toggle = MenuItem::with_id("remote_mode", "Remote review mode: Off", true, None);
         if remote_fixture {
             remote_toggle.set_text("Remote review mode: On");
@@ -636,7 +636,7 @@ impl Shell {
         }
         let tray = TrayIconBuilder::new()
             .with_title("Control")
-            .with_tooltip("Text-to-speech")
+            .with_tooltip("Murmur")
             .with_menu(Box::new(menu.clone()))
             .build()
             .map_err(|e| e.to_string())?;

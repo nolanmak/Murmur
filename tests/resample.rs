@@ -11,7 +11,7 @@
 //! down into the speech band, where it degrades transcription in a way no
 //! one would trace back to the resampler.
 
-use text_to_speech::resample::{Downmixer, Resampler16k};
+use murmur::resample::{Downmixer, Resampler16k};
 
 /// Energy at `freq` in `samples`, as a fraction of full scale.
 ///

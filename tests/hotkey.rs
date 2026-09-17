@@ -1,4 +1,4 @@
-use text_to_speech::core::Dictation;
+use murmur::core::Dictation;
 #[test]
 fn manual_recording_can_restart_after_stop_without_a_keyboard_release() {
     let mut d = Dictation::default();

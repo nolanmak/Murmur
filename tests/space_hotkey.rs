@@ -1,4 +1,4 @@
-use text_to_speech::space_hotkey::{Command, HOLD_MS, HoldSpace, Key};
+use murmur::space_hotkey::{Command, HOLD_MS, HoldSpace, Key};
 #[test]
 fn quick_tap_replays_control_without_recording() {
     let mut h = HoldSpace::default();

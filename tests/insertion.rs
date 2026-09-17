@@ -1,7 +1,7 @@
-use text_to_speech::insertion::{Target, allowed};
+use murmur::insertion::{Target, allowed};
 #[test]
 fn browser_editors_and_address_bars_use_native_paste() {
-    use text_to_speech::insertion::browser_surface;
+    use murmur::insertion::browser_surface;
     assert!(browser_surface("com.google.Chrome", "AXComboBox", ""));
     assert!(browser_surface("com.apple.Safari", "AXTextArea", ""));
     assert!(browser_surface("org.mozilla.firefox", "AXTextField", ""));
@@ -15,7 +15,7 @@ fn browser_editors_and_address_bars_use_native_paste() {
 }
 #[test]
 fn terminal_surfaces_use_paste_instead_of_direct_ax_writes() {
-    use text_to_speech::insertion::terminal_surface;
+    use murmur::insertion::terminal_surface;
     assert!(terminal_surface("com.apple.Terminal", "AXTextArea", ""));
     assert!(terminal_surface("com.mitchellh.ghostty", "AXGroup", ""));
     assert!(terminal_surface(
@@ -33,13 +33,13 @@ fn terminal_surfaces_use_paste_instead_of_direct_ax_writes() {
 }
 #[test]
 fn web_text_fields_do_not_need_direct_ax_write_support() {
-    assert!(text_to_speech::insertion::text_role("AXTextArea", ""));
-    assert!(text_to_speech::insertion::text_role("AXTextField", ""));
-    assert!(!text_to_speech::insertion::text_role(
+    assert!(murmur::insertion::text_role("AXTextArea", ""));
+    assert!(murmur::insertion::text_role("AXTextField", ""));
+    assert!(!murmur::insertion::text_role(
         "AXTextField",
         "AXSecureTextField"
     ));
-    assert!(!text_to_speech::insertion::text_role("AXButton", ""));
+    assert!(!murmur::insertion::text_role("AXButton", ""));
 }
 fn target() -> Target {
     Target {

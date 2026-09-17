@@ -1,7 +1,7 @@
 use fotw_stt::DeepgramEndpoint;
 use futures_util::{SinkExt, StreamExt};
+use murmur::streaming::transcribe;
 use std::time::Duration;
-use text_to_speech::streaming::transcribe;
 use tokio::{net::TcpListener, sync::mpsc};
 use tokio_tungstenite::{
     accept_hdr_async,
