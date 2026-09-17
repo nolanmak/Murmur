@@ -1,6 +1,7 @@
 pub mod capture;
 pub mod config;
 pub mod core;
+pub mod indicator;
 pub mod insertion;
 pub mod platform;
 pub mod remote;
