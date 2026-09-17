@@ -6,12 +6,12 @@ use crate::{
 };
 use block2::RcBlock;
 use fotw_audio::{AudioPlatform, DeviceId, FormatRequest, Permission, PermissionState};
-use muda::{Menu, MenuEvent, MenuItem};
+use muda::{ContextMenu, Menu, MenuEvent, MenuItem};
 use objc2::{MainThreadMarker, MainThreadOnly, rc::Retained};
 use objc2_app_kit::{
     NSAlert, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSButton, NSColor,
-    NSFont, NSPanel, NSPasteboard, NSRunningApplication, NSScreen, NSScrollView, NSTextField,
-    NSTextView, NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSFont, NSMenu, NSPanel, NSPasteboard, NSRunningApplication, NSScreen, NSScrollView,
+    NSTextField, NSTextView, NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSTimer};
 use std::{
@@ -370,9 +370,12 @@ struct Shell {
     review: crate::remote_review::Review,
     clipboard_lease: crate::remote_clipboard::Lease,
     clipboard_attempt: Option<crate::remote::Attempt>,
+    selected_remote: crate::remote_review::Selection<RustDeskWindow>,
 }
 impl Shell {
     fn new(mtm: MainThreadMarker) -> Result<Self, String> {
+        // Opt-in native integration fixture. No credentials or microphone are used.
+        let remote_fixture = std::env::args().any(|arg| arg == "--remote-fixture");
         let menu = Menu::new();
         let status = MenuItem::with_id("status", "Hold Control to dictate", false, None);
         let cancel = MenuItem::with_id("cancel", "Cancel dictation (Esc)", true, None);
@@ -382,6 +385,9 @@ impl Shell {
         let setup = MenuItem::with_id("setup", "Set up permissions", true, None);
         let quit = MenuItem::with_id("quit", "Quit Text-to-speech", true, None);
         let remote_toggle = MenuItem::with_id("remote_mode", "Remote review mode: Off", true, None);
+        if remote_fixture {
+            remote_toggle.set_text("Remote review mode: On");
+        }
         let remote_review = MenuItem::with_id("remote_review", "Review for RustDesk…", true, None);
         let remote_profile = MenuItem::with_id(
             "remote_profile",
@@ -409,7 +415,7 @@ impl Shell {
         let tray = TrayIconBuilder::new()
             .with_title("Control")
             .with_tooltip("Text-to-speech")
-            .with_menu(Box::new(menu))
+            .with_menu(Box::new(menu.clone()))
             .build()
             .map_err(|e| e.to_string())?;
         let screen = NSScreen::mainScreen(mtm).ok_or("No screen")?.visibleFrame();
@@ -433,9 +439,16 @@ impl Shell {
                 | NSWindowCollectionBehavior::FullScreenAuxiliary,
         );
         panel.setHidesOnDeactivate(false);
-        panel.setIgnoresMouseEvents(true);
+        panel.setIgnoresMouseEvents(false);
         panel.setBackgroundColor(Some(&NSColor::windowBackgroundColor()));
         let content = panel.contentView().ok_or("No panel content")?;
+        // SAFETY: muda owns this NSMenu; AppKit retains the menu on the content view.
+        unsafe {
+            content.setMenu(Some(&*menu.ns_menu().cast::<NSMenu>()));
+        }
+        content.setToolTip(Some(&NSString::from_str(
+            "Right-click for dictation and RustDesk controls",
+        )));
         content.setWantsLayer(true);
         if let Some(layer) = content.layer() {
             unsafe {
@@ -480,7 +493,11 @@ impl Shell {
             status,
             panel,
             label,
-            last: String::new(),
+            last: if remote_fixture {
+                "Synthetic dictation test — Café 👋".into()
+            } else {
+                String::new()
+            },
             message: String::new(),
             started: Instant::now(),
             hide_at: None,
@@ -489,13 +506,14 @@ impl Shell {
             smoke_started: false,
             launched: Instant::now(),
             receiving: Arc::new(AtomicBool::new(false)),
-            remote_mode: false,
+            remote_mode: remote_fixture,
             remote_toggle,
             remote_profile,
             profile: crate::remote::Profile::Mac,
             review: Default::default(),
             clipboard_lease: Default::default(),
             clipboard_attempt: None,
+            selected_remote: Default::default(),
         })
     }
     fn show(&mut self, message: &str, temporary: bool) {
@@ -580,6 +598,7 @@ impl Shell {
         self.show("Finishing… · Esc to cancel", false);
     }
     fn pump(&mut self) {
+        self.observe_remote_window();
         if self.smoke && !self.smoke_started && self.launched.elapsed() > Duration::from_secs(2) {
             self.smoke_started = true;
             if self.core.start_manual() {
@@ -832,6 +851,27 @@ impl RustDeskWindow {
     }
 }
 impl Shell {
+    fn observe_remote_window(&mut self) {
+        use crate::remote_review::Foreground;
+        if self.last.is_empty() {
+            self.selected_remote.observe(Foreground::Other);
+            return;
+        }
+        let system = Owned(unsafe { AXUIElementCreateSystemWide() });
+        let foreground = attribute(system.0, "AXFocusedApplication");
+        let mut pid = 0;
+        if let Some(app) = foreground {
+            unsafe { AXUIElementGetPid(app.0, &mut pid) };
+        }
+        if pid == std::process::id() as i32 {
+            self.selected_remote.observe(Foreground::ReviewUi);
+        } else if let Some(window) = RustDeskWindow::selected() {
+            self.selected_remote
+                .observe(Foreground::Destination(window));
+        } else {
+            self.selected_remote.observe(Foreground::Other);
+        }
+    }
     fn review_remote(&mut self) {
         use crate::remote_review::Error;
         if self.clipboard_lease.pending() {
@@ -841,7 +881,8 @@ impl Shell {
             );
             return;
         }
-        let selected = RustDeskWindow::selected();
+        self.observe_remote_window();
+        let selected = self.selected_remote.take();
         let id = match self
             .review
             .prepare(&self.last, selected.as_ref().map(|s| s.token))
@@ -855,6 +896,7 @@ impl Shell {
                 return;
             }
             Err(_) => {
+                remote_selection_diagnostic();
                 self.show(
                     "Focus the intended RustDesk remote window, then choose Review for RustDesk",
                     true,
@@ -928,6 +970,34 @@ impl Shell {
             self.clipboard_attempt = None;
         }
     }
+}
+fn remote_selection_diagnostic() {
+    let system = Owned(unsafe { AXUIElementCreateSystemWide() });
+    let key = cfstr("AXFocusedApplication");
+    let mut raw = ptr::null();
+    let result = unsafe { AXUIElementCopyAttributeValue(system.0, key.0, &mut raw) };
+    let app = Owned(raw);
+    if result != 0 || app.0.is_null() {
+        eprintln!("remote_selection focused_app_error={result}");
+        return;
+    }
+    let mut pid = 0;
+    unsafe { AXUIElementGetPid(app.0, &mut pid) };
+    let rustdesk = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+        .and_then(|app| app.bundleIdentifier())
+        .is_some_and(|id| id.to_string() == "com.carriez.rustdesk");
+    let window = attribute(app.0, "AXFocusedWindow");
+    let supported_title = window
+        .as_ref()
+        .and_then(|w| attribute(w.0, "AXTitle"))
+        .is_some_and(|title| string(title.0).ends_with(" - Remote Desktop - RustDesk"));
+    eprintln!(
+        "remote_selection own_app={} rustdesk={} window={} supported_title={}",
+        pid == std::process::id() as i32,
+        rustdesk,
+        window.is_some(),
+        supported_title
+    );
 }
 fn review_dialog(
     title: &str,
@@ -1015,7 +1085,13 @@ pub fn run() -> Result<(), String> {
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
     app.finishLaunching();
     let shell = Rc::new(RefCell::new(Shell::new(mtm)?));
-    shell.borrow_mut().show("● Ready · hold Control", true);
+    if shell.borrow().remote_mode {
+        shell
+            .borrow_mut()
+            .show("Synthetic fixture · Review for RustDesk", false);
+    } else {
+        shell.borrow_mut().show("● Ready · hold Control", true);
+    }
     let weak = Rc::downgrade(&shell);
     let block = RcBlock::new(move |_: NonNull<NSTimer>| {
         if let Some(shell) = weak.upgrade()

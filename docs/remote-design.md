@@ -107,6 +107,19 @@ Command: `cargo test --locked --test remote`.
   through accessibility and a window-only screenshot. Synthetic Unicode text,
   scroll area, unchecked confirmation, selected profile, copy, and cancel controls
   were visible without clipping. No clipboard sharing or remote insertion occurred.
+- Focus-transition red commit `35fea99`: two new review integration tests failed
+  while four prior review tests passed. The selection policy now retains an
+  observed destination across the app's own UI and clears it on another app;
+  all six tests pass. Native code still revalidates the retained AX window/title.
+- The built app was restarted successfully with Accessibility, Input Monitoring,
+  and keyboard listener diagnostics all reporting granted/available. Its floating
+  bar context menu was opened and remote mode was switched on through the UI.
+- A native fixture review attempt remained blocked: the app's foreground-app
+  observation did not match the RustDesk window addressed by the UI automation
+  tool. Diagnostics reported `own_app=false`, `rustdesk=false`; no copy occurred.
+  This is an unverified positive path, not a passing remote review test. A manually
+  focused disposable remote editor is needed to distinguish automation behavior
+  from a remaining native issue. No remote fields were populated by the app.
 
 ## Remaining work
 
