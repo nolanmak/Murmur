@@ -155,6 +155,7 @@ impl Focus {
 #[derive(Clone, Copy)]
 enum Input {
     Flags(bool, bool),
+    HotkeyDown,
     Cancel,
     TapDisabled,
 }
@@ -223,6 +224,9 @@ unsafe extern "C" fn callback(proxy: CF, kind: u32, event: CF, info: *mut c_void
     }
     if let Some(command) = action.command {
         send_command(context, command);
+    }
+    if matches!(key, Key::Down) {
+        let _ = context.sender.try_send(Input::HotkeyDown);
     }
     if matches!(key, Key::Up) {
         context.pending.borrow_mut().take();
@@ -477,6 +481,7 @@ impl Shell {
         }
         while let Ok(event) = self.input.try_recv() {
             match event {
+                Input::HotkeyDown => self.show("Control pressed — keep holding to dictate", true),
                 Input::Flags(down, other) => match self.core.flags(down, other) {
                     Some("start") => self.start(),
                     Some("finish") => self.finish(),
