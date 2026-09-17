@@ -6,8 +6,8 @@ copies reviewed text; you perform the paste in RustDesk yourself.
 
 ## Use the fallback
 
-1. Open the **Control** menu (or right-click the floating status bar) and enable
-   **Remote review mode**.
+1. Open the **Control** menu in the macOS menu bar and enable **Remote review
+   mode**. The compact floating pill is click-through; controls stay in the menu.
 2. Use **Start dictation** and **Stop dictation** in the menu. Remote mode does not
    use the Control dictation hotkey, since the current listener cannot suppress
    modifier events sent to RustDesk. Ordinary keyboard events still reach the
