@@ -166,6 +166,7 @@ struct TapContext {
     pending: RefCell<Option<Owned>>,
     origin: Instant,
     busy: std::cell::Cell<bool>,
+    control_down: std::cell::Cell<bool>,
 }
 struct EventTap {
     port: Owned,
@@ -194,10 +195,23 @@ unsafe extern "C" fn callback(proxy: CF, kind: u32, event: CF, info: *mut c_void
     let code = unsafe { CGEventGetIntegerValueField(event, 9) };
     let other_modifier = flags & ((1 << 17) | (1 << 19) | (1 << 20) | (1 << 23)) != 0;
     let key = match (kind, code) {
-        // Left and right Control are flagsChanged events (key codes 59 and 62).
-        (12, 59 | 62) if other_modifier || context.busy.get() => Key::ModifiedDown,
-        (12, 59 | 62) if flags & (1 << 18) != 0 => Key::Down,
-        (12, 59 | 62) => Key::Up,
+        // Control is represented as flagsChanged; use the flag so both left and right
+        // Control work on keyboards whose modifier keycodes differ.
+        (12, _) if flags & (1 << 18) != 0 && !context.control_down.get() => {
+            context.control_down.set(true);
+            if other_modifier || context.busy.get() {
+                Key::ModifiedDown
+            } else {
+                Key::Down
+            }
+        }
+        (12, _) if flags & (1 << 18) == 0 && context.control_down.get() => {
+            context.control_down.set(false);
+            Key::Up
+        }
+        (12, _) if flags & (1 << 18) != 0 && context.control_down.get() && other_modifier => {
+            Key::ModifiedDown
+        }
         (10, 53) => Key::Escape,
         _ => return event,
     };
@@ -242,6 +256,7 @@ impl EventTap {
             pending: RefCell::new(None),
             origin: Instant::now(),
             busy: std::cell::Cell::new(false),
+            control_down: std::cell::Cell::new(false),
         });
         let port = unsafe {
             CGEventTapCreate(
