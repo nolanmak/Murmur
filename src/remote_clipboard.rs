@@ -51,25 +51,78 @@ pub enum Recovery {
     OwnershipLost,
 }
 #[derive(Default)]
-pub struct Lease;
+pub struct Lease {
+    saved: Option<Saved>,
+}
+struct Saved {
+    id: Attempt,
+    owned: Revision,
+    formats: Vec<Format>,
+}
 impl Lease {
     pub fn share(
         &mut self,
-        _clipboard: &mut impl Clipboard,
-        _id: Attempt,
-        _text: &str,
+        clipboard: &mut impl Clipboard,
+        id: Attempt,
+        text: &str,
     ) -> Result<(), Error> {
-        Err(Error::Unavailable)
+        if self.pending() {
+            return Err(Error::Busy);
+        }
+        if !crate::remote::valid_text(text) {
+            return Err(Error::InvalidText);
+        }
+        let snapshot = clipboard.snapshot()?;
+        match clipboard.replace(snapshot.revision, text) {
+            Ok(owned) => {
+                self.saved = Some(Saved {
+                    id,
+                    owned,
+                    formats: snapshot.formats,
+                });
+                Ok(())
+            }
+            Err(WriteFailure::Owned(owned)) => {
+                self.saved = Some(Saved {
+                    id,
+                    owned,
+                    formats: snapshot.formats,
+                });
+                Err(Error::WriteFailed)
+            }
+            Err(WriteFailure::Unchanged(error)) => Err(error),
+            Err(WriteFailure::OwnershipLost) => Err(Error::Changed),
+        }
     }
     pub fn recover(
         &mut self,
-        _clipboard: &mut impl Clipboard,
-        _id: Attempt,
-        _reason: Option<RestoreReason>,
+        clipboard: &mut impl Clipboard,
+        id: Attempt,
+        reason: Option<RestoreReason>,
     ) -> Result<Recovery, Error> {
-        Ok(Recovery::Nothing)
+        let Some(saved) = self.saved.as_mut().filter(|s| s.id == id) else {
+            return Ok(Recovery::Nothing);
+        };
+        if reason.is_none() {
+            return Ok(Recovery::Retained);
+        }
+        match clipboard.restore(saved.owned, &saved.formats) {
+            Ok(_) => {
+                self.saved = None;
+                Ok(Recovery::Restored)
+            }
+            Err(WriteFailure::OwnershipLost) => {
+                self.saved = None;
+                Ok(Recovery::OwnershipLost)
+            }
+            Err(WriteFailure::Unchanged(error)) => Err(error),
+            Err(WriteFailure::Owned(owned)) => {
+                saved.owned = owned;
+                Err(Error::WriteFailed)
+            }
+        }
     }
     pub fn pending(&self) -> bool {
-        false
+        self.saved.is_some()
     }
 }

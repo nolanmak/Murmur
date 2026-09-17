@@ -1,6 +1,13 @@
 //! Remote paste policy. Session tokens are opaque, ephemeral adapter identities.
 use std::time::Duration;
 
+pub(crate) fn valid_text(text: &str) -> bool {
+    !text.trim().is_empty()
+        && !text
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Destination {
     pub session: u64,
@@ -128,11 +135,7 @@ impl Controller {
         }
         let validation = if !enabled {
             Err(Failure::Disabled)
-        } else if text.trim().is_empty()
-            || text
-                .chars()
-                .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
-        {
+        } else if !valid_text(text) {
             Err(Failure::InvalidText)
         } else {
             session.validate()
