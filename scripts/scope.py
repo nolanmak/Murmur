@@ -9,13 +9,13 @@ issues=[
 'Repository visibility is private; credentials, recordings, build artifacts and .env files are excluded from Git.',
 'CI runs formatting, Clippy and offline fixture tests on macOS and Linux.'],
 'Add a repository-contract test first, demonstrate failure for a tracked .env and missing provenance, then implement scaffolding and run the clean-clone checks.'),
-('Space hold-to-dictate session controller and Escape cancellation','M1',[1],[
-'On macOS, Space down starts exactly one session and Space up requests finalization; duplicate flagsChanged events do not duplicate work.',
-'Space combined with another modifier does not start dictation. Esc cancels capture and pending insertion, including during finalization.',
+('Control hold-to-dictate session controller and Escape cancellation','M1',[1],[
+'On macOS, Control down starts exactly one session and Control up requests finalization; duplicate flagsChanged events do not duplicate work.',
+'Control combined with another modifier does not start dictation. Esc cancels capture and pending insertion, including during finalization.',
 'Busy sessions reject overlapping starts; stale results from a cancelled session cannot insert; maximum duration stops capture.'],
 'Write table-driven event-sequence tests before the controller; cover repeated modifiers, press/release during startup, cancellation, timeout and late results.'),
 ('Microphone-only audio pipeline using FlyOnTheWall capture and resampling','M1',[1,2],[
-'Capture opens only the default microphone, never a system-audio tap; recording begins only on explicit Space press.',
+'Capture opens only the default microphone, never a system-audio tap; recording begins only on explicit Control press.',
 'Actual device format drives the reused anti-aliasing resampler; 44.1/48/16 kHz inputs produce mono 16 kHz PCM.',
 'The real-time callback does no network or blocking work; bounded overflow or device failure cancels rather than silently dropping speech.',
 'Release, Escape, duration limit and shutdown close the audio device and retain no recording on disk.'],
@@ -42,7 +42,7 @@ issues=[
 'Package a macOS .app with microphone usage description and a stable bundle identifier.',
 'A nonactivating indicator shows Recording, Finishing and errors without stealing the target focus; menu offers cancel, copy last and quit.',
 'Microphone and Accessibility permissions have actionable setup guidance; missing grants do not record or insert.',
-'Space system-shortcut conflicts are explained; no system preference is silently changed.'],
+'Control system-shortcut conflicts are explained; no system preference is silently changed.'],
 'First test view states and cancellation actions independently of AppKit; then build and inspect the packaged UI, accessibility prompts and full-screen behavior on a real Mac.'),
 ('Optional AI cleanup with faithful raw-transcript fallback','M2',[4,5],[
 'Provide opt-in cleanup using a configured BYO provider; default raw/Deepgram text works without an LLM.',
@@ -64,7 +64,7 @@ issues=[
 'Test cancellation, retention boundary, crash recovery and stale-target cases using fake storage and time before implementing persistence.'),
 ('Signed app, release QA and readiness for eventual public source release','M3',[1,7,8,9,10],[
 'Build script produces an installable .app; signing/notarization is documented separately and never requires committed signing secrets.',
-'Fresh-machine setup, Space behavior, microphone teardown, secure input and text insertion pass the manual QA matrix.',
+'Fresh-machine setup, Control behavior, microphone teardown, secure input and text insertion pass the manual QA matrix.',
 'A clean-clone build, dependency/license review and secret scan pass before any release.',
 'Repository remains private until the owner explicitly requests publication; docs accurately distinguish implemented and planned features.'],
 'Add packaging-manifest and secret-exclusion checks first; validate release artifacts on a separate macOS login before marking release-ready.'),
@@ -72,7 +72,7 @@ issues=[
 'Provider abstraction supports offline fixture conformance before adding an on-device model or another cloud API.',
 'No silent provider failover transmits audio to a different service; the user chooses any fallback.',
 'Platform adapters implement capture, shortcut, permission and insertion contracts without leaking native types into the core.',
-'Each platform has its own tested shortcut and release QA; macOS Space behavior remains unchanged.'],
+'Each platform has its own tested shortcut and release QA; macOS Control behavior remains unchanged.'],
 'Write the shared provider/platform conformance suite first, then implement one backend at a time; unsupported platforms fail explicitly rather than pretending to record.')]
 map=[]
 for number,(title,milestone,deps,criteria,tdd) in enumerate(issues,1):

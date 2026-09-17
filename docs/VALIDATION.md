@@ -28,9 +28,9 @@ Real microphone transcription, Fn event delivery and editor compatibility remain
 user smoke tests; automated success does not establish those native behaviors.
 No live provider request was made by the automated suite.
 
-## Revised shortcut: hold Space
+## Revised shortcut: hold Control
 
-Five Space tests failed first, then passed: quick taps, 350 ms hold, duplicate
+Five Control tests failed first, then passed: quick taps, 350 ms hold, duplicate
 repeats, modified shortcuts, typing rollover and Escape cancellation. Fn is no
 longer registered by the native adapter. The rebuilt test app uses an ad-hoc signature. Stable certificate signing remains
 a release task; TTS_SIGN_IDENTITY supports an existing development identity.
