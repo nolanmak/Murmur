@@ -59,6 +59,9 @@ pub enum Failure {
     ClipboardDisabled,
     KeyboardDenied,
     TimedOut,
+    ClipboardWriteFailed,
+    DispatchFailed,
+    DispatchUncertain,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
@@ -218,6 +221,9 @@ impl Controller {
     fn fail(&mut self, failure: Failure) {
         self.pending = None;
         self.state = State::Failed(failure);
+    }
+    pub fn adapter_failed(&mut self, _id: Attempt, _failure: Failure) -> bool {
+        false
     }
     pub fn cancel(&mut self) {
         self.pending = None;

@@ -21,6 +21,46 @@ fn session() -> Session {
 fn controller() -> Controller {
     Controller::new(t(100), t(50))
 }
+#[test]
+fn adapter_failure_ends_attempt_and_late_callbacks_cannot_report_success() {
+    for failure in [
+        Failure::ClipboardWriteFailed,
+        Failure::DispatchFailed,
+        Failure::DispatchUncertain,
+    ] {
+        let mut c = controller();
+        let id = begin(&mut c);
+        c.shared(id, session(), t(1));
+        if failure != Failure::ClipboardWriteFailed {
+            c.received(id, session(), t(2));
+        }
+        assert!(c.adapter_failed(id, failure));
+        assert_eq!(c.state(), State::Failed(failure));
+        assert_eq!(c.received(id, session(), t(3)), None);
+        assert!(!c.dispatched(id, true, t(3)));
+        assert!(!c.adapter_failed(id, failure));
+        let next = c
+            .begin(true, "explicit retry", session(), Profile::Mac, t(4))
+            .unwrap();
+        assert_ne!(next, id);
+        assert!(!c.adapter_failed(id, failure));
+        assert_eq!(c.state(), State::Preparing);
+    }
+}
+#[test]
+fn adapter_error_after_cancel_or_completed_dispatch_does_not_change_outcome() {
+    let mut c = controller();
+    let id = begin(&mut c);
+    c.cancel();
+    assert!(!c.adapter_failed(id, Failure::ClipboardWriteFailed));
+    assert_eq!(c.state(), State::Cancelled);
+    let id = begin(&mut c);
+    c.shared(id, session(), t(1));
+    c.received(id, session(), t(2));
+    c.dispatched(id, false, t(3));
+    assert!(!c.adapter_failed(id, Failure::DispatchFailed));
+    assert_eq!(c.state(), State::PasteSent);
+}
 fn begin(c: &mut Controller) -> Attempt {
     c.begin(true, "Café 👋 — hello", session(), Profile::Mac, t(0))
         .unwrap()
