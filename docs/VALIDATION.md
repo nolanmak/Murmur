@@ -45,4 +45,14 @@ a release task; TTS_SIGN_IDENTITY supports an existing development identity.
   and a listen-only keyboard tap. Unsupported editors can record for manual copying.
 - Added the manual restart regression before `start_manual`: compilation failed on the
   missing API, then passed after implementation. Existing mock transport tests do not prove
-  real OS permissions or live provider connectivity. Live end-to-end verification is pending.
+  real OS permissions or live provider connectivity.
+- After microphone authorization, the manual smoke run showed the Listening overlay;
+  two UI observations captured different animation frames. The worker then blocked in
+  `config::load` → `OsKeyStore::get` → macOS `SecKeychainFindGenericPassword`.
+  The key was not retrieved and no live Deepgram transcription was verified. The app
+  was restarted without smoke mode to stop the pending Keychain request.
+- Keyboard permission refresh reached a macOS Touch ID/password authorization sheet.
+  Keyboard delivery and automatic text insertion remain unverified pending that grant.
+- The current Listening animation indicates the requested session state; it does not yet
+  prove the microphone has opened while credential loading is pending. Treat this as a
+  known UX limitation, not a passed end-to-end capture test.
