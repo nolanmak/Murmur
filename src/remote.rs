@@ -68,11 +68,48 @@ pub enum State {
 pub struct Attempt(pub u64);
 pub struct Controller {
     state: State,
+    generation: u64,
+    pending: Option<Pending>,
+    sync_timeout: Duration,
+    dispatch_timeout: Duration,
+}
+struct Pending {
+    id: Attempt,
+    destination: Destination,
+    profile: Profile,
+    deadline: Duration,
+}
+impl Session {
+    fn validate(self) -> Result<(), Failure> {
+        if !self.connected {
+            return Err(Failure::Disconnected);
+        }
+        if !self.unlocked {
+            return Err(Failure::Locked);
+        }
+        if !self.foreground {
+            return Err(Failure::DestinationChanged);
+        }
+        if !self.isolated {
+            return Err(Failure::Ambiguous);
+        }
+        if !self.clipboard_enabled {
+            return Err(Failure::ClipboardDisabled);
+        }
+        if !self.keyboard_enabled {
+            return Err(Failure::KeyboardDenied);
+        }
+        Ok(())
+    }
 }
 impl Controller {
-    pub fn new(_sync_timeout: Duration, _dispatch_timeout: Duration) -> Self {
+    pub fn new(sync_timeout: Duration, dispatch_timeout: Duration) -> Self {
         Self {
             state: State::Ready,
+            generation: 0,
+            pending: None,
+            sync_timeout,
+            dispatch_timeout,
         }
     }
     pub fn state(&self) -> State {
@@ -80,30 +117,107 @@ impl Controller {
     }
     pub fn begin(
         &mut self,
-        _enabled: bool,
-        _text: &str,
-        _session: Session,
-        _profile: Profile,
-        _now: Duration,
+        enabled: bool,
+        text: &str,
+        session: Session,
+        profile: Profile,
+        now: Duration,
     ) -> Result<Attempt, Failure> {
-        Err(Failure::Disabled)
+        if self.pending.is_some() {
+            return Err(Failure::Busy);
+        }
+        let validation = if !enabled {
+            Err(Failure::Disabled)
+        } else if text.trim().is_empty()
+            || text
+                .chars()
+                .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+        {
+            Err(Failure::InvalidText)
+        } else {
+            session.validate()
+        };
+        if let Err(failure) = validation {
+            self.state = State::Failed(failure);
+            return Err(failure);
+        }
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .expect("attempt counter exhausted");
+        let id = Attempt(self.generation);
+        self.pending = Some(Pending {
+            id,
+            destination: session.destination,
+            profile,
+            deadline: now.saturating_add(self.sync_timeout),
+        });
+        self.state = State::Preparing;
+        Ok(id)
     }
-    pub fn shared(&mut self, _id: Attempt, _session: Session, _now: Duration) -> bool {
-        false
+    /// Call immediately before replacing the clipboard, with a fresh session snapshot.
+    /// A false return prohibits sharing. The adapter reports a write failure separately.
+    pub fn shared(&mut self, id: Attempt, session: Session, now: Duration) -> bool {
+        if !self.matches(id, State::Preparing) {
+            return false;
+        }
+        self.observe(session, now);
+        if self.pending.is_none() {
+            return false;
+        }
+        self.state = State::WaitingForClipboard;
+        true
     }
-    pub fn received(
-        &mut self,
-        _id: Attempt,
-        _session: Session,
-        _now: Duration,
-    ) -> Option<Shortcut> {
-        None
+    pub fn received(&mut self, id: Attempt, session: Session, now: Duration) -> Option<Shortcut> {
+        if !self.matches(id, State::WaitingForClipboard) {
+            return None;
+        }
+        self.observe(session, now);
+        let pending = self.pending.as_mut()?;
+        pending.deadline = now.saturating_add(self.dispatch_timeout);
+        self.state = State::PasteRequested;
+        Some(pending.profile.shortcut())
     }
-    pub fn dispatched(&mut self, _id: Attempt, _verified: bool, _now: Duration) -> bool {
-        false
+    pub fn dispatched(&mut self, id: Attempt, verified: bool, now: Duration) -> bool {
+        if !self.matches(id, State::PasteRequested) {
+            return false;
+        }
+        if self.pending.as_ref().is_some_and(|p| now >= p.deadline) {
+            self.fail(Failure::TimedOut);
+            return false;
+        }
+        self.pending = None;
+        self.state = if verified {
+            State::Inserted
+        } else {
+            State::PasteSent
+        };
+        true
     }
-    pub fn observe(&mut self, _session: Session, _now: Duration) {}
+    pub fn observe(&mut self, session: Session, now: Duration) {
+        let Some(pending) = self.pending.as_ref() else {
+            return;
+        };
+        let failure = session
+            .validate()
+            .err()
+            .or_else(|| {
+                (session.destination != pending.destination).then_some(Failure::DestinationChanged)
+            })
+            .or_else(|| (now >= pending.deadline).then_some(Failure::TimedOut));
+        if let Some(failure) = failure {
+            self.fail(failure);
+        }
+    }
+    fn matches(&self, id: Attempt, state: State) -> bool {
+        self.state == state && self.pending.as_ref().is_some_and(|p| p.id == id)
+    }
+    fn fail(&mut self, failure: Failure) {
+        self.pending = None;
+        self.state = State::Failed(failure);
+    }
     pub fn cancel(&mut self) {
+        self.pending = None;
         self.state = State::Cancelled;
     }
 }
