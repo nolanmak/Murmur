@@ -1,5 +1,7 @@
 //! Read-only credential resolution. Dotenv is parsed, never sourced by a shell.
-use fotw_secrets::{KeyStore, OsKeyStore, Provider, SecretKey, SecretString};
+use fotw_secrets::SecretString;
+#[cfg(not(target_os = "linux"))]
+use fotw_secrets::{KeyStore, OsKeyStore, Provider, SecretKey};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -65,6 +67,17 @@ pub fn bundle_env(executable: &Path) -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 pub fn load() -> Result<Credentials, String> {
+    #[cfg(target_os = "linux")]
+    {
+        crate::platform::linux::credentials()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        load_legacy()
+    }
+}
+#[cfg(not(target_os = "linux"))]
+fn load_legacy() -> Result<Credentials, String> {
     let vars: HashMap<String, String> = std::env::vars().collect();
     let path = vars
         .get("FOTW_ENV_FILE")

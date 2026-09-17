@@ -1,6 +1,6 @@
 # Murmur
 
-A macOS voice dictation app built from FlyOnTheWall's Rust audio and transcription stack.
+A voice dictation app built from FlyOnTheWall's Rust audio and transcription stack.
 **Hold Control, speak, release to insert. Esc cancels.** Murmur turns your speech
 into text, inspired by the dictation workflow of [Wispr Flow](https://wisprflow.ai/features).
 It is an independent, open-source Apache-2.0 project.
@@ -13,12 +13,16 @@ a nonactivating indicator, and insertion through macOS Accessibility. It is **no
 feature-complete or release-validated**. Native permissions and app compatibility
 still require the [manual QA checklist](docs/QA.md).
 
-The [13 GitHub issues](https://github.com/nolanmak/Murmur/issues) contain
+The [GitHub issues](https://github.com/nolanmak/Murmur/issues) contain
 acceptance criteria, dependencies and test-first work. AI cleanup, vocabulary,
 snippets, optional history, signed releases, RustDesk remote paste and additional platforms are follow-on
 work. No claim of full Wispr Flow parity is made.
 
-## Build and run
+Linux now has an experimental manual Start/Stop → review/copy path. See
+[Linux setup and tested limits](docs/linux.md). Mac-to-Linux RustDesk dictation
+uses the microphone on your Mac; see [the remote workflow](docs/rustdesk.md).
+
+## Build and run (macOS)
 
 Requires macOS 14.4+, Xcode command-line tools and Rust 1.95.0 (pinned).
 
