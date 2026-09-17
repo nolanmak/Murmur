@@ -5,7 +5,7 @@ use fotw_stt::DeepgramEndpoint;
 use futures_util::{SinkExt, StreamExt};
 use std::sync::{
     Arc,
-    atomic::{AtomicU8, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
 };
 use std::time::Duration;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
@@ -63,12 +63,20 @@ fn fixture(rate: u32, initial: u8) -> Fixture {
 #[tokio::test]
 async fn cancelled_start_never_opens_microphone_or_provider() {
     let (tap, control, started, _) = fixture(48000, 2);
+    let receiving = Arc::new(AtomicBool::new(false));
     assert!(
-        text_to_speech::capture::run(tap, "test-key".into(), control)
-            .await
-            .is_err()
+        text_to_speech::capture::run_observed(
+            tap,
+            "test-key".into(),
+            control,
+            DeepgramEndpoint::production(),
+            receiving.clone()
+        )
+        .await
+        .is_err()
     );
     assert_eq!(started.load(Ordering::SeqCst), 0);
+    assert!(!receiving.load(Ordering::Acquire));
 }
 #[tokio::test]
 async fn invalid_actual_format_closes_microphone_before_network() {
@@ -110,19 +118,22 @@ async fn release_drains_microphone_through_resampler_and_closes_capture() {
         }
     });
     let (tap, control, started, stopped) = fixture(48000, 0);
+    let receiving = Arc::new(AtomicBool::new(false));
     let text = tokio::time::timeout(
         Duration::from_secs(3),
-        text_to_speech::capture::run_with_endpoint(
+        text_to_speech::capture::run_observed(
             tap,
             "test-key".into(),
             control,
             DeepgramEndpoint::loopback(port),
+            receiving.clone(),
         ),
     )
     .await
     .unwrap()
     .unwrap();
     assert_eq!(text, "Fixture speech.");
+    assert!(receiving.load(Ordering::Acquire));
     assert_eq!(started.load(Ordering::SeqCst), 1);
     assert!(stopped.load(Ordering::SeqCst) > 0);
     server.await.unwrap();

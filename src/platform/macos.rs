@@ -300,6 +300,7 @@ struct Shell {
     smoke: bool,
     smoke_started: bool,
     launched: Instant,
+    receiving: Arc<AtomicBool>,
 }
 impl Shell {
     fn new(mtm: MainThreadMarker) -> Result<Self, String> {
@@ -323,10 +324,10 @@ impl Shell {
         let screen = NSScreen::mainScreen(mtm).ok_or("No screen")?.visibleFrame();
         let frame = NSRect::new(
             NSPoint::new(
-                screen.origin.x + (screen.size.width - 480.0) / 2.0,
+                screen.origin.x + (screen.size.width - 300.0) / 2.0,
                 screen.origin.y + 38.0,
             ),
-            NSSize::new(480.0, 54.0),
+            NSSize::new(300.0, 44.0),
         );
         let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
             NSPanel::alloc(mtm),
@@ -343,14 +344,22 @@ impl Shell {
         panel.setHidesOnDeactivate(false);
         panel.setIgnoresMouseEvents(true);
         panel.setBackgroundColor(Some(&NSColor::windowBackgroundColor()));
+        let content = panel.contentView().ok_or("No panel content")?;
+        content.setWantsLayer(true);
+        if let Some(layer) = content.layer() {
+            unsafe {
+                let _: () = objc2::msg_send![&*layer, setCornerRadius: 22.0f64];
+            }
+            layer.setMasksToBounds(true);
+        }
         unsafe { panel.setReleasedWhenClosed(false) };
         let label = NSTextField::wrappingLabelWithString(
             &NSString::from_str("Hold Control to dictate"),
             mtm,
         );
         label.setFrame(NSRect::new(
-            NSPoint::new(16.0, 10.0),
-            NSSize::new(448.0, 34.0),
+            NSPoint::new(18.0, 12.0),
+            NSSize::new(264.0, 20.0),
         ));
         label.setFont(Some(&NSFont::systemFontOfSize(13.0)));
         label.setTextColor(Some(&NSColor::labelColor()));
@@ -388,13 +397,19 @@ impl Shell {
             smoke: std::env::args().any(|a| a == "--smoke"),
             smoke_started: false,
             launched: Instant::now(),
+            receiving: Arc::new(AtomicBool::new(false)),
         })
     }
     fn show(&mut self, message: &str, temporary: bool) {
         eprintln!("status: {message}");
         self.message = message.into();
         self.status.set_text(message);
-        self.label.setStringValue(&NSString::from_str(message));
+        let short = if message.chars().count() > 42 {
+            "⚠ Check Control menu for details"
+        } else {
+            message
+        };
+        self.label.setStringValue(&NSString::from_str(short));
         self.panel.orderFrontRegardless();
         self.hide_at = temporary.then(|| Instant::now() + Duration::from_secs(5));
     }
@@ -430,15 +445,14 @@ impl Shell {
         }
         self.focus = focus;
         self.control = Arc::new(AtomicU8::new(0));
+        self.receiving = Arc::new(AtomicBool::new(false));
         self.started = Instant::now();
         self.last.clear();
-        self.show(
-            "● Listening — release Control or choose Stop dictation",
-            false,
-        );
+        self.show("◌ Starting microphone…", false);
         let control = self.control.clone();
         let completed = self.completed.clone();
         let generation = self.core.generation();
+        let receiving = self.receiving.clone();
         std::thread::spawn(move || {
             let result = (|| {
                 let credentials = crate::config::load()?;
@@ -451,10 +465,12 @@ impl Shell {
                     .enable_all()
                     .build()
                     .map_err(|_| "Cannot start audio runtime".to_string())?;
-                runtime.block_on(crate::capture::run(
+                runtime.block_on(crate::capture::run_observed(
                     tap,
                     credentials.key.expose().into(),
                     control,
+                    fotw_stt::DeepgramEndpoint::production(),
+                    receiving,
                 ))
             })();
             let _ = completed.send(Completion { generation, result });
@@ -478,12 +494,11 @@ impl Shell {
         {
             self.finish();
         }
-        if self.core.phase == Phase::Recording {
+        if self.core.phase == Phase::Recording && self.receiving.load(Ordering::Acquire) {
             let frames = ["▁ ▃ ▆ ▃ ▁", "▃ ▆ █ ▆ ▃", "▆ ▃ ▁ ▃ ▆", "▃ ▁ ▃ ▆ █"];
             let frame = frames[(self.started.elapsed().as_millis() / 160 % 4) as usize];
-            self.label.setStringValue(&NSString::from_str(&format!(
-                "● Listening  {frame}   · Esc cancels"
-            )));
+            self.label
+                .setStringValue(&NSString::from_str(&format!("● Listening  {frame}")));
         }
         if let Some(tap) = &self.tap {
             tap._context.busy.set(self.core.phase == Phase::Processing);
@@ -507,7 +522,7 @@ impl Shell {
         }
         while let Ok(event) = self.input.try_recv() {
             match event {
-                Input::HotkeyDown => self.show("Control pressed — keep holding to dictate", true),
+                Input::HotkeyDown => self.show("◌ Control held — keep holding", true),
                 Input::Flags(down, other) => match self.core.flags(down, other) {
                     Some("start") => self.start(),
                     Some("finish") => self.finish(),
@@ -605,9 +620,13 @@ impl Shell {
             }
         }
         if self.hide_at.is_some_and(|time| Instant::now() >= time) {
-            self.panel.orderOut(None);
             self.hide_at = None;
-            self.status.set_text("Hold Control to dictate");
+            let ready = if unsafe { CGPreflightListenEventAccess() } {
+                "● Ready · hold Control"
+            } else {
+                "⚠ Keyboard permission needed"
+            };
+            self.show(ready, false);
         }
     }
 }
@@ -626,10 +645,7 @@ pub fn run() -> Result<(), String> {
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
     app.finishLaunching();
     let shell = Rc::new(RefCell::new(Shell::new(mtm)?));
-    shell.borrow_mut().show(
-        "Hold Control to dictate. First run: use Set up permissions in the Control menu.",
-        true,
-    );
+    shell.borrow_mut().show("● Ready · hold Control", true);
     let weak = Rc::downgrade(&shell);
     let block = RcBlock::new(move |_: NonNull<NSTimer>| {
         if let Some(shell) = weak.upgrade()
