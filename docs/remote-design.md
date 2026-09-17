@@ -159,3 +159,17 @@ it is not native delivery evidence.
   the outstanding checks in the [acceptance audit](remote-acceptance.md).
 
 No end-to-end estimate is revised yet: the transport feasibility gate is open.
+
+## Linux-host follow-up: macOS bundle identity
+
+Source inspection found an actionable mismatch: the observer accepted only
+`com.carriez.rustdesk`, but the official RustDesk 1.4.6
+[macOS build configuration](https://github.com/rustdesk/rustdesk/blob/1.4.6/flutter/macos/Runner/Configs/AppInfo.xcconfig)
+declares `com.carriez.flutterHbb`. Selection and redacted diagnostics now use the
+same exact allowlist. No prefix matching or title-only app identification was
+introduced. A regression test failed for the Flutter identity before the fix and
+passes afterward; unrelated applications and suffix lookalikes remain rejected.
+This is a plausible cause of the previously blocked selection, not native proof
+that the positive Mac-to-Linux flow now passes. This follow-up was developed on
+Ubuntu 24.04 / GNOME 46 / X11 with RustDesk host 1.4.6. macOS CI builds an app
+artifact for the remaining client-side validation. Issue #13 remains open.

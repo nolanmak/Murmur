@@ -84,3 +84,8 @@ impl Review {
         self.pending = None;
     }
 }
+
+/// Bundle identities supported by the native RustDesk window observer.
+pub fn rustdesk_bundle(bundle: &str) -> bool {
+    matches!(bundle, "com.carriez.rustdesk" | "com.carriez.flutterHbb")
+}

@@ -996,7 +996,7 @@ impl RustDeskWindow {
         unsafe { AXUIElementGetPid(app.0, &mut process) };
         let bundle = NSRunningApplication::runningApplicationWithProcessIdentifier(process)?
             .bundleIdentifier()?;
-        if bundle.to_string() != "com.carriez.rustdesk" {
+        if !crate::remote_review::rustdesk_bundle(&bundle.to_string()) {
             return None;
         }
         let element = attribute(app.0, "AXFocusedWindow")?;
@@ -1155,7 +1155,7 @@ fn remote_selection_diagnostic() {
     unsafe { AXUIElementGetPid(app.0, &mut pid) };
     let rustdesk = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
         .and_then(|app| app.bundleIdentifier())
-        .is_some_and(|id| id.to_string() == "com.carriez.rustdesk");
+        .is_some_and(|id| crate::remote_review::rustdesk_bundle(&id.to_string()));
     let window = attribute(app.0, "AXFocusedWindow");
     let supported_title = window
         .as_ref()
