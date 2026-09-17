@@ -22,8 +22,22 @@ Upstream source inspected at revision
   describe clipboard and keyboard permissions. These settings alone do not
   establish that a particular transcript was consumed.
 
-The source revision above is a research reference, not a claim that it exactly
-matches the installed release. Release-specific behavior still needs testing.
+The initial source revision above was a research reference. A follow-up review
+checked the **1.4.6 release tag**, revision
+`1abc897c451c8b5bbff3792509a7fef9d12f2ce3`:
+
+- [Release clipboard dispatch](https://github.com/rustdesk/rustdesk/blob/1abc897c451c8b5bbff3792509a7fef9d12f2ce3/src/flutter.rs#L1451)
+  iterates all sessions and sends text clipboard messages to every session whose
+  `is_text_clipboard_required` condition is true. There is no foreground-window
+  filter in this function. This confirms that choosing a local window alone is
+  insufficient to isolate the destination.
+- [Release CLI](https://github.com/rustdesk/rustdesk/blob/1abc897c451c8b5bbff3792509a7fef9d12f2ce3/src/core_main.rs)
+  exposes connection and management commands. The inspected dispatch contains no
+  command for querying remote text insertion or clipboard receipt.
+
+These are source observations, not a runtime multi-session test or a guarantee
+about every available RustDesk integration. Remote-host versions, permissions,
+and actual transfer behavior still need validation.
 
 ## Controller implemented
 
@@ -134,6 +148,7 @@ Command: `cargo test --locked --test remote`.
 - Complete the macOS and Linux native matrix in #13 using disposable inputs.
 - Complete the native fallback checks; receipt remains unobservable and no
   automatic insertion is claimed.
-- Produce a PR with verified limitations and link setup/troubleshooting evidence.
+- Complete [draft PR #14](https://github.com/nolanmak/Text-to-speech/pull/14) after
+  the outstanding checks in the [acceptance audit](remote-acceptance.md).
 
 No end-to-end estimate is revised yet: the transport feasibility gate is open.
