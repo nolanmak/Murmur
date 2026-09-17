@@ -76,5 +76,50 @@
     "title": "RustDesk remote dictation: explicit paste to macOS and Linux with test-first validation",
     "milestone": "M3",
     "url": "https://github.com/nolanmak/Murmur/issues/13"
+  },
+  {
+    "number": 15,
+    "title": "Linux desktop dictation: delivery plan and release gates",
+    "url": "https://github.com/nolanmak/Murmur/issues/15"
+  },
+  {
+    "number": 16,
+    "title": "Linux platform contracts, capability detection and support matrix",
+    "url": "https://github.com/nolanmak/Murmur/issues/16"
+  },
+  {
+    "number": 17,
+    "title": "Linux microphone capture and Deepgram lifecycle",
+    "url": "https://github.com/nolanmak/Murmur/issues/17"
+  },
+  {
+    "number": 18,
+    "title": "Linux X11 hold-Control shortcut and cancellation",
+    "url": "https://github.com/nolanmak/Murmur/issues/18"
+  },
+  {
+    "number": 19,
+    "title": "Linux X11 focused text insertion and clipboard recovery",
+    "url": "https://github.com/nolanmak/Murmur/issues/19"
+  },
+  {
+    "number": 20,
+    "title": "Wayland capability spike and supported shortcut/insertion adapter",
+    "url": "https://github.com/nolanmak/Murmur/issues/20"
+  },
+  {
+    "number": 21,
+    "title": "Linux recording indicator, manual controls and permission diagnostics",
+    "url": "https://github.com/nolanmak/Murmur/issues/21"
+  },
+  {
+    "number": 22,
+    "title": "Linux configuration, installation and packaging",
+    "url": "https://github.com/nolanmak/Murmur/issues/22"
+  },
+  {
+    "number": 23,
+    "title": "Linux native acceptance suite and release CI",
+    "url": "https://github.com/nolanmak/Murmur/issues/23"
   }
 ]
