@@ -1,0 +1,93 @@
+[package]
+name = "fotw-secrets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+# The credentials index is a store row (docs/REQUIREMENTS.md 10). It derives
+# Serialize/Deserialize so fotw-store can persist it without redefining the
+# shape -- and so the acceptance test can serialise a record and byte-scan the
+# result for key material.
+serde = { workspace = true }
+
+# SHA-256, for the 16-hex-char fingerprint in the credentials index and for the
+# Redactor's constant-size secret index. Chosen over a heavyweight AEAD crate
+# because this is one hash: sha2 is ~3k lines, MIT OR Apache-2.0 (both on
+# deny.toml's allowlist), no_std-capable, and pulls only `digest`/`typenum`.
+# Hand-rolling SHA-256 was the alternative and is strictly worse: a fingerprint
+# that disagrees with the rest of the world is a fingerprint we cannot verify.
+sha2 = "0.11"
+
+# OS keychain: macOS Keychain Services, Windows Credential Manager, Secret
+# Service on Linux (docs/REQUIREMENTS.md 10). MIT OR Apache-2.0.
+#
+# v4 is a rewrite around `keyring-core` with pluggable stores; the `v1` default
+# feature restores the flat `Entry` API and picks the platform store for us.
+# The reason we take v4 rather than pinning v3 is `Entry::store_status()`,
+# which reports whether the platform credential store initialised *without*
+# attempting a write. That is exactly the probe KEY-05 needs: it lets us refuse
+# to store on a Linux box with no Secret Service instead of discovering the
+# problem halfway through a set() and having to guess whether we left a
+# partial credential behind.
+#
+# Its platform backends are already target-gated in its own manifest, so this
+# is a plain dependency rather than a per-target one -- a Linux build pulls
+# zbus and no Apple frameworks, a macOS build the reverse.
+keyring = "4.1"
+
+# ---------------------------------------------------------------- recovery key
+#
+# Three crates, all on deny.toml's allowlist, all added to the *member* manifest
+# so the root workspace file is untouched (issue #38).
+
+# Argon2id, for the Recovery Key -> key-encryption-key derivation. RustCrypto,
+# MIT OR Apache-2.0, pure Rust, no C toolchain. 0.5.3 rather than 0.6.0-rc.8
+# because the only newer release is a release candidate, and this crate sits
+# between the user and every meeting they have ever recorded.
+#
+# `default-features = false, features = ["alloc"]` drops the `rand` feature and
+# nothing else. Worth stating precisely, because the obvious reading is wrong:
+# `alloc` is spelled `password-hash/alloc` (not `password-hash?/alloc`) in
+# argon2's own manifest, so it *activates* the optional `password-hash`
+# dependency regardless, and `hash_password_into` -- the raw KDF, the only entry
+# point we use -- is itself gated on `alloc`. So the PHC-string machinery comes
+# along; we simply never touch it. We do not build our own memory blocks to
+# avoid it: `hash_password_into_with_memory` would trade two small audited
+# crates for a hand-computed block count in the one function whose failure mode
+# is a silently weaker KDF.
+argon2 = { version = "0.5.3", default-features = false, features = ["alloc"] }
+
+# XChaCha20-Poly1305, for sealing the 32-byte master key under that KEK.
+# RustCrypto, MIT OR Apache-2.0, and audited by NCC Group (the 2020/21 review of
+# RustCrypto's AEADs). It is also the same primitive family `age` uses for the
+# media files (docs/REQUIREMENTS.md 10), so the tree carries one AEAD, not two.
+#
+# The *extended*-nonce variant specifically: a 192-bit nonce can be drawn from
+# the CSPRNG with a collision probability that rounds to zero, whereas
+# AES-GCM's 96-bit nonce would need a counter, and a counter needs somewhere to
+# persist it -- somewhere that is exactly the file an attacker can roll back.
+#
+# The `zeroize` feature wipes the cipher's *expanded* key state on drop. We wipe
+# our own copy of the KEK by hand the moment the cipher has taken it, but the
+# copy inside the cipher is out of our reach without this. It costs one crate
+# that is already in the lock file.
+chacha20poly1305 = { version = "0.11", features = ["zeroize"] }
+
+# Bech32m (BIP-350) for the human-transcribable encoding. MIT, from
+# rust-bitcoin, and exercised by every Bitcoin wallet in existence. The reason
+# to take a dependency rather than write ~80 lines is the checksum: it is a BCH
+# code over GF(32) with a *proved* guarantee (any <=4 character errors in a
+# string this short are always detected), and an implementation that is subtly
+# wrong still round-trips its own output, so our own tests could not tell us.
+# See `recovery::encoding` for why bech32m and not bech32.
+bech32 = "0.12"
+
+[dev-dependencies]
+serde_json = { workspace = true }
+# The KEY-01 acceptance test needs a real directory tree to byte-scan. Already
+# in the lock file via fotw-store's dev-dependencies, so no new supply chain.
+tempfile = "3"

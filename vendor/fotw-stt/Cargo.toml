@@ -1,0 +1,45 @@
+[package]
+name = "fotw-stt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+ulid = { workspace = true }
+# The streaming transport (spec 7.4). Declared here rather than in
+# [workspace.dependencies] because no other crate opens a socket to a provider.
+#
+# TLS is `native-tls` on purpose: Security.framework on macOS, schannel on
+# Windows, the system OpenSSL on Linux. The rustls path pulls `ring` or
+# `aws-lc-rs`, whose license expressions include `OpenSSL`, which is not on
+# deny.toml's allowlist -- so it would fail the `deny` CI job.
+futures-util = { workspace = true, features = ["sink", "std"] }
+tokio = { workspace = true, features = [
+  "io-util",
+  "macros",
+  "net",
+  "rt",
+  "sync",
+  "time",
+] }
+tokio-tungstenite = { version = "0.29", default-features = false, features = [
+  "connect",
+  "handshake",
+  "native-tls",
+] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = [
+  "io-util",
+  "macros",
+  "net",
+  "rt",
+  "rt-multi-thread",
+  "sync",
+  "time",
+] }

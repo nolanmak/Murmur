@@ -1,0 +1,30 @@
+FlyOnTheWall
+Copyright 2026 The FlyOnTheWall Contributors
+
+This product includes software developed by the FlyOnTheWall project.
+Licensed under the Apache License, Version 2.0.
+
+App icon and web UI favicon
+---------------------------
+
+packaging/AppIcon.svg, packaging/AppIcon.icns and
+crates/fotw-web/ui/favicon.svg are derived from "Fly" by Delapouite,
+https://game-icons.net/1x1/delapouite/fly.html, licensed under CC BY 3.0,
+https://creativecommons.org/licenses/by/3.0/. The CC BY 3.0 terms, not the
+Apache License, apply to the original artwork.
+
+Changes from the original: the fly is recolored green (#0cd420).
+AppIcon.svg sets it on a dark rounded-square tile (#171A2B), and
+AppIcon.icns is rendered from AppIcon.svg. favicon.svg has no background.
+The outline is not redrawn: its path is the copy in Iconify's game-icons
+set, which encodes the original path more compactly and rounds some values
+but keeps every segment's end point.
+
+Third-party software
+--------------------
+
+No third-party source code is vendored in this repository. The fotwd binary
+in FlyOnTheWall.app statically links Rust crates and the C libraries that
+some of them compile from source (SQLCipher, SQLite, OpenSSL, libopus).
+Their copyright notices and license texts are in THIRD_PARTY_NOTICES.md,
+which `just bundle` copies into the app's Contents/Resources directory.

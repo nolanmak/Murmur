@@ -1,0 +1,162 @@
+[
+  {
+    "type": "Results",
+    "is_final": false,
+    "speech_final": false,
+    "start": 1.0,
+    "duration": 0.62,
+    "channel": {
+      "alternatives": [
+        {
+          "transcript": "so i think",
+          "confidence": 0.71,
+          "words": [
+            { "word": "so", "punctuated_word": "So", "start": 1.02, "end": 1.18, "confidence": 0.72, "speaker": 0 },
+            { "word": "i", "punctuated_word": "I", "start": 1.2, "end": 1.3, "confidence": 0.68, "speaker": 0 },
+            { "word": "think", "punctuated_word": "think", "start": 1.32, "end": 1.62, "confidence": 0.74, "speaker": 0 }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "type": "Results",
+    "is_final": false,
+    "speech_final": false,
+    "start": 1.0,
+    "duration": 1.16,
+    "channel": {
+      "alternatives": [
+        {
+          "transcript": "so i think we should",
+          "confidence": 0.83,
+          "words": [
+            { "word": "so", "punctuated_word": "So", "start": 1.02, "end": 1.18, "confidence": 0.72, "speaker": 0 },
+            { "word": "i", "punctuated_word": "I", "start": 1.2, "end": 1.3, "confidence": 0.68, "speaker": 0 },
+            { "word": "think", "punctuated_word": "think", "start": 1.32, "end": 1.62, "confidence": 0.74, "speaker": 0 },
+            { "word": "we", "punctuated_word": "we", "start": 1.7, "end": 1.84, "confidence": 0.88, "speaker": 0 },
+            { "word": "should", "punctuated_word": "should", "start": 1.86, "end": 2.16, "confidence": 0.91, "speaker": 0 }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "type": "Results",
+    "is_final": true,
+    "speech_final": false,
+    "start": 1.0,
+    "duration": 1.16,
+    "channel": {
+      "alternatives": [
+        {
+          "transcript": "So I think we should",
+          "confidence": 0.94,
+          "words": [
+            { "word": "so", "punctuated_word": "So", "start": 1.02, "end": 1.18, "confidence": 0.95, "speaker": 0 },
+            { "word": "i", "punctuated_word": "I", "start": 1.2, "end": 1.3, "confidence": 0.93, "speaker": 0 },
+            { "word": "think", "punctuated_word": "think", "start": 1.32, "end": 1.62, "confidence": 0.96, "speaker": 0 },
+            { "word": "we", "punctuated_word": "we", "start": 1.7, "end": 1.84, "confidence": 0.94, "speaker": 0 },
+            { "word": "should", "punctuated_word": "should", "start": 1.86, "end": 2.16, "confidence": 0.92, "speaker": 0 }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "type": "Results",
+    "is_final": false,
+    "speech_final": false,
+    "start": 2.3,
+    "duration": 0.4,
+    "channel": {
+      "alternatives": [
+        {
+          "transcript": "",
+          "confidence": 0.0,
+          "words": []
+        }
+      ]
+    }
+  },
+  {
+    "type": "Results",
+    "is_final": false,
+    "speech_final": false,
+    "start": 2.3,
+    "duration": 0.8,
+    "channel": {
+      "alternatives": [
+        {
+          "transcript": "ship on friday",
+          "confidence": 0.8,
+          "words": [
+            { "word": "ship", "punctuated_word": "ship", "start": 2.34, "end": 2.6, "confidence": 0.81, "speaker": 0 },
+            { "word": "on", "punctuated_word": "on", "start": 2.62, "end": 2.72, "confidence": 0.79, "speaker": 0 },
+            { "word": "friday", "punctuated_word": "friday", "start": 2.74, "end": 3.1, "confidence": 0.8, "speaker": 0 }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "type": "Results",
+    "is_final": true,
+    "speech_final": true,
+    "start": 2.3,
+    "duration": 0.8,
+    "channel": {
+      "alternatives": [
+        {
+          "transcript": "ship on Friday.",
+          "confidence": 0.96,
+          "words": [
+            { "word": "ship", "punctuated_word": "ship", "start": 2.34, "end": 2.6, "confidence": 0.98, "speaker": 0 },
+            { "word": "on", "punctuated_word": "on", "start": 2.62, "end": 2.72, "confidence": 0.96, "speaker": 0 },
+            { "word": "friday", "punctuated_word": "Friday.", "start": 2.74, "end": 3.1, "confidence": 0.95, "speaker": 0 }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "type": "Results",
+    "is_final": true,
+    "speech_final": true,
+    "start": 3.4,
+    "duration": 0.7,
+    "channel": {
+      "alternatives": [
+        {
+          "transcript": "Works for me.",
+          "confidence": 0.99,
+          "words": [
+            { "word": "works", "punctuated_word": "Works", "start": 3.42, "end": 3.7, "confidence": 0.99, "speaker": 1 },
+            { "word": "for", "punctuated_word": "for", "start": 3.72, "end": 3.84, "confidence": 0.98, "speaker": 1 },
+            { "word": "me", "punctuated_word": "me.", "start": 3.86, "end": 4.1, "confidence": 0.99, "speaker": 1 }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "type": "Results",
+    "is_final": true,
+    "speech_final": true,
+    "start": 4.2,
+    "duration": 0.9,
+    "channel": {
+      "alternatives": [
+        {
+          "transcript": "Great. Anything else?",
+          "confidence": 0.95,
+          "words": [
+            { "word": "great", "punctuated_word": "Great.", "start": 4.22, "end": 4.5, "confidence": 0.96, "speaker": 1 },
+            { "word": "anything", "punctuated_word": "Anything", "start": 4.6, "end": 4.9, "confidence": 0.94, "speaker": 0 },
+            { "word": "else", "punctuated_word": "else?", "start": 4.92, "end": 5.1, "confidence": 0.95, "speaker": 0 }
+          ]
+        }
+      ]
+    }
+  }
+]

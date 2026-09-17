@@ -1,0 +1,163 @@
+[
+  {
+    "id": "seg-0",
+    "sessionId": "fixture-session",
+    "source": "system",
+    "speaker": "S0",
+    "text": "so i think",
+    "startMs": 1020,
+    "endMs": 1620,
+    "words": [
+      { "text": "So", "startMs": 1020, "endMs": 1180, "confidence": 0.72, "speaker": "S0" },
+      { "text": "I", "startMs": 1200, "endMs": 1300, "confidence": 0.68, "speaker": "S0" },
+      { "text": "think", "startMs": 1320, "endMs": 1620, "confidence": 0.74, "speaker": "S0" }
+    ],
+    "confidence": 0.71,
+    "language": "en",
+    "isFinal": false,
+    "revision": 0,
+    "provider": "deepgram",
+    "model": "nova-3",
+    "timestampSource": "provider"
+  },
+  {
+    "id": "seg-0",
+    "sessionId": "fixture-session",
+    "source": "system",
+    "speaker": "S0",
+    "text": "so i think we should",
+    "startMs": 1020,
+    "endMs": 2160,
+    "words": [
+      { "text": "So", "startMs": 1020, "endMs": 1180, "confidence": 0.72, "speaker": "S0" },
+      { "text": "I", "startMs": 1200, "endMs": 1300, "confidence": 0.68, "speaker": "S0" },
+      { "text": "think", "startMs": 1320, "endMs": 1620, "confidence": 0.74, "speaker": "S0" },
+      { "text": "we", "startMs": 1700, "endMs": 1840, "confidence": 0.88, "speaker": "S0" },
+      { "text": "should", "startMs": 1860, "endMs": 2160, "confidence": 0.91, "speaker": "S0" }
+    ],
+    "confidence": 0.83,
+    "language": "en",
+    "isFinal": false,
+    "revision": 1,
+    "provider": "deepgram",
+    "model": "nova-3",
+    "timestampSource": "provider"
+  },
+  {
+    "id": "seg-0",
+    "sessionId": "fixture-session",
+    "source": "system",
+    "speaker": "S0",
+    "text": "So I think we should",
+    "startMs": 1020,
+    "endMs": 2160,
+    "words": [
+      { "text": "So", "startMs": 1020, "endMs": 1180, "confidence": 0.95, "speaker": "S0" },
+      { "text": "I", "startMs": 1200, "endMs": 1300, "confidence": 0.93, "speaker": "S0" },
+      { "text": "think", "startMs": 1320, "endMs": 1620, "confidence": 0.96, "speaker": "S0" },
+      { "text": "we", "startMs": 1700, "endMs": 1840, "confidence": 0.94, "speaker": "S0" },
+      { "text": "should", "startMs": 1860, "endMs": 2160, "confidence": 0.92, "speaker": "S0" }
+    ],
+    "confidence": 0.94,
+    "language": "en",
+    "isFinal": false,
+    "revision": 2,
+    "provider": "deepgram",
+    "model": "nova-3",
+    "timestampSource": "provider"
+  },
+  {
+    "id": "seg-0",
+    "sessionId": "fixture-session",
+    "source": "system",
+    "speaker": "S0",
+    "text": "So I think we should ship on friday",
+    "startMs": 1020,
+    "endMs": 3100,
+    "words": [
+      { "text": "So", "startMs": 1020, "endMs": 1180, "confidence": 0.95, "speaker": "S0" },
+      { "text": "I", "startMs": 1200, "endMs": 1300, "confidence": 0.93, "speaker": "S0" },
+      { "text": "think", "startMs": 1320, "endMs": 1620, "confidence": 0.96, "speaker": "S0" },
+      { "text": "we", "startMs": 1700, "endMs": 1840, "confidence": 0.94, "speaker": "S0" },
+      { "text": "should", "startMs": 1860, "endMs": 2160, "confidence": 0.92, "speaker": "S0" },
+      { "text": "ship", "startMs": 2340, "endMs": 2600, "confidence": 0.81, "speaker": "S0" },
+      { "text": "on", "startMs": 2620, "endMs": 2720, "confidence": 0.79, "speaker": "S0" },
+      { "text": "friday", "startMs": 2740, "endMs": 3100, "confidence": 0.8, "speaker": "S0" }
+    ],
+    "confidence": 0.8875,
+    "language": "en",
+    "isFinal": false,
+    "revision": 3,
+    "provider": "deepgram",
+    "model": "nova-3",
+    "timestampSource": "provider"
+  },
+  {
+    "id": "seg-0",
+    "sessionId": "fixture-session",
+    "source": "system",
+    "speaker": "S0",
+    "text": "So I think we should ship on Friday.",
+    "startMs": 1020,
+    "endMs": 3100,
+    "words": [
+      { "text": "So", "startMs": 1020, "endMs": 1180, "confidence": 0.95, "speaker": "S0" },
+      { "text": "I", "startMs": 1200, "endMs": 1300, "confidence": 0.93, "speaker": "S0" },
+      { "text": "think", "startMs": 1320, "endMs": 1620, "confidence": 0.96, "speaker": "S0" },
+      { "text": "we", "startMs": 1700, "endMs": 1840, "confidence": 0.94, "speaker": "S0" },
+      { "text": "should", "startMs": 1860, "endMs": 2160, "confidence": 0.92, "speaker": "S0" },
+      { "text": "ship", "startMs": 2340, "endMs": 2600, "confidence": 0.98, "speaker": "S0" },
+      { "text": "on", "startMs": 2620, "endMs": 2720, "confidence": 0.96, "speaker": "S0" },
+      { "text": "Friday.", "startMs": 2740, "endMs": 3100, "confidence": 0.95, "speaker": "S0" }
+    ],
+    "confidence": 0.9475,
+    "language": "en",
+    "isFinal": true,
+    "revision": 4,
+    "provider": "deepgram",
+    "model": "nova-3",
+    "timestampSource": "provider"
+  },
+  {
+    "id": "seg-1",
+    "sessionId": "fixture-session",
+    "source": "system",
+    "speaker": "S1",
+    "text": "Works for me.",
+    "startMs": 3420,
+    "endMs": 4100,
+    "words": [
+      { "text": "Works", "startMs": 3420, "endMs": 3700, "confidence": 0.99, "speaker": "S1" },
+      { "text": "for", "startMs": 3720, "endMs": 3840, "confidence": 0.98, "speaker": "S1" },
+      { "text": "me.", "startMs": 3860, "endMs": 4100, "confidence": 0.99, "speaker": "S1" }
+    ],
+    "confidence": 0.99,
+    "language": "en",
+    "isFinal": true,
+    "revision": 0,
+    "provider": "deepgram",
+    "model": "nova-3",
+    "timestampSource": "provider"
+  },
+  {
+    "id": "seg-2",
+    "sessionId": "fixture-session",
+    "source": "system",
+    "speaker": null,
+    "text": "Great. Anything else?",
+    "startMs": 4220,
+    "endMs": 5100,
+    "words": [
+      { "text": "Great.", "startMs": 4220, "endMs": 4500, "confidence": 0.96, "speaker": "S1" },
+      { "text": "Anything", "startMs": 4600, "endMs": 4900, "confidence": 0.94, "speaker": "S0" },
+      { "text": "else?", "startMs": 4920, "endMs": 5100, "confidence": 0.95, "speaker": "S0" }
+    ],
+    "confidence": 0.95,
+    "language": "en",
+    "isFinal": true,
+    "revision": 0,
+    "provider": "deepgram",
+    "model": "nova-3",
+    "timestampSource": "provider"
+  }
+]

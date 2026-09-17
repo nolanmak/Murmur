@@ -1,0 +1,23 @@
+name: Feature or regression
+description: Specify observable behavior and tests before implementation.
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: User outcome
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Measurable checkboxes, including failure and privacy behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: tests
+    attributes:
+      label: Test-first plan
+      description: Failing test, smallest implementation, regression suite, manual native checks.
+    validations:
+      required: true

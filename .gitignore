@@ -1,0 +1,10 @@
+target/
+.env
+.env.*
+!.env.example
+*.app/
+.DS_Store
+packaging/build/
+.local/
+*.pcm
+*.wav
