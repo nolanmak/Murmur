@@ -13,6 +13,8 @@ fn main() {
                 c.source
             )
         }),
+        #[cfg(target_os = "macos")]
+        "review-preview" => text_to_speech::platform::macos::preview_remote_review(),
         "run" => {
             #[cfg(target_os = "macos")]
             {
