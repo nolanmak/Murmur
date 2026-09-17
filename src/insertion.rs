@@ -1,4 +1,14 @@
 //! Native implementations must retain and compare the actual AX element too.
+pub fn terminal_surface(bundle: &str, role: &str, subrole: &str) -> bool {
+    matches!(
+        bundle,
+        "com.apple.Terminal" | "com.googlecode.iterm2" | "com.mitchellh.ghostty"
+    ) && matches!(
+        role,
+        "AXTextArea" | "AXTextField" | "AXGroup" | "AXScrollArea"
+    ) && !subrole.contains("Secure")
+        && !subrole.contains("Password")
+}
 pub fn text_role(role: &str, subrole: &str) -> bool {
     matches!(role, "AXTextField" | "AXTextArea" | "AXComboBox")
         && !subrole.contains("Secure")
