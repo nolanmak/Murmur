@@ -137,6 +137,13 @@ Command: `cargo test --locked --test remote`.
 
 ## Remaining work
 
+Adapter-error regression: red commit `172c0cc` added two tests (one failed,
+one already passed). The controller now accepts errors only from its active
+attempt and immediately ends it, including an uncertain paste dispatch. Late
+success/error callbacks cannot change the outcome or invalidate a new explicit
+retry. All 14 controller tests pass. This API awaits a real transport adapter;
+it is not native delivery evidence.
+
 - Establish version-specific active-session and clipboard-receipt observability;
   test clipboard isolation with multiple sessions.
 - Integrate the implemented clipboard lease and resolve native race/deadline

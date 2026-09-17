@@ -222,8 +222,18 @@ impl Controller {
         self.pending = None;
         self.state = State::Failed(failure);
     }
-    pub fn adapter_failed(&mut self, _id: Attempt, _failure: Failure) -> bool {
-        false
+    /// Report an adapter failure for the active attempt only. An uncertain
+    /// dispatch is terminal: it must never trigger an automatic retry.
+    pub fn adapter_failed(&mut self, id: Attempt, failure: Failure) -> bool {
+        if !self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.id == id)
+        {
+            return false;
+        }
+        self.fail(failure);
+        true
     }
     pub fn cancel(&mut self) {
         self.pending = None;
