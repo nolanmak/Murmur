@@ -30,7 +30,19 @@ No live provider request was made by the automated suite.
 
 ## Revised shortcut: hold Control
 
-Five Control tests failed first, then passed: quick taps, 350 ms hold, duplicate
-repeats, modified shortcuts, typing rollover and Escape cancellation. Fn is no
+The earlier Space tests were renamed for Control and passed; the Control changes
+were not developed test-first and those tests did not exercise native event delivery. Fn is no
 longer registered by the native adapter. The rebuilt test app uses an ad-hoc signature. Stable certificate signing remains
 a release task; TTS_SIGN_IDENTITY supports an existing development identity.
+
+## Live diagnosis, September 17
+
+- macOS TCC logs explicitly reported a code-requirement mismatch for Input Monitoring
+  after ad-hoc rebuilds. Enabled Settings switches did not establish access for the current binary.
+- The live manual smoke entry (`run --smoke`) reached the microphone permission guard;
+  transcription could not start because this app had no microphone grant.
+- Added Start/Stop dictation menu actions, animated listening status, permission diagnostics,
+  and a listen-only keyboard tap. Unsupported editors can record for manual copying.
+- Added the manual restart regression before `start_manual`: compilation failed on the
+  missing API, then passed after implementation. Existing mock transport tests do not prove
+  real OS permissions or live provider connectivity. Live end-to-end verification is pending.

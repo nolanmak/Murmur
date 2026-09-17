@@ -1,5 +1,18 @@
 use text_to_speech::core::Dictation;
 #[test]
+fn manual_recording_can_restart_after_stop_without_a_keyboard_release() {
+    let mut d = Dictation::default();
+    assert!(d.start_manual());
+    assert!(!d.start_manual());
+    let generation = d.generation();
+    assert!(d.stop());
+    assert!(d.accepts(generation));
+    assert!(!d.start_manual());
+    d.finish();
+    assert!(d.start_manual());
+    assert!(!d.accepts(generation));
+}
+#[test]
 fn fn_hold_release_is_one_session_despite_repeated_flags_events() {
     let mut d = Dictation::default();
     assert_eq!(d.flags(true, false), Some("start"));

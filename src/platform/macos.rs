@@ -46,8 +46,7 @@ unsafe extern "C" {
     fn CGEventGetFlags(event: CF) -> u64;
     fn CGEventGetIntegerValueField(event: CF, field: u32) -> i64;
     fn CGEventTapEnable(tap: CF, enable: bool);
-    fn CGEventCreateCopy(event: CF) -> CF;
-    fn CGEventTapPostEvent(proxy: CF, event: CF);
+    fn CGPreflightListenEventAccess() -> bool;
 }
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
@@ -163,7 +162,6 @@ struct TapContext {
     sender: mpsc::SyncSender<Input>,
     dropped: AtomicBool,
     space: RefCell<crate::space_hotkey::HoldSpace>,
-    pending: RefCell<Option<Owned>>,
     origin: Instant,
     busy: std::cell::Cell<bool>,
     control_down: std::cell::Cell<bool>,
@@ -184,7 +182,7 @@ fn send_command(context: &TapContext, command: crate::space_hotkey::Command) {
         context.dropped.store(true, Ordering::Release);
     }
 }
-unsafe extern "C" fn callback(proxy: CF, kind: u32, event: CF, info: *mut c_void) -> CF {
+unsafe extern "C" fn callback(_proxy: CF, kind: u32, event: CF, info: *mut c_void) -> CF {
     use crate::space_hotkey::Key;
     let context = unsafe { &*(info as *const TapContext) };
     if matches!(kind, 0xffff_fffe | 0xffff_ffff) {
@@ -210,9 +208,10 @@ unsafe extern "C" fn callback(proxy: CF, kind: u32, event: CF, info: *mut c_void
             Key::Up
         }
         (12, _) if flags & (1 << 18) != 0 && context.control_down.get() && other_modifier => {
-            Key::ModifiedDown
+            Key::Other
         }
         (10, 53) => Key::Escape,
+        (10, _) if context.control_down.get() => Key::Other,
         _ => return event,
     };
     let Ok(mut space) = context.space.try_borrow_mut() else {
@@ -220,32 +219,13 @@ unsafe extern "C" fn callback(proxy: CF, kind: u32, event: CF, info: *mut c_void
     };
     let action = space.key(key, context.origin.elapsed().as_millis() as u64);
     drop(space);
-    if matches!(key, Key::Down) && action.consume {
-        // Keep one native event so a short tap can be delivered unchanged.
-        let copy = unsafe { CGEventCreateCopy(event) };
-        if copy.is_null() {
-            *context.space.borrow_mut() = Default::default();
-            return event;
-        }
-        *context.pending.borrow_mut() = Some(Owned(copy));
-    }
-    if action.replay
-        && let Some(saved) = context.pending.borrow_mut().take()
-    {
-        // Posts downstream in this same event-tap callback, before the current
-        // key-up or next character. This preserves fast typing rollover order.
-        unsafe { CGEventTapPostEvent(proxy, saved.0) };
-    }
     if let Some(command) = action.command {
         send_command(context, command);
     }
     if matches!(key, Key::Down) {
         let _ = context.sender.try_send(Input::HotkeyDown);
     }
-    if matches!(key, Key::Up) {
-        context.pending.borrow_mut().take();
-    }
-    if action.consume { ptr::null() } else { event }
+    event
 }
 impl EventTap {
     fn new(sender: mpsc::SyncSender<Input>) -> Option<Self> {
@@ -253,7 +233,6 @@ impl EventTap {
             sender,
             dropped: AtomicBool::new(false),
             space: RefCell::new(Default::default()),
-            pending: RefCell::new(None),
             origin: Instant::now(),
             busy: std::cell::Cell::new(false),
             control_down: std::cell::Cell::new(false),
@@ -262,7 +241,7 @@ impl EventTap {
             CGEventTapCreate(
                 1,
                 0,
-                0,
+                1, // Listen only: Control does not need to suppress or replay typing.
                 (1 << 12) | (1 << 10),
                 callback,
                 (&mut *context as *mut TapContext).cast(),
@@ -318,16 +297,21 @@ struct Shell {
     started: Instant,
     hide_at: Option<Instant>,
     retry_at: Instant,
+    smoke: bool,
+    smoke_started: bool,
+    launched: Instant,
 }
 impl Shell {
     fn new(mtm: MainThreadMarker) -> Result<Self, String> {
         let menu = Menu::new();
         let status = MenuItem::with_id("status", "Hold Control to dictate", false, None);
         let cancel = MenuItem::with_id("cancel", "Cancel dictation (Esc)", true, None);
+        let start = MenuItem::with_id("start", "Start dictation", true, None);
+        let stop = MenuItem::with_id("stop", "Stop dictation", true, None);
         let copy = MenuItem::with_id("copy", "Copy Last Transcript", true, None);
         let setup = MenuItem::with_id("setup", "Set up permissions", true, None);
         let quit = MenuItem::with_id("quit", "Quit Text-to-speech", true, None);
-        for item in [&status, &cancel, &copy, &setup, &quit] {
+        for item in [&status, &start, &stop, &cancel, &copy, &setup, &quit] {
             menu.append(item).map_err(|e| e.to_string())?;
         }
         let tray = TrayIconBuilder::new()
@@ -376,6 +360,12 @@ impl Shell {
             .addSubview(&label);
         let (sender, input) = mpsc::sync_channel(128);
         let tap = EventTap::new(sender.clone());
+        eprintln!(
+            "permissions accessibility={} input_monitoring={} keyboard_listener={}",
+            unsafe { AXIsProcessTrusted() },
+            unsafe { CGPreflightListenEventAccess() },
+            tap.is_some()
+        );
         let (completed, result) = mpsc::channel();
         Ok(Self {
             core: Dictation::default(),
@@ -395,9 +385,13 @@ impl Shell {
             started: Instant::now(),
             hide_at: None,
             retry_at: Instant::now(),
+            smoke: std::env::args().any(|a| a == "--smoke"),
+            smoke_started: false,
+            launched: Instant::now(),
         })
     }
     fn show(&mut self, message: &str, temporary: bool) {
+        eprintln!("status: {message}");
         self.message = message.into();
         self.status.set_text(message);
         self.label.setStringValue(&NSString::from_str(message));
@@ -413,8 +407,8 @@ impl Shell {
     }
     fn start(&mut self) {
         let focus = match Focus::current() {
-            Ok(f) if !f.target.secure && f.target.editable => f,
-            Ok(_) => {
+            Ok(f) if !f.target.secure && f.target.editable => Some(f),
+            Ok(f) if f.target.secure => {
                 self.cancel();
                 self.show(
                     "Choose a supported text field. Password fields are blocked.",
@@ -422,14 +416,11 @@ impl Shell {
                 );
                 return;
             }
-            Err(e) => {
-                self.cancel();
-                self.show(&e, true);
-                return;
-            }
+            _ => None,
         };
         let platform = fotw_audio::platform::macos::MacOsPlatform::new();
         if platform.permission(Permission::Microphone) != PermissionState::Granted {
+            request_microphone();
             self.cancel();
             self.show(
                 "Use Set up permissions in the Control menu, then try again.",
@@ -437,12 +428,12 @@ impl Shell {
             );
             return;
         }
-        self.focus = Some(focus);
+        self.focus = focus;
         self.control = Arc::new(AtomicU8::new(0));
         self.started = Instant::now();
         self.last.clear();
         self.show(
-            "Listening — release Control to insert · Esc to cancel",
+            "● Listening — release Control or choose Stop dictation",
             false,
         );
         let control = self.control.clone();
@@ -451,6 +442,7 @@ impl Shell {
         std::thread::spawn(move || {
             let result = (|| {
                 let credentials = crate::config::load()?;
+                eprintln!("credentials loaded via {}", credentials.source);
                 let platform = fotw_audio::platform::macos::MacOsPlatform::new();
                 let tap = platform
                     .open_mic(&DeviceId::new("default"), FormatRequest::any())
@@ -473,6 +465,26 @@ impl Shell {
         self.show("Finishing… · Esc to cancel", false);
     }
     fn pump(&mut self) {
+        if self.smoke && !self.smoke_started && self.launched.elapsed() > Duration::from_secs(2) {
+            self.smoke_started = true;
+            if self.core.start_manual() {
+                self.start();
+            }
+        }
+        if self.smoke
+            && self.core.phase == Phase::Recording
+            && self.started.elapsed() > Duration::from_secs(10)
+            && self.core.stop()
+        {
+            self.finish();
+        }
+        if self.core.phase == Phase::Recording {
+            let frames = ["▁ ▃ ▆ ▃ ▁", "▃ ▆ █ ▆ ▃", "▆ ▃ ▁ ▃ ▆", "▃ ▁ ▃ ▆ █"];
+            let frame = frames[(self.started.elapsed().as_millis() / 160 % 4) as usize];
+            self.label.setStringValue(&NSString::from_str(&format!(
+                "● Listening  {frame}   · Esc cancels"
+            )));
+        }
         if let Some(tap) = &self.tap {
             tap._context.busy.set(self.core.phase == Phase::Processing);
             let action = tap
@@ -481,7 +493,6 @@ impl Shell {
                 .borrow_mut()
                 .tick(tap._context.origin.elapsed().as_millis() as u64);
             if let Some(command) = action.command {
-                tap._context.pending.borrow_mut().take();
                 send_command(&tap._context, command);
             }
         }
@@ -518,6 +529,12 @@ impl Shell {
         }
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             match event.id.as_ref() {
+                "start" if self.core.start_manual() => {
+                    self.start();
+                }
+                "stop" if self.core.stop() => {
+                    self.finish();
+                }
                 "cancel" => self.cancel(),
                 "copy" if !self.last.is_empty() => {
                     let paste = NSPasteboard::generalPasteboard();
@@ -556,11 +573,15 @@ impl Shell {
             let accepts = self.core.accepts(done.generation);
             match done.result {
                 Ok(text) if accepts && !text.trim().is_empty() => {
+                    eprintln!(
+                        "transcription complete: {} characters",
+                        text.chars().count()
+                    );
                     self.last = text.clone();
                     let result = self
                         .focus
                         .as_ref()
-                        .ok_or("Target was lost".to_string())
+                        .ok_or("Transcript ready — choose Copy Last Transcript".to_string())
                         .and_then(|f| f.insert(&text));
                     match result {
                         Ok(()) => self.show("Text inserted", true),
@@ -576,8 +597,11 @@ impl Shell {
         if self.tap.is_none() && self.retry_at.elapsed() > Duration::from_secs(3) {
             self.tap = EventTap::new(self.sender.clone());
             self.retry_at = Instant::now();
-            if self.tap.is_none() {
-                self.status.set_text("Enable Accessibility, then relaunch");
+            if self.tap.is_none() && self.message.starts_with("Hold Control") {
+                self.show(
+                    "Keyboard access unavailable — use Start dictation in the Control menu",
+                    false,
+                );
             }
         }
         if self.hide_at.is_some_and(|time| Instant::now() >= time) {
@@ -600,6 +624,7 @@ pub fn run() -> Result<(), String> {
     let mtm = MainThreadMarker::new().ok_or("AppKit requires the main thread")?;
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+    app.finishLaunching();
     let shell = Rc::new(RefCell::new(Shell::new(mtm)?));
     shell.borrow_mut().show(
         "Hold Control to dictate. First run: use Set up permissions in the Control menu.",

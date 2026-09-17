@@ -13,6 +13,15 @@ pub struct Dictation {
     generation: u64,
 }
 impl Dictation {
+    pub fn start_manual(&mut self) -> bool {
+        if self.phase != Phase::Idle {
+            return false;
+        }
+        self.down = false;
+        self.generation += 1;
+        self.phase = Phase::Recording;
+        true
+    }
     pub fn flags(&mut self, key_down: bool, other_modifier: bool) -> Option<&'static str> {
         let rising = key_down && !self.down;
         let falling = !key_down && self.down;
