@@ -13,7 +13,7 @@ a nonactivating indicator, and insertion through macOS Accessibility. It is **no
 feature-complete or release-validated**. Native permissions and app compatibility
 still require the [manual QA checklist](docs/QA.md).
 
-The [13 GitHub issues](https://github.com/nolanmak/Murmur/issues) contain
+The [GitHub issues](https://github.com/nolanmak/Murmur/issues) contain
 acceptance criteria, dependencies and test-first work. AI cleanup, vocabulary,
 snippets, optional history, signed releases, RustDesk remote paste and additional platforms are follow-on
 work. No claim of full Wispr Flow parity is made.
@@ -90,3 +90,7 @@ cargo run -- doctor  # shows credential source, never the value
 
 See [architecture](docs/ARCHITECTURE.md), [provenance](docs/PROVENANCE.md),
 [QA](docs/QA.md) and [contributing](CONTRIBUTING.md).
+
+### Linux roadmap
+
+Native Linux support is planned in [the Linux delivery epic](https://github.com/nolanmak/Murmur/issues/15). See [the scoped implementation plan](docs/linux-plan.md) for dependencies, TDD requirements and release gates. Linux support is not yet implemented.
