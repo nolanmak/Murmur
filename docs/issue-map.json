@@ -70,5 +70,11 @@
     "title": "Additional local/cloud STT backends and Windows/Linux platform adapters",
     "milestone": "M3",
     "url": "https://github.com/nolanmak/Text-to-speech/issues/12"
+  },
+  {
+    "number": 13,
+    "title": "RustDesk remote dictation: explicit paste to macOS and Linux with test-first validation",
+    "milestone": "M3",
+    "url": "https://github.com/nolanmak/Text-to-speech/issues/13"
   }
 ]

@@ -13,9 +13,9 @@ a nonactivating indicator, and insertion through macOS Accessibility. It is **no
 feature-complete or release-validated**. Native permissions and app compatibility
 still require the [manual QA checklist](docs/QA.md).
 
-The [12 GitHub issues](https://github.com/nolanmak/Text-to-speech/issues) contain
+The [13 GitHub issues](https://github.com/nolanmak/Text-to-speech/issues) contain
 acceptance criteria, dependencies and test-first work. AI cleanup, vocabulary,
-snippets, optional history, signed releases and additional platforms are follow-on
+snippets, optional history, signed releases, RustDesk remote paste and additional platforms are follow-on
 work. No claim of full Wispr Flow parity is made.
 
 ## Build and run
