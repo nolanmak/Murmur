@@ -10,7 +10,8 @@ use muda::{Menu, MenuEvent, MenuItem};
 use objc2::{MainThreadMarker, MainThreadOnly, rc::Retained};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSColor, NSFont, NSPanel,
-    NSPasteboard, NSScreen, NSTextField, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSPasteboard, NSRunningApplication, NSScreen, NSTextField, NSWindowCollectionBehavior,
+    NSWindowStyleMask,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSTimer};
 use std::{
@@ -102,6 +103,7 @@ fn string(value: CF) -> String {
 struct Focus {
     element: Owned,
     target: Target,
+    paste_only: bool,
 }
 impl Focus {
     fn current() -> Result<Self, String> {
@@ -123,7 +125,12 @@ impl Focus {
             || subrole.contains("Secure")
             || role.contains("Password")
             || subrole.contains("Password");
-        let editable = crate::insertion::text_role(&role, &subrole);
+        let bundle = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+            .and_then(|app| app.bundleIdentifier())
+            .map(|id| id.to_string())
+            .unwrap_or_default();
+        let paste_only = crate::insertion::terminal_surface(&bundle, &role, &subrole);
+        let editable = crate::insertion::text_role(&role, &subrole) || paste_only;
         eprintln!("focus role={role} editable={editable} secure={secure}");
         let target = Target {
             pid,
@@ -131,7 +138,11 @@ impl Focus {
             secure,
             editable,
         };
-        Ok(Self { element, target })
+        Ok(Self {
+            element,
+            target,
+            paste_only,
+        })
     }
     fn insert(&self, text: &str) -> Result<(), String> {
         let now = Self::current()?;
@@ -145,6 +156,9 @@ impl Focus {
         }
         let key = cfstr("AXSelectedText");
         let value = cfstr(text);
+        if self.paste_only {
+            return paste_text(text);
+        }
         if unsafe { AXUIElementSetAttributeValue(now.element.0, key.0, value.0) } != 0 {
             return paste_text(text);
         }
