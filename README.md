@@ -1,13 +1,13 @@
 # Text-to-speech
 
 A macOS voice dictation app built from FlyOnTheWall's Rust audio and transcription stack.
-**Hold Space, speak, release to insert. Esc cancels.** Despite the project name, this is
+**Hold Control, speak, release to insert. Esc cancels.** Despite the project name, this is
 speech-to-text, inspired by the dictation workflow of [Wispr Flow](https://wisprflow.ai/features).
 It is an independent Apache-2.0 project, with its repository private during development.
 
 ## Status
 
-Early developer build. The first vertical slice is implemented: native hold-Space input,
+Early developer build. The first vertical slice is implemented: native hold-Control input,
 microphone-only capture, streaming Deepgram transcription, end-of-stream draining,
 a nonactivating indicator, and insertion through macOS Accessibility. It is **not
 feature-complete or release-validated**. Native permissions and app compatibility
@@ -34,15 +34,15 @@ to an existing development certificate for stable signing across rebuilds.
 It does not install a trust certificate or require a signing account. Start capture from the app bundle,
 not a shell process, so macOS assigns permissions to this app.
 
-1. Open the **Space** menu-bar item and choose **Set up permissions**.
+1. Open the **Control** menu-bar item and choose **Set up permissions**.
 2. Allow Microphone and enable this app in System Settings → Privacy & Security → Accessibility.
    If macOS requests Input Monitoring, grant it and relaunch.
 3. Keep Wispr Flow on Fn. This app does not bind Fn.
-   Hold **Space for 350 ms** to begin dictation; a quick tap types a normal space.
-   Modified Space shortcuts pass through normally.
-4. Click a supported editable field, hold Space and speak, then release. Esc cancels
+   Hold **Control for 350 ms** to begin dictation; a quick tap remains a normal Control key.
+   Modified Control shortcuts pass through normally.
+4. Click a supported editable field, hold Control and speak, then release. Esc cancels
    during capture or processing. Pressing another key cancels dictation.
-5. If insertion is blocked, use **Copy Last Transcript** from the Space menu and paste manually.
+5. If insertion is blocked, use **Copy Last Transcript** from the Control menu and paste manually.
 
 ## Credentials
 
@@ -65,7 +65,7 @@ cargo run -- doctor  # shows credential source, never the value
 
 ## Behavior and limits
 
-- Microphone only, only on Space press. No system-audio, screen or clipboard capture.
+- Microphone only, only on Control press. No system-audio, screen or clipboard capture.
 - Deepgram nova-3, mono 16 kHz PCM, smart formatting and model-improvement opt-out.
   Audio goes directly to Deepgram under your key while dictating; its API charges apply.
 - 120-second session limit; bounded audio queue, capture watchdog and network deadlines.

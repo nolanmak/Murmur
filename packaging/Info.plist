@@ -10,5 +10,5 @@
 <key>CFBundleVersion</key><string>1</string>
 <key>LSMinimumSystemVersion</key><string>14.4</string>
 <key>LSUIElement</key><true/>
-<key>NSMicrophoneUsageDescription</key><string>Record your voice while you hold Space and send it to your configured transcription provider.</string>
+<key>NSMicrophoneUsageDescription</key><string>Record your voice while you hold Control and send it to your configured transcription provider.</string>
 </dict></plist>

@@ -2,14 +2,14 @@
 
 ## M1: first macOS dictation slice
 
-Native Space key down/up events with a 350 ms hold threshold → pure Dictation state machine → microphone worker →
+Native Control flagsChanged events with a 350 ms hold threshold → pure Dictation state machine → microphone worker →
 lock-free bounded ring → FlyOnTheWall resampler → Deepgram WebSocket → final
 transcript → original Accessibility target check → AXSelectedText insertion.
 
 AppKit and retained AX objects stay on the main thread. Audio and credential
 resolution run off-thread. The callback performs no allocation or network work.
 Session generations prevent cancelled or stale work from reaching another target.
-A recording is never launched automatically. Escape and Space chords cancel pending
+A recording is never launched automatically. Escape and Control chords cancel pending
 work; a 120-second limit bounds missing-release events. The indicator cannot take focus.
 
 ## M2: writing features
@@ -38,10 +38,10 @@ on close; the new dictation adapter intentionally waits for the provider to fini
 - Finalization: https://developers.deepgram.com/docs/close-stream
 - Optional Finalize acknowledgement: https://developers.deepgram.com/docs/finalize
 
-## Space shortcut
+## Control shortcut
 
-A quick Space tap replays its original native keydown before keyup. If another
-character arrives first, that deferred Space is replayed before the character.
+A quick Control tap replays its original native keydown before keyup. If another
+modifier arrives first, that deferred Control is replayed before the shortcut.
 Long holds suppress repeated spaces and start dictation once; release finishes.
-Command/Option/Control/Shift/Fn-modified Space is passed through. Fn itself is
+Command/Option/Shift/Fn-modified Control is passed through. Fn itself is
 not registered, so Wispr Flow can keep using it.

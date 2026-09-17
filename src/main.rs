@@ -3,7 +3,7 @@ fn main() {
     let result = match command.as_str() {
         "--help" | "help" => {
             println!(
-                "Text-to-speech — macOS hold-Space dictation\n\nrun     Launch the menu-bar app (use the .app bundle)\ndoctor  Report credential source without printing the key\n\nHold Space to dictate; release to insert; Esc cancels.\nRun scripts/build-app.sh and launch the resulting .app for capture."
+                "Text-to-speech — macOS hold-Control dictation\n\nrun     Launch the menu-bar app (use the .app bundle)\ndoctor  Report credential source without printing the key\n\nHold Control to dictate; release to insert; Esc cancels.\nRun scripts/build-app.sh and launch the resulting .app for capture."
             );
             Ok(())
         }

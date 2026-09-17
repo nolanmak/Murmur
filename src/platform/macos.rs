@@ -1,4 +1,4 @@
-//! macOS-only boundary: AppKit shell, Space event tap and accessibility insertion.
+//! macOS-only boundary: AppKit shell, Control event tap and accessibility insertion.
 //! All retained CF/AX objects stay on the main thread. Workers receive no UI pointers.
 use crate::{
     core::{Dictation, Phase},
@@ -190,17 +190,14 @@ unsafe extern "C" fn callback(proxy: CF, kind: u32, event: CF, info: *mut c_void
         return event;
     }
     let flags = unsafe { CGEventGetFlags(event) };
-    let modified = flags & ((1 << 17) | (1 << 18) | (1 << 19) | (1 << 20) | (1 << 23)) != 0;
     let code = unsafe { CGEventGetIntegerValueField(event, 9) };
-    let repeat = unsafe { CGEventGetIntegerValueField(event, 8) } != 0;
+    let other_modifier = flags & ((1 << 17) | (1 << 19) | (1 << 20) | (1 << 23)) != 0;
     let key = match (kind, code) {
-        (10, 49) if repeat => Key::Repeat,
-        (10, 49) if modified || context.busy.get() => Key::ModifiedDown,
-        (10, 49) => Key::Down,
-        (11, 49) => Key::Up,
+        // Left and right Control are flagsChanged events (key codes 59 and 62).
+        (12, 59 | 62) if other_modifier || context.busy.get() => Key::ModifiedDown,
+        (12, 59 | 62) if flags & (1 << 18) != 0 => Key::Down,
+        (12, 59 | 62) => Key::Up,
         (10, 53) => Key::Escape,
-        (10, _) => Key::Other,
-        (12, _) if modified => Key::Other,
         _ => return event,
     };
     let Ok(mut space) = context.space.try_borrow_mut() else {
@@ -247,7 +244,7 @@ impl EventTap {
                 1,
                 0,
                 0,
-                (1 << 12) | (1 << 10) | (1 << 11),
+                (1 << 12) | (1 << 10),
                 callback,
                 (&mut *context as *mut TapContext).cast(),
             )
@@ -306,7 +303,7 @@ struct Shell {
 impl Shell {
     fn new(mtm: MainThreadMarker) -> Result<Self, String> {
         let menu = Menu::new();
-        let status = MenuItem::with_id("status", "Hold Space to dictate", false, None);
+        let status = MenuItem::with_id("status", "Hold Control to dictate", false, None);
         let cancel = MenuItem::with_id("cancel", "Cancel dictation (Esc)", true, None);
         let copy = MenuItem::with_id("copy", "Copy Last Transcript", true, None);
         let setup = MenuItem::with_id("setup", "Set up permissions", true, None);
@@ -315,7 +312,7 @@ impl Shell {
             menu.append(item).map_err(|e| e.to_string())?;
         }
         let tray = TrayIconBuilder::new()
-            .with_title("Space")
+            .with_title("Control")
             .with_tooltip("Text-to-speech")
             .with_menu(Box::new(menu))
             .build()
@@ -344,8 +341,10 @@ impl Shell {
         panel.setIgnoresMouseEvents(true);
         panel.setBackgroundColor(Some(&NSColor::windowBackgroundColor()));
         unsafe { panel.setReleasedWhenClosed(false) };
-        let label =
-            NSTextField::wrappingLabelWithString(&NSString::from_str("Hold Space to dictate"), mtm);
+        let label = NSTextField::wrappingLabelWithString(
+            &NSString::from_str("Hold Control to dictate"),
+            mtm,
+        );
         label.setFrame(NSRect::new(
             NSPoint::new(16.0, 10.0),
             NSSize::new(448.0, 34.0),
@@ -414,7 +413,7 @@ impl Shell {
         if platform.permission(Permission::Microphone) != PermissionState::Granted {
             self.cancel();
             self.show(
-                "Use Set up permissions in the Space menu, then try again.",
+                "Use Set up permissions in the Control menu, then try again.",
                 true,
             );
             return;
@@ -423,7 +422,10 @@ impl Shell {
         self.control = Arc::new(AtomicU8::new(0));
         self.started = Instant::now();
         self.last.clear();
-        self.show("Listening — release Space to insert · Esc to cancel", false);
+        self.show(
+            "Listening — release Control to insert · Esc to cancel",
+            false,
+        );
         let control = self.control.clone();
         let completed = self.completed.clone();
         let generation = self.core.generation();
@@ -481,7 +483,7 @@ impl Shell {
                     Some("cancel") => {
                         self.control.store(2, Ordering::Release);
                         self.focus = None;
-                        self.show("Cancelled Space shortcut", true)
+                        self.show("Cancelled Control shortcut", true)
                     }
                     _ => {}
                 },
@@ -511,7 +513,7 @@ impl Shell {
                     request_microphone();
                     let _=std::process::Command::new("open").arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility").spawn();
                     self.show(
-                        "Enable Accessibility. Keep Wispr Flow on Fn; hold Space here.",
+                        "Enable Accessibility. Keep Wispr Flow on Fn; hold Control here.",
                         true,
                     );
                 }
@@ -561,7 +563,7 @@ impl Shell {
         if self.hide_at.is_some_and(|time| Instant::now() >= time) {
             self.panel.orderOut(None);
             self.hide_at = None;
-            self.status.set_text("Hold Space to dictate");
+            self.status.set_text("Hold Control to dictate");
         }
     }
 }
@@ -580,7 +582,7 @@ pub fn run() -> Result<(), String> {
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
     let shell = Rc::new(RefCell::new(Shell::new(mtm)?));
     shell.borrow_mut().show(
-        "Hold Space to dictate. First run: use Set up permissions in the Space menu.",
+        "Hold Control to dictate. First run: use Set up permissions in the Control menu.",
         true,
     );
     let weak = Rc::downgrade(&shell);

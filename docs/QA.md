@@ -5,10 +5,10 @@ Run these through the built .app, with harmless text and an approved provider ke
 
 - [ ] Microphone prompt identifies Text-to-speech; declining it prevents capture.
 - [ ] Accessibility/Input Monitoring denied: actionable menu state, no insertion.
-- [ ] Space held 350 ms starts one session; repeats do not duplicate it.
-- [ ] Quick Space taps and fast typing rollover preserve normal text.
+- [ ] Control held 350 ms starts one session; repeated flags do not duplicate it.
+- [ ] Quick Control taps preserve normal keyboard behavior.
 - [ ] Wispr Flow can continue using Fn without starting this app.
-- [ ] Modified-Space shortcuts cancel dictation without breaking the shortcut.
+- [ ] Modified-Control shortcuts pass through without starting dictation.
 - [ ] Escape while recording and while finishing never inserts later.
 - [ ] Recording/processing indicator remains visible in full screen and never takes focus.
 - [ ] Short phrase and trailing last word survive release; silence produces no text.
