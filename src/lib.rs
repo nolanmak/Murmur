@@ -4,6 +4,7 @@ pub mod core;
 pub mod insertion;
 pub mod platform;
 pub mod remote;
+pub mod remote_clipboard;
 pub mod resample;
 pub mod space_hotkey;
 pub mod streaming;
