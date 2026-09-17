@@ -45,8 +45,16 @@ consumed synchronously with their fresh destination check; queuing a command for
 later execution would require another check. Native callbacks should enqueue
 observations for the main-thread controller rather than run blocking operations.
 
-The controller is not connected to the app UI or RustDesk transport yet.
-The existing local insertion path is unchanged.
+The automatic controller is not connected to a RustDesk transport yet. A separate
+explicit manual-copy fallback is now wired into the menu and transcript completion
+path. See [setup and limitations](rustdesk.md). Local insertion remains the default.
+
+The installed RustDesk accessibility tree exposes the remote window as a single
+container; the inspected tree did not expose remote fields or delivery status.
+The fallback retains an AX window reference and compares the window/title before
+copying. It does not treat that comparison as connection or receipt verification.
+The user explicitly confirms session isolation and the intended field. No real
+remote content, address, or window title is stored in repository evidence.
 
 ## Clipboard implementation and limits
 
@@ -92,6 +100,13 @@ Command: `cargo test --locked --test remote`.
   newer-owner preservation, multiple-item rejection, and empty restoration.
   Its custom harness runs on the main thread. Non-macOS runs explicitly skip.
   This proves local clipboard behavior, not transport delivery or remote paste.
+- Review red commit `f8cb77e`: four compiling behavioral tests failed. The same
+  tests pass with explicit confirmation, one-time text release, window drift,
+  replacement review, cancellation, and invalid-input handling implemented.
+- The actual review dialog was launched with `review-preview` and inspected both
+  through accessibility and a window-only screenshot. Synthetic Unicode text,
+  scroll area, unchecked confirmation, selected profile, copy, and cancel controls
+  were visible without clipping. No clipboard sharing or remote insertion occurred.
 
 ## Remaining work
 
@@ -99,12 +114,13 @@ Command: `cargo test --locked --test remote`.
   test clipboard isolation with multiple sessions.
 - Integrate the implemented clipboard lease and resolve native race/deadline
   limitations; build session, transport, and paste dispatcher contracts.
-- Connect transcript review, opt-in remote mode, destination selection, paste
-  profiles, and error states to the native app.
-- Validate local hotkey forwarding behavior inside RustDesk.
+- Validate the wired manual fallback in a real RustDesk session and implement the
+  automatic path only when destination and transport observations are reliable.
+- Resolve local hotkey forwarding for automatic mode. The manual fallback uses
+  menu Start/Stop and does not use Control to trigger recording.
 - Complete the macOS and Linux native matrix in #13 using disposable inputs.
-- If receipt cannot be observed, expose the explicitly scoped copy/manual-paste
-  fallback and explain its limitations; do not report automatic insertion.
-- Produce setup/troubleshooting documentation and a PR with verified limitations.
+- Complete the native fallback checks; receipt remains unobservable and no
+  automatic insertion is claimed.
+- Produce a PR with verified limitations and link setup/troubleshooting evidence.
 
 No end-to-end estimate is revised yet: the transport feasibility gate is open.

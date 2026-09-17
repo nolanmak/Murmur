@@ -15,18 +15,47 @@ pub enum Error {
     Stale,
 }
 #[derive(Default)]
-pub struct Review;
+pub struct Review {
+    generation: u64,
+    pending: Option<(ReviewId, Window, String)>,
+}
 impl Review {
-    pub fn prepare(&mut self, _text: &str, _window: Option<Window>) -> Result<ReviewId, Error> {
-        Err(Error::NoWindow)
+    pub fn prepare(&mut self, text: &str, window: Option<Window>) -> Result<ReviewId, Error> {
+        self.cancel();
+        if !crate::remote::valid_text(text) {
+            return Err(Error::InvalidText);
+        }
+        let window = window.ok_or(Error::NoWindow)?;
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .expect("review counter exhausted");
+        let id = ReviewId(self.generation);
+        self.pending = Some((id, window, text.into()));
+        Ok(id)
     }
     pub fn confirm(
         &mut self,
-        _id: ReviewId,
-        _window: Option<Window>,
-        _confirmed: bool,
+        id: ReviewId,
+        window: Option<Window>,
+        confirmed: bool,
     ) -> Result<String, Error> {
-        Err(Error::Stale)
+        let Some((pending, selected, _)) = &self.pending else {
+            return Err(Error::Stale);
+        };
+        if *pending != id {
+            return Err(Error::Stale);
+        }
+        if Some(*selected) != window {
+            self.cancel();
+            return Err(Error::ChangedWindow);
+        }
+        if !confirmed {
+            return Err(Error::ConfirmationNeeded);
+        }
+        Ok(self.pending.take().expect("validated review").2)
     }
-    pub fn cancel(&mut self) {}
+    pub fn cancel(&mut self) {
+        self.pending = None;
+    }
 }

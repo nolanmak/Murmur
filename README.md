@@ -65,19 +65,24 @@ cargo run -- doctor  # shows credential source, never the value
 
 ## Behavior and limits
 
-- Microphone only, only on Control press. No system-audio, screen or clipboard capture.
+- Microphone capture starts through Control or the Start dictation menu. No
+  system-audio or screen recording. Clipboard insertion temporarily retains the
+  previous clipboard in memory for restoration.
 - Deepgram nova-3, mono 16 kHz PCM, smart formatting and model-improvement opt-out.
   Audio goes directly to Deepgram under your key while dictating; its API charges apply.
 - 120-second session limit; bounded audio queue, capture watchdog and network deadlines.
 - Audio/transcripts stay in memory. Nothing is written to a history database or log.
   Copy Last Transcript intentionally changes the clipboard only when selected.
-- Focus, field identity, secure-field status and editability are checked before insertion.
-  Automatic insertion uses AXSelectedText; fields that do not support it are blocked.
+- Focus, field identity, secure-field status and editability are checked before local insertion.
+  Local insertion uses AXSelectedText or a native paste shortcut for supported fields.
   Multiline/control-character output requires manual copying; no Enter key is synthesized.
 - Changing apps or fields blocks automatic insertion. Cancelling invalidates late results.
 - No provider fallback, LLM cleanup, screen context, analytics or vendor relay.
 - Current microphone adapter uses the default device. Unplugging a device cancels;
   automatic device recovery is not yet implemented.
+- Experimental [RustDesk review mode](docs/rustdesk.md) keeps the transcript for
+  explicit review and manual clipboard paste. Automatic remote insertion and the
+  macOS/Linux acceptance matrix are not yet verified.
 
 See [architecture](docs/ARCHITECTURE.md), [provenance](docs/PROVENANCE.md),
 [QA](docs/QA.md) and [contributing](CONTRIBUTING.md).
