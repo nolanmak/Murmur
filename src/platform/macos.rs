@@ -2,16 +2,18 @@
 //! All retained CF/AX objects stay on the main thread. Workers receive no UI pointers.
 use crate::{
     core::{Dictation, Phase},
+    indicator::{self, Indicator, Look},
     insertion::{Target, allowed},
 };
 use block2::RcBlock;
 use fotw_audio::{AudioPlatform, DeviceId, FormatRequest, Permission, PermissionState};
-use muda::{ContextMenu, Menu, MenuEvent, MenuItem};
+use muda::{Menu, MenuEvent, MenuItem};
 use objc2::{MainThreadMarker, MainThreadOnly, rc::Retained};
 use objc2_app_kit::{
-    NSAlert, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSButton, NSColor,
-    NSFont, NSMenu, NSPanel, NSPasteboard, NSRunningApplication, NSScreen, NSScrollView,
-    NSTextField, NSTextView, NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSAlert, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSBox, NSBoxType,
+    NSButton, NSColor, NSFont, NSFontWeightMedium, NSLineBreakMode, NSPanel, NSPasteboard,
+    NSRunningApplication, NSScreen, NSScrollView, NSTextField, NSTextView, NSTitlePosition, NSView,
+    NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSTimer};
 use std::{
@@ -217,6 +219,7 @@ fn paste_text(text: &str) -> Result<(), String> {
 enum Input {
     Flags(bool, bool),
     HotkeyDown,
+    HotkeyAbort,
     Cancel,
     TapDisabled,
 }
@@ -287,6 +290,9 @@ unsafe extern "C" fn callback(_proxy: CF, kind: u32, event: CF, info: *mut c_voi
     if matches!(key, Key::Down) {
         let _ = context.sender.try_send(Input::HotkeyDown);
     }
+    if action.replay {
+        let _ = context.sender.try_send(Input::HotkeyAbort);
+    }
     event
 }
 impl EventTap {
@@ -341,6 +347,223 @@ struct Completion {
     generation: u64,
     result: Result<String, String>,
 }
+fn shape(mtm: MainThreadMarker, parent: &NSView, radius: f64) -> Retained<NSBox> {
+    let shape = NSBox::new(mtm);
+    shape.setBoxType(NSBoxType::Custom);
+    shape.setTitlePosition(NSTitlePosition::NoTitle);
+    shape.setBorderWidth(0.0);
+    shape.setCornerRadius(radius);
+    shape.setFillColor(&NSColor::whiteColor());
+    shape.setHidden(true);
+    parent.addSubview(&shape);
+    shape
+}
+/// Click-through pill anchored bottom-centre; eases between looks on the pump timer.
+struct Pill {
+    panel: Retained<NSPanel>,
+    body: Retained<NSBox>,
+    bars: Vec<Retained<NSBox>>,
+    dots: Vec<Retained<NSBox>>,
+    label: Retained<NSTextField>,
+    look: Look,
+    size: (f64, f64),
+    frame: NSRect,
+    text_width: f64,
+    content: bool,
+}
+impl Pill {
+    fn new(mtm: MainThreadMarker) -> Result<Self, String> {
+        let size = Look::Idle.size(0.0);
+        let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
+            NSPanel::alloc(mtm),
+            NSRect::new(NSPoint::ZERO, NSSize::new(size.0, size.1)),
+            NSWindowStyleMask::NonactivatingPanel | NSWindowStyleMask::Borderless,
+            NSBackingStoreType::Buffered,
+            false,
+        );
+        panel.setLevel(25);
+        panel.setCollectionBehavior(
+            NSWindowCollectionBehavior::CanJoinAllSpaces
+                | NSWindowCollectionBehavior::FullScreenAuxiliary,
+        );
+        panel.setHidesOnDeactivate(false);
+        panel.setIgnoresMouseEvents(true);
+        panel.setOpaque(false);
+        panel.setHasShadow(false);
+        panel.setBackgroundColor(Some(&NSColor::clearColor()));
+        unsafe { panel.setReleasedWhenClosed(false) };
+        let content = panel.contentView().ok_or("No panel content")?;
+        let body = shape(mtm, &content, size.1 / 2.0);
+        body.setBorderWidth(0.5);
+        body.setHidden(false);
+        let bars = (0..indicator::BARS)
+            .map(|_| shape(mtm, &content, indicator::BAR_WIDTH / 2.0))
+            .collect();
+        let dots = (0..indicator::DOTS)
+            .map(|_| shape(mtm, &content, indicator::DOT_SIZE / 2.0))
+            .collect();
+        let label = NSTextField::labelWithString(&NSString::new(), mtm);
+        label.setFont(Some(&NSFont::systemFontOfSize_weight(11.0, unsafe {
+            NSFontWeightMedium
+        })));
+        label.setTextColor(Some(&NSColor::colorWithWhite_alpha(0.96, 1.0)));
+        label.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+        label.setHidden(true);
+        content.addSubview(&label);
+        let mut pill = Self {
+            panel,
+            body,
+            bars,
+            dots,
+            label,
+            look: Look::Idle,
+            size,
+            frame: NSRect::ZERO,
+            text_width: 0.0,
+            content: false,
+        };
+        pill.paint();
+        pill.place();
+        pill.panel.orderFrontRegardless();
+        Ok(pill)
+    }
+    fn set_text(&mut self, text: &str) {
+        if self.label.stringValue().to_string() == text {
+            return;
+        }
+        self.label.setStringValue(&NSString::from_str(text));
+        self.text_width = self.label.intrinsicContentSize().width;
+        self.label.setHidden(true);
+        self.content = false;
+    }
+    fn paint(&self) {
+        let white = |alpha| NSColor::colorWithWhite_alpha(1.0, alpha);
+        let (fill, border) = match self.look {
+            Look::Idle => (NSColor::colorWithWhite_alpha(0.0, 0.5), white(0.2)),
+            Look::Warning => (
+                NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 0.62, 0.1, 0.92),
+                white(0.25),
+            ),
+            Look::Armed => (NSColor::colorWithWhite_alpha(0.25, 0.7), white(0.3)),
+            Look::Success => (
+                NSColor::colorWithSRGBRed_green_blue_alpha(0.2, 0.8, 0.4, 0.95),
+                white(0.25),
+            ),
+            _ => (NSColor::colorWithWhite_alpha(0.06, 0.88), white(0.16)),
+        };
+        self.body.setFillColor(&fill);
+        self.body.setBorderColor(&border);
+    }
+    fn place(&mut self) {
+        let Some(screen) = NSScreen::mainScreen(self.panel.mtm()) else {
+            return;
+        };
+        let visible = screen.visibleFrame();
+        // Even widths keep the centre on a whole point while easing.
+        let (width, height) = ((self.size.0 / 2.0).round() * 2.0, self.size.1.round());
+        let frame = NSRect::new(
+            NSPoint::new(
+                (visible.origin.x + (visible.size.width - width) / 2.0).round(),
+                (visible.origin.y + 9.0).round(),
+            ),
+            NSSize::new(width, height),
+        );
+        if frame != self.frame {
+            self.frame = frame;
+            self.panel.setFrame_display(frame, true);
+            self.body
+                .setFrame(NSRect::new(NSPoint::ZERO, NSSize::new(width, height)));
+            self.body.setCornerRadius(height / 2.0);
+        }
+    }
+    fn render(&mut self, look: Look, now: u64) {
+        if look != self.look {
+            self.look = look;
+            self.paint();
+            self.content = false;
+            for view in self.bars.iter().chain(&self.dots) {
+                view.setHidden(true);
+            }
+            self.label.setHidden(true);
+            self.panel.orderFrontRegardless();
+        }
+        let target = look.size(self.text_width);
+        if self.size != target {
+            self.size = (
+                indicator::ease(self.size.0, target.0),
+                indicator::ease(self.size.1, target.1),
+            );
+            self.place();
+        }
+        if !self.content && self.size == target {
+            self.content = true;
+            self.reveal();
+        }
+        if self.content {
+            self.animate(now);
+        }
+    }
+    fn reveal(&self) {
+        let (width, height) = (self.frame.size.width, self.frame.size.height);
+        match self.look {
+            Look::Listening => self.bars.iter().for_each(|bar| bar.setHidden(false)),
+            Look::Starting | Look::Processing => {
+                let pitch = indicator::DOT_SIZE + indicator::DOT_GAP;
+                let left = (width - indicator::DOTS as f64 * pitch + indicator::DOT_GAP) / 2.0;
+                for (i, dot) in self.dots.iter().enumerate() {
+                    let x = left + i as f64 * pitch;
+                    dot.setFrame(NSRect::new(
+                        NSPoint::new(x, (height - indicator::DOT_SIZE) / 2.0),
+                        NSSize::new(indicator::DOT_SIZE, indicator::DOT_SIZE),
+                    ));
+                    dot.setAlphaValue(0.9);
+                    dot.setHidden(false);
+                }
+            }
+            Look::Notice => {
+                // The label cell insets its text by 2pt on each side.
+                let inset = indicator::NOTICE_PADDING - 2.0;
+                let line = self.label.intrinsicContentSize().height.ceil();
+                self.label.setFrame(NSRect::new(
+                    NSPoint::new(inset, ((height - line) / 2.0).round()),
+                    NSSize::new(width - 2.0 * inset, line),
+                ));
+                self.label.setHidden(false);
+            }
+            _ => {}
+        }
+    }
+    fn animate(&self, now: u64) {
+        let (width, height) = (self.frame.size.width, self.frame.size.height);
+        match self.look {
+            Look::Listening => {
+                let pitch = indicator::BAR_WIDTH + indicator::BAR_GAP;
+                let left =
+                    (width - indicator::BARS as f64 * pitch + indicator::BAR_GAP).round() / 2.0;
+                for (i, bar) in self.bars.iter().enumerate() {
+                    let bar_height = indicator::bar_height(i, now);
+                    bar.setFrame(NSRect::new(
+                        NSPoint::new(left + i as f64 * pitch, (height - bar_height).round() / 2.0),
+                        NSSize::new(indicator::BAR_WIDTH, bar_height),
+                    ));
+                }
+            }
+            Look::Starting => {
+                for (i, dot) in self.dots.iter().enumerate() {
+                    dot.setAlphaValue(indicator::dot_alpha(i, now));
+                }
+            }
+            Look::Processing => {
+                for (i, dot) in self.dots.iter().enumerate() {
+                    let mut origin = dot.frame().origin;
+                    origin.y = (height - indicator::DOT_SIZE) / 2.0 + indicator::dot_lift(i, now);
+                    dot.setFrameOrigin(origin);
+                }
+            }
+            _ => {}
+        }
+    }
+}
 struct Shell {
     core: Dictation,
     control: Arc<AtomicU8>,
@@ -352,12 +575,11 @@ struct Shell {
     completed: mpsc::Sender<Completion>,
     _tray: TrayIcon,
     status: MenuItem,
-    panel: Retained<NSPanel>,
-    label: Retained<NSTextField>,
+    pill: Pill,
+    indicator: Indicator,
+    warning: Option<&'static str>,
     last: String,
-    message: String,
     started: Instant,
-    hide_at: Option<Instant>,
     retry_at: Instant,
     smoke: bool,
     smoke_started: bool,
@@ -418,59 +640,7 @@ impl Shell {
             .with_menu(Box::new(menu.clone()))
             .build()
             .map_err(|e| e.to_string())?;
-        let screen = NSScreen::mainScreen(mtm).ok_or("No screen")?.visibleFrame();
-        let frame = NSRect::new(
-            NSPoint::new(
-                screen.origin.x + (screen.size.width - 300.0) / 2.0,
-                screen.origin.y + 38.0,
-            ),
-            NSSize::new(300.0, 44.0),
-        );
-        let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
-            NSPanel::alloc(mtm),
-            frame,
-            NSWindowStyleMask::NonactivatingPanel | NSWindowStyleMask::Borderless,
-            NSBackingStoreType::Buffered,
-            false,
-        );
-        panel.setLevel(25);
-        panel.setCollectionBehavior(
-            NSWindowCollectionBehavior::CanJoinAllSpaces
-                | NSWindowCollectionBehavior::FullScreenAuxiliary,
-        );
-        panel.setHidesOnDeactivate(false);
-        panel.setIgnoresMouseEvents(false);
-        panel.setBackgroundColor(Some(&NSColor::windowBackgroundColor()));
-        let content = panel.contentView().ok_or("No panel content")?;
-        // SAFETY: muda owns this NSMenu; AppKit retains the menu on the content view.
-        unsafe {
-            content.setMenu(Some(&*menu.ns_menu().cast::<NSMenu>()));
-        }
-        content.setToolTip(Some(&NSString::from_str(
-            "Right-click for dictation and RustDesk controls",
-        )));
-        content.setWantsLayer(true);
-        if let Some(layer) = content.layer() {
-            unsafe {
-                let _: () = objc2::msg_send![&*layer, setCornerRadius: 22.0f64];
-            }
-            layer.setMasksToBounds(true);
-        }
-        unsafe { panel.setReleasedWhenClosed(false) };
-        let label = NSTextField::wrappingLabelWithString(
-            &NSString::from_str("Hold Control to dictate"),
-            mtm,
-        );
-        label.setFrame(NSRect::new(
-            NSPoint::new(18.0, 12.0),
-            NSSize::new(264.0, 20.0),
-        ));
-        label.setFont(Some(&NSFont::systemFontOfSize(13.0)));
-        label.setTextColor(Some(&NSColor::labelColor()));
-        panel
-            .contentView()
-            .ok_or("No panel content")?
-            .addSubview(&label);
+        let pill = Pill::new(mtm)?;
         let (sender, input) = mpsc::sync_channel(128);
         let tap = EventTap::new(sender.clone());
         eprintln!(
@@ -491,16 +661,15 @@ impl Shell {
             completed,
             _tray: tray,
             status,
-            panel,
-            label,
+            pill,
+            indicator: Indicator::default(),
+            warning: None,
             last: if remote_fixture {
                 "Synthetic dictation test — Café 👋".into()
             } else {
                 String::new()
             },
-            message: String::new(),
             started: Instant::now(),
-            hide_at: None,
             retry_at: Instant::now(),
             smoke: std::env::args().any(|a| a == "--smoke"),
             smoke_started: false,
@@ -516,25 +685,47 @@ impl Shell {
             selected_remote: Default::default(),
         })
     }
-    fn show(&mut self, message: &str, temporary: bool) {
+    fn status(&self, message: &str) {
         eprintln!("status: {message}");
-        self.message = message.into();
         self.status.set_text(message);
-        let short = if message.chars().count() > 42 {
-            "⚠ Check Control menu for details"
+    }
+    fn show(&mut self, message: &str) {
+        self.status(message);
+        if let Some(text) = self.indicator.message(message, self.now()) {
+            self.pill.set_text(&text);
+        }
+    }
+    fn now(&self) -> u64 {
+        self.launched.elapsed().as_millis() as u64
+    }
+    fn check_keyboard(&mut self) {
+        let warning = if self.tap.is_none() {
+            Some("Keyboard access unavailable — use Start dictation in the Control menu")
+        } else if !unsafe { CGPreflightListenEventAccess() } {
+            Some("Keyboard permission needed — enable Input Monitoring in System Settings")
         } else {
-            message
+            None
         };
-        self.label.setStringValue(&NSString::from_str(short));
-        self.panel.orderFrontRegardless();
-        self.hide_at = temporary.then(|| Instant::now() + Duration::from_secs(5));
+        if warning != self.warning {
+            self.warning = warning;
+            if warning.is_some() || self.core.phase == Phase::Idle {
+                self.status(self.ready());
+            }
+        }
+    }
+    fn ready(&self) -> &'static str {
+        match self.warning {
+            Some(warning) => warning,
+            None if self.remote_mode => "Remote mode: use Start/Stop in menu",
+            None => "Hold Control to dictate",
+        }
     }
     fn cancel(&mut self) {
         self.review.cancel();
         self.control.store(2, Ordering::Release);
         if self.core.cancel() {
             self.focus = None;
-            self.show("Cancelled", true);
+            self.show("Cancelled");
         }
     }
     fn start(&mut self) {
@@ -542,10 +733,7 @@ impl Shell {
             Ok(f) if !f.target.secure && f.target.editable => Some(f),
             Ok(f) if f.target.secure => {
                 self.cancel();
-                self.show(
-                    "Choose a supported text field. Password fields are blocked.",
-                    true,
-                );
+                self.show("Choose a supported text field. Password fields are blocked.");
                 return;
             }
             _ => None,
@@ -554,10 +742,7 @@ impl Shell {
         if platform.permission(Permission::Microphone) != PermissionState::Granted {
             request_microphone();
             self.cancel();
-            self.show(
-                "Use Set up permissions in the Control menu, then try again.",
-                true,
-            );
+            self.show("Use Set up permissions in the Control menu, then try again.");
             return;
         }
         self.focus = if self.remote_mode { None } else { focus };
@@ -565,7 +750,8 @@ impl Shell {
         self.receiving = Arc::new(AtomicBool::new(false));
         self.started = Instant::now();
         self.last.clear();
-        self.show("◌ Starting microphone…", false);
+        self.indicator.clear();
+        self.status("◌ Starting microphone…");
         let control = self.control.clone();
         let completed = self.completed.clone();
         let generation = self.core.generation();
@@ -595,7 +781,7 @@ impl Shell {
     }
     fn finish(&mut self) {
         self.control.store(1, Ordering::Release);
-        self.show("Finishing… · Esc to cancel", false);
+        self.status("Finishing… · Esc to cancel");
     }
     fn pump(&mut self) {
         self.observe_remote_window();
@@ -611,12 +797,6 @@ impl Shell {
             && self.core.stop()
         {
             self.finish();
-        }
-        if self.core.phase == Phase::Recording && self.receiving.load(Ordering::Acquire) {
-            let frames = ["▁ ▃ ▆ ▃ ▁", "▃ ▆ █ ▆ ▃", "▆ ▃ ▁ ▃ ▆", "▃ ▁ ▃ ▆ █"];
-            let frame = frames[(self.started.elapsed().as_millis() / 160 % 4) as usize];
-            self.label
-                .setStringValue(&NSString::from_str(&format!("● Listening  {frame}")));
         }
         if let Some(tap) = &self.tap {
             tap._context.busy.set(self.core.phase == Phase::Processing);
@@ -636,21 +816,26 @@ impl Shell {
             .is_some_and(|tap| tap._context.dropped.swap(false, Ordering::AcqRel))
         {
             self.cancel();
-            self.show("Input queue overflow; dictation cancelled", true);
+            self.show("Input queue overflow; dictation cancelled");
         }
         while let Ok(event) = self.input.try_recv() {
             match event {
-                Input::HotkeyDown | Input::Flags(_, _) if self.remote_mode => {
-                    self.show("Remote mode: use Start/Stop in menu", true);
+                Input::HotkeyDown | Input::HotkeyAbort if self.remote_mode => {}
+                Input::Flags(_, _) if self.remote_mode => {
+                    self.show("Remote mode: use Start/Stop in menu")
                 }
-                Input::HotkeyDown => self.show("◌ Control held — keep holding", true),
+                Input::HotkeyDown => {
+                    let now = self.now();
+                    self.indicator.arm(now)
+                }
+                Input::HotkeyAbort => self.indicator.disarm(),
                 Input::Flags(down, other) => match self.core.flags(down, other) {
                     Some("start") => self.start(),
                     Some("finish") => self.finish(),
                     Some("cancel") => {
                         self.control.store(2, Ordering::Release);
                         self.focus = None;
-                        self.show("Cancelled Control shortcut", true)
+                        self.show("Cancelled Control shortcut")
                     }
                     _ => {}
                 },
@@ -673,14 +858,12 @@ impl Shell {
                     } else {
                         "Remote review mode: Off"
                     });
-                    self.show(
-                        if self.remote_mode {
-                            "Remote mode: use Start/Stop in menu"
-                        } else {
-                            "● Ready · hold Control"
-                        },
-                        false,
-                    );
+                    if self.remote_mode {
+                        self.show("Remote mode: use Start/Stop in menu");
+                    } else {
+                        self.indicator.clear();
+                        self.status(self.ready());
+                    }
                 }
                 "remote_profile" => {
                     use crate::remote::Profile;
@@ -715,16 +898,13 @@ impl Shell {
                         &NSString::from_str(&self.last),
                         &NSString::from_str("public.utf8-plain-text"),
                     );
-                    self.show("Transcript copied", true);
+                    self.show("Transcript copied");
                 }
                 "setup" => {
                     self.cancel();
                     request_microphone();
                     let _=std::process::Command::new("open").arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility").spawn();
-                    self.show(
-                        "Enable Accessibility. Keep Wispr Flow on Fn; hold Control here.",
-                        true,
-                    );
+                    self.show("Enable Accessibility. Keep Wispr Flow on Fn; hold Control here.");
                 }
                 "quit" => {
                     self.control.store(2, Ordering::Release);
@@ -751,7 +931,7 @@ impl Shell {
                     );
                     self.last = text.clone();
                     if self.remote_mode {
-                        self.show("Transcript ready · Review for RustDesk…", false);
+                        self.show("Transcript ready · Review for RustDesk…");
                     } else {
                         let result = self
                             .focus
@@ -759,38 +939,36 @@ impl Shell {
                             .ok_or("Transcript ready — choose Copy Last Transcript".to_string())
                             .and_then(|f| f.insert(&text));
                         match result {
-                            Ok(()) => self.show("Text inserted", true),
-                            Err(e) => self.show(&e, true),
+                            Ok(()) => self.show("Text inserted"),
+                            Err(e) => self.show(&e),
                         }
                     }
                 }
-                Ok(_) => self.show("No speech detected", true),
-                Err(e) => self.show(&e, true),
+                Ok(_) => self.show("No speech detected"),
+                Err(e) => self.show(&e),
             }
             self.core.finish();
             self.focus = None;
         }
-        if self.tap.is_none() && self.retry_at.elapsed() > Duration::from_secs(3) {
-            self.tap = EventTap::new(self.sender.clone());
-            self.retry_at = Instant::now();
-            if self.tap.is_none() && self.message.starts_with("Hold Control") {
-                self.show(
-                    "Keyboard access unavailable — use Start dictation in the Control menu",
-                    false,
-                );
+        if self.retry_at.elapsed() > Duration::from_secs(3) {
+            if self.tap.is_none() {
+                self.tap = EventTap::new(self.sender.clone());
             }
+            self.retry_at = Instant::now();
+            self.check_keyboard();
+            self.pill.place();
         }
-        if self.hide_at.is_some_and(|time| Instant::now() >= time) {
-            self.hide_at = None;
-            let ready = if self.remote_mode {
-                "Remote mode: use Start/Stop in menu"
-            } else if unsafe { CGPreflightListenEventAccess() } {
-                "● Ready · hold Control"
-            } else {
-                "⚠ Keyboard permission needed"
-            };
-            self.show(ready, false);
+        let now = self.now();
+        let receiving = self.receiving.load(Ordering::Acquire);
+        let look = self
+            .indicator
+            .look(now, self.core.phase, receiving, self.warning.is_some());
+        if self.pill.look == Look::Success
+            && matches!(look, Look::Idle | Look::Warning | Look::Armed)
+        {
+            self.status(self.ready());
         }
+        self.pill.render(look, now);
     }
 }
 fn profile_name(profile: crate::remote::Profile) -> &'static str {
@@ -875,10 +1053,7 @@ impl Shell {
     fn review_remote(&mut self) {
         use crate::remote_review::Error;
         if self.clipboard_lease.pending() {
-            self.show(
-                "Restore the previous clipboard before copying another transcript",
-                true,
-            );
+            self.show("Restore the previous clipboard before copying another transcript");
             return;
         }
         self.observe_remote_window();
@@ -891,7 +1066,6 @@ impl Shell {
             Err(Error::InvalidText) => {
                 self.show(
                     "Record a single-line transcript first; remote copy rejects control characters",
-                    true,
                 );
                 return;
             }
@@ -899,7 +1073,6 @@ impl Shell {
                 remote_selection_diagnostic();
                 self.show(
                     "Focus the intended RustDesk remote window, then choose Review for RustDesk",
-                    true,
                 );
                 return;
             }
@@ -908,21 +1081,18 @@ impl Shell {
         let mtm = MainThreadMarker::new().expect("shell main thread");
         let Some(confirmed) = review_dialog(&selected.title, &self.last, self.profile, mtm) else {
             self.review.cancel();
-            self.show("Remote copy cancelled", true);
+            self.show("Remote copy cancelled");
             return;
         };
         let text = match self.review.confirm(id, selected.revalidate(), confirmed) {
             Ok(text) => text,
             Err(Error::ConfirmationNeeded) => {
                 self.review.cancel();
-                self.show(
-                    "Confirm the intended session before sharing; nothing copied",
-                    true,
-                );
+                self.show("Confirm the intended session before sharing; nothing copied");
                 return;
             }
             Err(_) => {
-                self.show("RustDesk window changed; review again before sharing", true);
+                self.show("RustDesk window changed; review again before sharing");
                 return;
             }
         };
@@ -934,15 +1104,15 @@ impl Shell {
             self.clipboard_attempt = Some(attempt);
         }
         match result {
-            Ok(()) => self.show("Copied · paste manually in RustDesk",false),
-            Err(crate::remote_clipboard::Error::Unsupported) => self.show("Clipboard format cannot be preserved; keep transcript and try after copying plain text",true),
-            Err(_) => self.show("Copy failed or clipboard changed; use Restore previous clipboard if available",true),
+            Ok(()) => self.show("Copied · paste manually in RustDesk"),
+            Err(crate::remote_clipboard::Error::Unsupported) => self.show("Clipboard format cannot be preserved; keep transcript and try after copying plain text"),
+            Err(_) => self.show("Copy failed or clipboard changed; use Restore previous clipboard if available"),
         }
     }
     fn restore_remote_clipboard(&mut self) {
         use crate::remote_clipboard::{Recovery, RestoreReason};
         let Some(attempt) = self.clipboard_attempt else {
-            self.show("No previous clipboard to restore", true);
+            self.show("No previous clipboard to restore");
             return;
         };
         let mtm = MainThreadMarker::new().expect("shell main thread");
@@ -961,10 +1131,10 @@ impl Shell {
             attempt,
             Some(RestoreReason::UserRequested),
         ) {
-            Ok(Recovery::Restored) => self.show("Previous clipboard restored", true),
-            Ok(Recovery::OwnershipLost) => self.show("Newer clipboard kept", true),
-            Ok(_) => self.show("No previous clipboard to restore", true),
-            Err(_) => self.show("Restore failed; recovery retained for retry", true),
+            Ok(Recovery::Restored) => self.show("Previous clipboard restored"),
+            Ok(Recovery::OwnershipLost) => self.show("Newer clipboard kept"),
+            Ok(_) => self.show("No previous clipboard to restore"),
+            Err(_) => self.show("Restore failed; recovery retained for retry"),
         }
         if !self.clipboard_lease.pending() {
             self.clipboard_attempt = None;
@@ -1085,12 +1255,11 @@ pub fn run() -> Result<(), String> {
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
     app.finishLaunching();
     let shell = Rc::new(RefCell::new(Shell::new(mtm)?));
+    shell.borrow_mut().check_keyboard();
     if shell.borrow().remote_mode {
         shell
             .borrow_mut()
-            .show("Synthetic fixture · Review for RustDesk", false);
-    } else {
-        shell.borrow_mut().show("● Ready · hold Control", true);
+            .show("Synthetic fixture · Review for RustDesk");
     }
     let weak = Rc::downgrade(&shell);
     let block = RcBlock::new(move |_: NonNull<NSTimer>| {
