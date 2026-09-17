@@ -3,6 +3,7 @@ pub mod config;
 pub mod core;
 pub mod insertion;
 pub mod platform;
+pub mod remote;
 pub mod resample;
 pub mod space_hotkey;
 pub mod streaming;
