@@ -1,4 +1,14 @@
 use text_to_speech::insertion::{Target, allowed};
+#[test]
+fn web_text_fields_do_not_need_direct_ax_write_support() {
+    assert!(text_to_speech::insertion::text_role("AXTextArea", ""));
+    assert!(text_to_speech::insertion::text_role("AXTextField", ""));
+    assert!(!text_to_speech::insertion::text_role(
+        "AXTextField",
+        "AXSecureTextField"
+    ));
+    assert!(!text_to_speech::insertion::text_role("AXButton", ""));
+}
 fn target() -> Target {
     Target {
         pid: 42,
