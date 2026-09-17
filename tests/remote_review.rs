@@ -6,6 +6,41 @@ fn window() -> Option<Window> {
     })
 }
 #[test]
+fn opening_review_ui_retains_the_observed_destination_without_guessing_one() {
+    let mut selection = Selection::default();
+    let mut review = Review::default();
+    selection.observe(Foreground::ReviewUi);
+    assert_eq!(
+        review.prepare("fixture", selection.take()),
+        Err(Error::NoWindow)
+    );
+    selection.observe(Foreground::Destination(window().unwrap()));
+    selection.observe(Foreground::ReviewUi);
+    let id = review.prepare("fixture", selection.take()).unwrap();
+    assert_eq!(review.confirm(id, window(), true), Ok("fixture".into()));
+}
+#[test]
+fn unrelated_app_clears_destination_and_selecting_a_new_window_replaces_it() {
+    let mut selection = Selection::default();
+    let mut review = Review::default();
+    selection.observe(Foreground::Destination(window().unwrap()));
+    selection.observe(Foreground::Other);
+    selection.observe(Foreground::ReviewUi);
+    assert_eq!(
+        review.prepare("fixture", selection.take()),
+        Err(Error::NoWindow)
+    );
+    selection.observe(Foreground::Destination(window().unwrap()));
+    let next = Window {
+        process: 42,
+        element: 8,
+    };
+    selection.observe(Foreground::Destination(next));
+    selection.observe(Foreground::ReviewUi);
+    let id = review.prepare("fixture", selection.take()).unwrap();
+    assert_eq!(review.confirm(id, Some(next), true), Ok("fixture".into()));
+}
+#[test]
 fn explicit_confirmation_releases_exact_reviewed_text_only_once() {
     let mut review = Review::default();
     let id = review.prepare("Café 👋", window()).unwrap();

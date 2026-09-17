@@ -6,6 +6,27 @@ pub struct Window {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReviewId(pub u64);
+pub enum Foreground<T> {
+    Destination(T),
+    ReviewUi,
+    Other,
+}
+pub struct Selection<T> {
+    target: Option<T>,
+}
+impl<T> Default for Selection<T> {
+    fn default() -> Self {
+        Self { target: None }
+    }
+}
+impl<T> Selection<T> {
+    pub fn observe(&mut self, _foreground: Foreground<T>) {
+        self.target = None;
+    }
+    pub fn take(&mut self) -> Option<T> {
+        self.target.take()
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
     InvalidText,
