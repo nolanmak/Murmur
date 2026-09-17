@@ -1,5 +1,19 @@
 use text_to_speech::insertion::{Target, allowed};
 #[test]
+fn browser_editors_and_address_bars_use_native_paste() {
+    use text_to_speech::insertion::browser_surface;
+    assert!(browser_surface("com.google.Chrome", "AXComboBox", ""));
+    assert!(browser_surface("com.apple.Safari", "AXTextArea", ""));
+    assert!(browser_surface("org.mozilla.firefox", "AXTextField", ""));
+    assert!(!browser_surface("com.google.Chrome", "AXButton", ""));
+    assert!(!browser_surface(
+        "com.google.Chrome",
+        "AXTextField",
+        "AXSecureTextField"
+    ));
+    assert!(!browser_surface("com.example.app", "AXComboBox", ""));
+}
+#[test]
 fn terminal_surfaces_use_paste_instead_of_direct_ax_writes() {
     use text_to_speech::insertion::terminal_surface;
     assert!(terminal_surface("com.apple.Terminal", "AXTextArea", ""));

@@ -1,4 +1,18 @@
 //! Native implementations must retain and compare the actual AX element too.
+pub fn browser_surface(bundle: &str, role: &str, subrole: &str) -> bool {
+    matches!(
+        bundle,
+        "com.google.Chrome"
+            | "com.google.Chrome.beta"
+            | "com.google.Chrome.canary"
+            | "com.apple.Safari"
+            | "com.apple.SafariTechnologyPreview"
+            | "org.mozilla.firefox"
+            | "com.microsoft.edgemac"
+            | "com.brave.Browser"
+            | "company.thebrowser.Browser"
+    ) && text_role(role, subrole)
+}
 pub fn terminal_surface(bundle: &str, role: &str, subrole: &str) -> bool {
     matches!(
         bundle,
