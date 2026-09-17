@@ -10,6 +10,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - if: runner.os == 'macOS'
+        run: brew install gitleaks && gitleaks git --redact --no-banner .
       - uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: rustfmt, clippy
