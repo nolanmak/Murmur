@@ -29,3 +29,49 @@ fn clipboard_failures_distinguish_unsupported_changed_and_pending() {
     assert!(Failure::ClipboardChanged.message().contains("changed"));
     assert!(Failure::PendingRestore.message().contains("Restore"));
 }
+
+#[test]
+fn manual_copy_failure_is_not_reported_as_success_and_pending_restore_blocks_it() {
+    use murmur::local_delivery::{CopyBoard, CopyFailure, copy_transcript};
+    struct FakeCopy {
+        attempts: usize,
+        fail: bool,
+    }
+    impl CopyBoard for FakeCopy {
+        fn overwrite_with_text(&mut self, _: &str) -> Result<(), CopyFailure> {
+            self.attempts += 1;
+            if self.fail {
+                Err(CopyFailure::WriteFailedAfterClear)
+            } else {
+                Ok(())
+            }
+        }
+    }
+    let transcript = "Café 👋";
+    let mut board = FakeCopy {
+        attempts: 0,
+        fail: true,
+    };
+    assert_eq!(
+        copy_transcript(&mut board, true, transcript),
+        Err(CopyFailure::PendingRestore)
+    );
+    assert_eq!(board.attempts, 0);
+    assert_eq!(
+        copy_transcript(&mut board, false, transcript),
+        Err(CopyFailure::WriteFailedAfterClear)
+    );
+    assert_eq!(board.attempts, 1);
+    assert!(
+        CopyFailure::WriteFailedAfterClear
+            .message()
+            .contains("may have changed")
+    );
+    assert!(
+        !CopyFailure::WriteFailedAfterClear
+            .message()
+            .contains("copied")
+    );
+    board.fail = false;
+    assert_eq!(copy_transcript(&mut board, false, transcript), Ok(()));
+}

@@ -1179,24 +1179,15 @@ impl Shell {
         }
     }
     fn copy_local_transcript(&mut self) {
-        if self.local_lease.pending() {
-            self.show("Restore previous clipboard before copying transcript");
-            return;
-        }
-        let paste = NSPasteboard::generalPasteboard();
-        let before = paste.changeCount();
-        if paste.changeCount() != before {
-            self.show("Clipboard changed; copy again");
-            return;
-        }
-        paste.clearContents();
-        if paste.setString_forType(
-            &NSString::from_str(&self.last),
-            &NSString::from_str("public.utf8-plain-text"),
+        let main = MainThreadMarker::new().expect("app runs on main thread");
+        let mut board = MacLocalBoard::new(NSPasteboard::generalPasteboard(), main, || false);
+        match crate::local_delivery::copy_transcript(
+            &mut board,
+            self.local_lease.pending(),
+            &self.last,
         ) {
-            self.show("Transcript copied · paste manually");
-        } else {
-            self.show("Clipboard write failed · transcript retained");
+            Ok(()) => self.show("Transcript copied · paste manually"),
+            Err(reason) => self.show(reason.message()),
         }
     }
     fn restore_remote_clipboard(&mut self) {

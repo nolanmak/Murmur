@@ -51,3 +51,33 @@ impl Failure {
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CopyFailure {
+    PendingRestore,
+    WriteFailedAfterClear,
+}
+impl CopyFailure {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::PendingRestore => "Restore previous clipboard before copying transcript",
+            Self::WriteFailedAfterClear => {
+                "Clipboard write failed; clipboard may have changed · transcript retained"
+            }
+        }
+    }
+}
+pub trait CopyBoard {
+    /// User explicitly requested replacement; failure may leave modified contents.
+    fn overwrite_with_text(&mut self, text: &str) -> Result<(), CopyFailure>;
+}
+pub fn copy_transcript(
+    board: &mut impl CopyBoard,
+    pending_restore: bool,
+    text: &str,
+) -> Result<(), CopyFailure> {
+    if pending_restore {
+        return Err(CopyFailure::PendingRestore);
+    }
+    board.overwrite_with_text(text)
+}

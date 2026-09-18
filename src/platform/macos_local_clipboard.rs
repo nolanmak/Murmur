@@ -1,6 +1,7 @@
 //! Materialized, item-preserving adapter for local paste only. Remote review keeps
 //! its separate single-item policy. Native clipboard writes cannot be atomic.
 use crate::local_clipboard::{Board, Failure, Format, Item, Revision, Snapshot, WriteFailure};
+use crate::local_delivery::{CopyBoard, CopyFailure};
 use objc2::{MainThreadMarker, rc::Retained, runtime::ProtocolObject};
 use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardWriting};
 use objc2_foundation::{NSArray, NSData, NSString};
@@ -111,5 +112,19 @@ impl Board for MacLocalBoard<'_> {
     }
     fn dispatch_paste(&mut self) -> bool {
         (self.dispatch)()
+    }
+}
+
+impl CopyBoard for MacLocalBoard<'_> {
+    fn overwrite_with_text(&mut self, text: &str) -> Result<(), CopyFailure> {
+        self.board.clearContents();
+        if self.board.setString_forType(
+            &NSString::from_str(text),
+            &NSString::from_str("public.utf8-plain-text"),
+        ) {
+            Ok(())
+        } else {
+            Err(CopyFailure::WriteFailedAfterClear)
+        }
     }
 }
