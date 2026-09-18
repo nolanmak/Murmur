@@ -28,6 +28,18 @@ pub fn text_role(role: &str, subrole: &str) -> bool {
         && !subrole.contains("Secure")
         && !subrole.contains("Password")
 }
+
+/// Compare two observations of the focused window.
+pub fn same_window<T>(
+    before: Option<&T>,
+    after: Option<&T>,
+    equal: impl FnOnce(&T, &T) -> bool,
+) -> bool {
+    match (before, after) {
+        (Some(before), Some(after)) => equal(before, after),
+        _ => true,
+    }
+}
 #[derive(Clone, Debug)]
 pub struct Target {
     pub pid: i32,
