@@ -46,7 +46,7 @@ impl Failure {
                 "Transcript ready · Restore previous clipboard before another paste"
             }
             Self::PasteDispatchFailed => {
-                "Transcript ready · paste shortcut failed. Restore previous clipboard"
+                "Transcript ready · paste not sent. Check focus; restore previous clipboard"
             }
         }
     }

@@ -175,15 +175,19 @@ impl Focus {
         let key = cfstr("AXSelectedText");
         let value = cfstr(text);
         if self.paste_only {
-            return paste_text(text, lease);
+            return paste_text(text, lease, self);
         }
         if unsafe { AXUIElementSetAttributeValue(now.element.0, key.0, value.0) } != 0 {
-            return paste_text(text, lease);
+            return paste_text(text, lease, self);
         }
         Ok(DeliveryOutcome::AxWrite)
     }
 }
-fn paste_text(text: &str, lease: &mut LocalLease) -> Result<DeliveryOutcome, DeliveryFailure> {
+fn paste_text(
+    text: &str,
+    lease: &mut LocalLease,
+    focus: &Focus,
+) -> Result<DeliveryOutcome, DeliveryFailure> {
     let main = MainThreadMarker::new().ok_or(DeliveryFailure::PasteDispatchFailed)?;
     // Creating events before changing the board prevents a missing shortcut from
     // leaving a new clipboard owner behind.
@@ -193,6 +197,15 @@ fn paste_text(text: &str, lease: &mut LocalLease) -> Result<DeliveryOutcome, Del
         return Err(DeliveryFailure::PasteDispatchFailed);
     }
     let mut board = MacLocalBoard::new(NSPasteboard::generalPasteboard(), main, move || {
+        let Ok(now) = Focus::current() else {
+            return false;
+        };
+        if !allowed(&focus.target, &now.target, text)
+            || !unsafe { CFEqual(focus.element.0, now.element.0) }
+            || matches!((&focus.window, &now.window), (Some(before), Some(after)) if !unsafe { CFEqual(before.0, after.0) })
+        {
+            return false;
+        }
         unsafe {
             CGEventSetFlags(down.0, 1 << 20);
             CGEventSetFlags(up.0, 1 << 20);

@@ -5,16 +5,16 @@ use objc2::{MainThreadMarker, rc::Retained, runtime::ProtocolObject};
 use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardWriting};
 use objc2_foundation::{NSArray, NSData, NSString};
 
-pub struct MacLocalBoard {
+pub struct MacLocalBoard<'a> {
     board: Retained<NSPasteboard>,
     _main: MainThreadMarker,
-    dispatch: Box<dyn FnMut() -> bool>,
+    dispatch: Box<dyn FnMut() -> bool + 'a>,
 }
-impl MacLocalBoard {
+impl<'a> MacLocalBoard<'a> {
     pub fn new(
         board: Retained<NSPasteboard>,
         main: MainThreadMarker,
-        dispatch: impl FnMut() -> bool + 'static,
+        dispatch: impl FnMut() -> bool + 'a,
     ) -> Self {
         Self {
             board,
@@ -26,7 +26,7 @@ impl MacLocalBoard {
         Revision(self.board.changeCount() as u64)
     }
 }
-impl Board for MacLocalBoard {
+impl Board for MacLocalBoard<'_> {
     fn snapshot(&mut self) -> Result<Snapshot, Failure> {
         let revision = self.revision();
         let mut saved = Vec::new();
