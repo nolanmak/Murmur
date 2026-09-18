@@ -76,5 +76,15 @@
     "title": "RustDesk remote dictation: explicit paste to macOS and Linux with test-first validation",
     "milestone": "M3",
     "url": "https://github.com/nolanmak/Murmur/issues/13"
+  },
+  {
+    "number": 27,
+    "title": "Fix macOS terminal insertion blocked by multi-item clipboard",
+    "url": "https://github.com/nolanmak/Murmur/issues/27"
+  },
+  {
+    "number": 28,
+    "title": "Make local dictation delivery failures actionable and test terminal recovery",
+    "url": "https://github.com/nolanmak/Murmur/issues/28"
   }
 ]
