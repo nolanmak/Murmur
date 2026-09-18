@@ -7,15 +7,22 @@ struct FakeBoard {
     revision: u64,
     items: Vec<Item>,
     fail_write: bool,
+    fail_before_clear: bool,
     fail_dispatch: bool,
     mutate_before_replace: bool,
+    mutate_after_clear: bool,
     unavailable_snapshot: bool,
+    changed_snapshot: bool,
     dispatches: usize,
 }
 impl Board for FakeBoard {
     fn snapshot(&mut self) -> Result<Snapshot, Failure> {
         if self.unavailable_snapshot {
             return Err(Failure::UnsupportedClipboard);
+        }
+        if self.changed_snapshot {
+            self.revision += 1;
+            return Err(Failure::Changed);
         }
         Ok(Snapshot {
             revision: Revision(self.revision),
@@ -30,7 +37,16 @@ impl Board for FakeBoard {
         if self.revision != expected.0 {
             return Err(WriteFailure::Changed);
         }
+        if self.fail_before_clear {
+            return Err(WriteFailure::Unchanged);
+        }
         self.revision += 1;
+        if self.mutate_after_clear {
+            self.revision += 1;
+            self.items = vec![text("newer owner")];
+            self.mutate_after_clear = false;
+            return Err(WriteFailure::Changed);
+        }
         if self.fail_write {
             return Err(WriteFailure::Owned(Revision(self.revision)));
         }
@@ -185,4 +201,79 @@ fn aggregate_size_limit_rejects_three_individually_supported_items() {
         Err(Failure::UnsupportedClipboard)
     );
     assert_eq!(board.revision, 0);
+}
+
+#[test]
+fn changed_snapshot_and_failed_preclear_write_never_dispatch_or_take_a_lease() {
+    let mut board = FakeBoard {
+        items: vec![text("original")],
+        changed_snapshot: true,
+        ..Default::default()
+    };
+    let mut lease = Lease::default();
+    assert_eq!(lease.send(&mut board, "test"), Err(Failure::Changed));
+    assert!(!lease.pending());
+    assert_eq!(board.dispatches, 0);
+    assert!(board.items == vec![text("original")]);
+
+    board.changed_snapshot = false;
+    board.fail_before_clear = true;
+    let revision = board.revision;
+    assert_eq!(lease.send(&mut board, "test"), Err(Failure::WriteFailed));
+    assert!(!lease.pending());
+    assert_eq!(board.revision, revision);
+    assert_eq!(board.dispatches, 0);
+    assert!(board.items == vec![text("original")]);
+}
+
+#[test]
+fn a_new_owner_after_clear_wins_without_paste_or_restore() {
+    let mut board = FakeBoard {
+        items: vec![text("original")],
+        mutate_after_clear: true,
+        ..Default::default()
+    };
+    let mut lease = Lease::default();
+    assert_eq!(lease.send(&mut board, "test"), Err(Failure::Changed));
+    assert!(!lease.pending());
+    assert_eq!(board.dispatches, 0);
+    assert!(board.items == vec![text("newer owner")]);
+}
+
+#[test]
+fn a_partial_restore_failure_retains_recovery_at_its_new_revision() {
+    let mut board = FakeBoard {
+        items: vec![text("original")],
+        ..Default::default()
+    };
+    let mut lease = Lease::default();
+    lease.send(&mut board, "test").unwrap();
+    board.fail_write = true;
+    assert_eq!(lease.restore(&mut board), Err(Failure::WriteFailed));
+    assert!(lease.pending());
+    let failed_revision = board.revision;
+    board.fail_write = false;
+    lease.restore(&mut board).unwrap();
+    assert!(board.revision > failed_revision);
+    assert!(board.items == vec![text("original")]);
+    assert!(!lease.pending());
+}
+
+#[test]
+fn a_restore_rejected_before_clear_can_be_retried_without_losing_the_snapshot() {
+    let mut board = FakeBoard {
+        items: vec![text("original")],
+        ..Default::default()
+    };
+    let mut lease = Lease::default();
+    lease.send(&mut board, "test").unwrap();
+    let owned_revision = board.revision;
+    board.fail_before_clear = true;
+    assert_eq!(lease.restore(&mut board), Err(Failure::WriteFailed));
+    assert!(lease.pending());
+    assert_eq!(board.revision, owned_revision);
+    assert!(board.items == vec![text("test")]);
+    board.fail_before_clear = false;
+    lease.restore(&mut board).unwrap();
+    assert!(board.items == vec![text("original")]);
 }
