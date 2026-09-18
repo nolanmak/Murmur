@@ -23,3 +23,17 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked --workspace
       - run: python3 scripts/check-repo.py
+      - if: runner.os == 'macOS'
+        name: Build installable Mac preview
+        run: |
+          ./scripts/build-app.sh
+          ditto -c -k --sequesterRsrc --keepParent Murmur.app Murmur-macOS-preview.zip
+          shasum -a 256 Murmur-macOS-preview.zip > Murmur-macOS-preview.zip.sha256
+      - if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Murmur-macOS-preview
+          path: |
+            Murmur-macOS-preview.zip
+            Murmur-macOS-preview.zip.sha256
+          retention-days: 14

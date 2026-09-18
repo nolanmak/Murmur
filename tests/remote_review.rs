@@ -90,3 +90,22 @@ fn missing_window_and_invalid_text_never_create_shareable_review() {
         assert_eq!(review.prepare(text, window()), Err(Error::InvalidText));
     }
 }
+
+#[test]
+fn official_flutter_and_legacy_rustdesk_bundles_are_recognized_exactly() {
+    for bundle in ["com.carriez.flutterHbb", "com.carriez.rustdesk"] {
+        assert!(
+            rustdesk_bundle(bundle),
+            "official bundle rejected: {bundle}"
+        );
+    }
+    for bundle in [
+        "",
+        "RustDesk",
+        "com.example.rustdesk",
+        "com.carriez.flutterHbb.helper",
+        "com.carriez.rustdesk.evil",
+    ] {
+        assert!(!rustdesk_bundle(bundle));
+    }
+}

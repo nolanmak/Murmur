@@ -60,3 +60,30 @@ It starts in remote review mode with a labeled synthetic transcript. Unlike the
 UI-only preview, its explicit **Copy for manual paste** action uses the real
 clipboard. Prepare a disposable remote editor and isolate the intended session
 before confirming. Restart normally after testing to clear the fixture.
+
+## Mac → Linux setup
+
+Run Murmur **on the Mac whose microphone you use**, alongside the RustDesk client.
+The Linux host needs a graphical RustDesk session with clipboard and keyboard
+permissions. It does not need Murmur or a Deepgram key for this workflow. Audio
+travels from the Mac directly to Deepgram; only the explicitly copied transcript
+travels through RustDesk. Native Linux dictation is a separate feature using a
+microphone attached to the Linux host.
+
+Each successful macOS CI run now offers a `Murmur-macOS-preview` artifact with an
+ad-hoc-signed app archive and SHA-256 checksum. Download it from the corresponding
+GitHub Actions run, verify the checksum, extract, and launch Murmur.app. This is a
+developer preview, not a notarized release. Configure credentials on the Mac using
+the README, then grant Microphone and Accessibility permissions to that build.
+Do not place credentials inside the app.
+
+For a Linux text editor select the Linux Ctrl+V profile; for a Linux terminal
+select Linux terminal Ctrl+Shift+V. Use Start/Stop in Murmur's Mac menu, select the
+RustDesk session, review and copy, then focus the intended Linux field and paste.
+The copy confirmation also confirms other RustDesk sessions are disconnected.
+Check the field contents yourself before pressing Enter.
+
+The RustDesk observer recognizes the legacy `com.carriez.rustdesk` identity and
+`com.carriez.flutterHbb`, declared in the official 1.4.6 macOS build configuration.
+It still requires a supported remote-window title, and revalidates the retained
+window before copying. Unknown/custom bundle identities fail closed.
