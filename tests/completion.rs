@@ -13,7 +13,10 @@ fn a_duplicate_result_cannot_replace_a_completed_delivery_with_an_empty_notice()
     );
     assert_eq!(dictation.phase, Phase::Idle);
     assert_eq!(dictation.complete(generation, Ok("late".into())), None);
-    assert_eq!(dictation.complete(generation, Err("late error".into())), None);
+    assert_eq!(
+        dictation.complete(generation, Err("late error".into())),
+        None
+    );
 }
 
 #[test]

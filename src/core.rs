@@ -69,12 +69,11 @@ impl Dictation {
         id: u64,
         result: Result<String, String>,
     ) -> Option<CompletionEffect> {
-        if id != self.generation {
+        if !self.accepts(id) {
             return None;
         }
-        let accepts = self.accepts(id);
         let effect = match result {
-            Ok(text) if accepts && !text.trim().is_empty() => CompletionEffect::Transcript(text),
+            Ok(text) if !text.trim().is_empty() => CompletionEffect::Transcript(text),
             Ok(_) => CompletionEffect::Empty,
             Err(error) => CompletionEffect::Error(error),
         };
