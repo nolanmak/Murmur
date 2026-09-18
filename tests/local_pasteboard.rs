@@ -37,7 +37,43 @@ fn main() {
     assert_eq!(lease.restore(&mut adapter), Err(Failure::Changed));
     assert_eq!(board.stringForType(&plain).unwrap().to_string(), "newer");
     board.clearContents();
-    println!("local native clipboard item round-trip and newer owner checks passed");
+    let empty = adapter.snapshot().unwrap();
+    assert!(empty.items.is_empty());
+    lease.send(&mut adapter, "empty case").unwrap();
+    lease.restore(&mut adapter).unwrap();
+    assert!(adapter.snapshot().unwrap().items.is_empty());
+
+    board.clearContents();
+    assert!(board.setString_forType(&NSString::from_str("single"), &plain));
+    let single = adapter.snapshot().unwrap();
+    assert_eq!(single.items.len(), 1);
+    lease.send(&mut adapter, "single case").unwrap();
+    lease.restore(&mut adapter).unwrap();
+    assert!(adapter.snapshot().unwrap().items == single.items);
+
+    board.clearContents();
+    let many: Vec<_> = (0..33)
+        .map(|_| {
+            let item = NSPasteboardItem::new();
+            assert!(item.setString_forType(&NSString::from_str("synthetic"), &plain));
+            item
+        })
+        .collect();
+    let refs: Vec<&ProtocolObject<dyn NSPasteboardWriting>> = many
+        .iter()
+        .map(|item| ProtocolObject::from_ref(&**item))
+        .collect();
+    assert!(board.writeObjects(&NSArray::from_slice(&refs)));
+    let revision = board.changeCount();
+    assert!(matches!(
+        adapter.snapshot(),
+        Err(Failure::UnsupportedClipboard)
+    ));
+    assert_eq!(board.changeCount(), revision);
+    board.clearContents();
+    println!(
+        "local native clipboard empty/single/multi-item, bounds and newer owner checks passed"
+    );
 }
 #[cfg(not(target_os = "macos"))]
 fn main() {
