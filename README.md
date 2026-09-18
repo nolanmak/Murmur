@@ -90,3 +90,5 @@ cargo run -- doctor  # shows credential source, never the value
 
 See [architecture](docs/ARCHITECTURE.md), [provenance](docs/PROVENANCE.md),
 [QA](docs/QA.md) and [contributing](CONTRIBUTING.md).
+
+Local macOS paste behavior and recovery are documented in [local paste](docs/local-paste.md).
