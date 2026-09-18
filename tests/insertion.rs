@@ -74,3 +74,14 @@ fn linebreaks_and_control_characters_never_become_automatic_submit_keys() {
     assert!(!allowed(&t, &t, "hi\r"));
     assert!(!allowed(&t, &t, "hi\t"));
 }
+
+#[test]
+fn a_new_or_missing_window_observation_blocks_delivery() {
+    use murmur::insertion::same_window;
+    let equal = |before: &u64, after: &u64| before == after;
+    assert!(same_window(Some(&7), Some(&7), equal));
+    assert!(!same_window(Some(&7), Some(&8), equal));
+    assert!(same_window::<u64>(None, None, equal));
+    assert!(!same_window(Some(&7), None, equal));
+    assert!(!same_window(None, Some(&7), equal));
+}
