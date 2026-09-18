@@ -4,6 +4,9 @@ use crate::{
     core::{Dictation, Phase},
     indicator::{self, Indicator, Look},
     insertion::{Target, allowed},
+    local_clipboard::Lease as LocalLease,
+    local_delivery::{Failure as DeliveryFailure, Outcome as DeliveryOutcome},
+    platform::macos_local_clipboard::MacLocalBoard,
 };
 use block2::RcBlock;
 use fotw_audio::{AudioPlatform, DeviceId, FormatRequest, Permission, PermissionState};
@@ -105,6 +108,7 @@ fn string(value: CF) -> String {
 }
 struct Focus {
     element: Owned,
+    window: Option<Owned>,
     target: Target,
     paste_only: bool,
 }
@@ -136,6 +140,7 @@ impl Focus {
             || crate::insertion::browser_surface(&bundle, &role, &subrole);
         let editable = crate::insertion::text_role(&role, &subrole) || paste_only;
         eprintln!("focus role={role} editable={editable} secure={secure} paste={paste_only}");
+        let window = attribute(element.0, "AXWindow");
         let target = Target {
             pid,
             element: unsafe { CFHash(element.0) } as u64,
@@ -144,77 +149,72 @@ impl Focus {
         };
         Ok(Self {
             element,
+            window,
             target,
             paste_only,
         })
     }
-    fn insert(&self, text: &str) -> Result<(), String> {
-        let now = Self::current()?;
+    fn insert(
+        &self,
+        text: &str,
+        lease: &mut LocalLease,
+    ) -> Result<DeliveryOutcome, DeliveryFailure> {
+        let now = Self::current().map_err(|_| DeliveryFailure::TargetChanged)?;
         if !allowed(&self.target, &now.target, text)
             || !unsafe { CFEqual(self.element.0, now.element.0) }
+            || matches!((&self.window, &now.window), (Some(before), Some(after)) if !unsafe { CFEqual(before.0, after.0) })
         {
-            return Err(
-                "Insertion blocked: focus changed or field unsupported. Use Copy Last Transcript."
-                    .into(),
-            );
+            return Err(if now.target.secure {
+                DeliveryFailure::SecureTarget
+            } else if !now.target.editable {
+                DeliveryFailure::UnsupportedTarget
+            } else {
+                DeliveryFailure::TargetChanged
+            });
         }
         let key = cfstr("AXSelectedText");
         let value = cfstr(text);
         if self.paste_only {
-            return paste_text(text);
+            return paste_text(text, lease);
         }
         if unsafe { AXUIElementSetAttributeValue(now.element.0, key.0, value.0) } != 0 {
-            return paste_text(text);
+            return paste_text(text, lease);
         }
-        Ok(())
+        Ok(DeliveryOutcome::AxWrite)
     }
 }
-fn paste_text(text: &str) -> Result<(), String> {
-    let paste = NSPasteboard::generalPasteboard();
-    if paste.pasteboardItems().is_some_and(|items| items.len() > 1) {
-        return Err("Use Copy Last Transcript (clipboard has multiple items)".into());
-    }
-    let mut saved = Vec::new();
-    if let Some(types) = paste.types() {
-        for kind in types.iter() {
-            let data = paste
-                .dataForType(&kind)
-                .ok_or("Cannot preserve clipboard; use Copy Last Transcript")?;
-            saved.push((kind, data));
-        }
-    }
+fn paste_text(text: &str, lease: &mut LocalLease) -> Result<DeliveryOutcome, DeliveryFailure> {
+    let main = MainThreadMarker::new().ok_or(DeliveryFailure::PasteDispatchFailed)?;
+    // Creating events before changing the board prevents a missing shortcut from
+    // leaving a new clipboard owner behind.
     let down = Owned(unsafe { CGEventCreateKeyboardEvent(ptr::null(), 9, true) });
     let up = Owned(unsafe { CGEventCreateKeyboardEvent(ptr::null(), 9, false) });
     if down.0.is_null() || up.0.is_null() {
-        return Err("Cannot create paste shortcut".into());
+        return Err(DeliveryFailure::PasteDispatchFailed);
     }
-    paste.clearContents();
-    paste.setString_forType(
-        &NSString::from_str(text),
-        &NSString::from_str("public.utf8-plain-text"),
-    );
-    let count = paste.changeCount();
-    unsafe {
-        CGEventSetFlags(down.0, 1 << 20);
-        CGEventSetFlags(up.0, 1 << 20);
-        CGEventPost(1, down.0);
-        CGEventPost(1, up.0);
-    }
-    // Restore only if no other app or person has changed the clipboard meanwhile.
-    let block = RcBlock::new(move |_: NonNull<NSTimer>| {
-        let paste = NSPasteboard::generalPasteboard();
-        if paste.changeCount() == count {
-            paste.clearContents();
-            for (kind, data) in &saved {
-                paste.setData_forType(Some(data), kind);
-            }
+    let mut board = MacLocalBoard::new(NSPasteboard::generalPasteboard(), main, move || {
+        unsafe {
+            CGEventSetFlags(down.0, 1 << 20);
+            CGEventSetFlags(up.0, 1 << 20);
+            CGEventPost(1, down.0);
+            CGEventPost(1, up.0);
         }
+        true // Event dispatch is not confirmation that the target consumed text.
     });
-    unsafe {
-        NSTimer::scheduledTimerWithTimeInterval_repeats_block(1.0, false, &block);
-    }
-    Ok(())
+    lease
+        .send(&mut board, text)
+        .map_err(|reason| match reason {
+            crate::local_clipboard::Failure::PendingRestore => DeliveryFailure::PendingRestore,
+            crate::local_clipboard::Failure::UnsupportedClipboard => {
+                DeliveryFailure::UnsupportedClipboard
+            }
+            crate::local_clipboard::Failure::Changed => DeliveryFailure::ClipboardChanged,
+            crate::local_clipboard::Failure::WriteFailed => DeliveryFailure::ClipboardWriteFailed,
+            crate::local_clipboard::Failure::DispatchFailed => DeliveryFailure::PasteDispatchFailed,
+        })?;
+    Ok(DeliveryOutcome::PasteSent)
 }
+
 #[derive(Clone, Copy)]
 enum Input {
     Flags(bool, bool),
@@ -591,6 +591,8 @@ struct Shell {
     profile: crate::remote::Profile,
     review: crate::remote_review::Review,
     clipboard_lease: crate::remote_clipboard::Lease,
+    local_lease: LocalLease,
+    local_fixture: bool,
     clipboard_attempt: Option<crate::remote::Attempt>,
     selected_remote: crate::remote_review::Selection<RustDeskWindow>,
 }
@@ -598,12 +600,19 @@ impl Shell {
     fn new(mtm: MainThreadMarker) -> Result<Self, String> {
         // Opt-in native integration fixture. No credentials or microphone are used.
         let remote_fixture = std::env::args().any(|arg| arg == "--remote-fixture");
+        let local_fixture =
+            cfg!(debug_assertions) && std::env::args().any(|arg| arg == "--local-fixture");
         let menu = Menu::new();
         let status = MenuItem::with_id("status", "Hold Control to dictate", false, None);
         let cancel = MenuItem::with_id("cancel", "Cancel dictation (Esc)", true, None);
         let start = MenuItem::with_id("start", "Start dictation", true, None);
         let stop = MenuItem::with_id("stop", "Stop dictation", true, None);
-        let copy = MenuItem::with_id("copy", "Copy Last Transcript", true, None);
+        let copy = MenuItem::with_id(
+            "copy",
+            "Copy Last Transcript (replaces clipboard)",
+            true,
+            None,
+        );
         let setup = MenuItem::with_id("setup", "Set up permissions", true, None);
         let quit = MenuItem::with_id("quit", "Quit Murmur", true, None);
         let remote_toggle = MenuItem::with_id("remote_mode", "Remote review mode: Off", true, None);
@@ -619,6 +628,14 @@ impl Shell {
         );
         let restore =
             MenuItem::with_id("remote_restore", "Restore previous clipboard…", true, None);
+        let fixture_paste =
+            MenuItem::with_id("fixture_paste", "Insert synthetic test phrase", true, None);
+        let local_restore = MenuItem::with_id(
+            "local_restore",
+            "Restore clipboard from local paste…",
+            true,
+            None,
+        );
         for item in [
             &status,
             &start,
@@ -629,10 +646,14 @@ impl Shell {
             &remote_profile,
             &remote_review,
             &restore,
+            &local_restore,
             &setup,
             &quit,
         ] {
             menu.append(item).map_err(|e| e.to_string())?;
+        }
+        if local_fixture {
+            menu.append(&fixture_paste).map_err(|e| e.to_string())?;
         }
         let tray = TrayIconBuilder::new()
             .with_title("Control")
@@ -664,7 +685,9 @@ impl Shell {
             pill,
             indicator: Indicator::default(),
             warning: None,
-            last: if remote_fixture {
+            last: if local_fixture {
+                "Murmur fixture Café 👋".into()
+            } else if remote_fixture {
                 "Synthetic dictation test — Café 👋".into()
             } else {
                 String::new()
@@ -681,6 +704,8 @@ impl Shell {
             profile: crate::remote::Profile::Mac,
             review: Default::default(),
             clipboard_lease: Default::default(),
+            local_lease: LocalLease::default(),
+            local_fixture,
             clipboard_attempt: None,
             selected_remote: Default::default(),
         })
@@ -733,7 +758,11 @@ impl Shell {
             Ok(f) if !f.target.secure && f.target.editable => Some(f),
             Ok(f) if f.target.secure => {
                 self.cancel();
-                self.show("Choose a supported text field. Password fields are blocked.");
+                self.show(DeliveryFailure::SecureTarget.message());
+                return;
+            }
+            Ok(_) if !self.remote_mode => {
+                self.show(DeliveryFailure::UnsupportedTarget.message());
                 return;
             }
             _ => None,
@@ -851,6 +880,10 @@ impl Shell {
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             match event.id.as_ref() {
                 "remote_mode" => {
+                    if self.local_lease.pending() || self.clipboard_lease.pending() {
+                        self.show("Restore previous clipboard before changing modes");
+                        continue;
+                    }
                     self.cancel();
                     self.remote_mode = !self.remote_mode;
                     self.remote_toggle.set_text(if self.remote_mode {
@@ -877,9 +910,23 @@ impl Shell {
                         profile_name(self.profile)
                     ));
                 }
-                "remote_review" if self.core.phase == Phase::Idle => self.review_remote(),
+                "remote_review" if self.core.phase == Phase::Idle && self.remote_mode => {
+                    self.review_remote()
+                }
                 "remote_restore" if self.core.phase == Phase::Idle => {
                     self.restore_remote_clipboard()
+                }
+                "fixture_paste" if self.local_fixture && self.core.phase == Phase::Idle => {
+                    let result = Focus::current()
+                        .map_err(|_| DeliveryFailure::MissingTarget)
+                        .and_then(|target| target.insert(&self.last, &mut self.local_lease));
+                    match result {
+                        Ok(outcome) => self.show(outcome.message()),
+                        Err(reason) => self.show(reason.message()),
+                    }
+                }
+                "local_restore" if self.core.phase == Phase::Idle && !self.remote_mode => {
+                    self.restore_local_clipboard();
                 }
                 "start" if self.core.start_manual() => {
                     self.start();
@@ -892,13 +939,7 @@ impl Shell {
                     self.review_remote()
                 }
                 "copy" if !self.last.is_empty() => {
-                    let paste = NSPasteboard::generalPasteboard();
-                    paste.clearContents();
-                    paste.setString_forType(
-                        &NSString::from_str(&self.last),
-                        &NSString::from_str("public.utf8-plain-text"),
-                    );
-                    self.show("Transcript copied");
+                    self.copy_local_transcript();
                 }
                 "setup" => {
                     self.cancel();
@@ -936,11 +977,11 @@ impl Shell {
                         let result = self
                             .focus
                             .as_ref()
-                            .ok_or("Transcript ready — choose Copy Last Transcript".to_string())
-                            .and_then(|f| f.insert(&text));
+                            .ok_or(DeliveryFailure::MissingTarget)
+                            .and_then(|f| f.insert(&text, &mut self.local_lease));
                         match result {
-                            Ok(()) => self.show("Text inserted"),
-                            Err(e) => self.show(&e),
+                            Ok(outcome) => self.show(outcome.message()),
+                            Err(reason) => self.show(reason.message()),
                         }
                     }
                 }
@@ -1107,6 +1148,42 @@ impl Shell {
             Ok(()) => self.show("Copied · paste manually in RustDesk"),
             Err(crate::remote_clipboard::Error::Unsupported) => self.show("Clipboard format cannot be preserved; keep transcript and try after copying plain text"),
             Err(_) => self.show("Copy failed or clipboard changed; use Restore previous clipboard if available"),
+        }
+    }
+    fn restore_local_clipboard(&mut self) {
+        if !self.local_lease.pending() {
+            self.show("No local clipboard recovery pending");
+            return;
+        }
+        let main = MainThreadMarker::new().expect("app runs on main thread");
+        let mut board = MacLocalBoard::new(NSPasteboard::generalPasteboard(), main, || false);
+        match self.local_lease.restore(&mut board) {
+            Ok(()) => self.show("Previous clipboard restored"),
+            Err(crate::local_clipboard::Failure::Changed) => {
+                self.show("Clipboard changed; newer copy kept")
+            }
+            Err(_) => self.show("Clipboard restore failed; retry from Control menu"),
+        }
+    }
+    fn copy_local_transcript(&mut self) {
+        if self.local_lease.pending() {
+            self.show("Restore previous clipboard before copying transcript");
+            return;
+        }
+        let paste = NSPasteboard::generalPasteboard();
+        let before = paste.changeCount();
+        if paste.changeCount() != before {
+            self.show("Clipboard changed; copy again");
+            return;
+        }
+        paste.clearContents();
+        if paste.setString_forType(
+            &NSString::from_str(&self.last),
+            &NSString::from_str("public.utf8-plain-text"),
+        ) {
+            self.show("Transcript copied · paste manually");
+        } else {
+            self.show("Clipboard write failed · transcript retained");
         }
     }
     fn restore_remote_clipboard(&mut self) {

@@ -3,6 +3,8 @@ pub mod config;
 pub mod core;
 pub mod indicator;
 pub mod insertion;
+pub mod local_clipboard;
+pub mod local_delivery;
 pub mod platform;
 pub mod remote;
 pub mod remote_clipboard;
