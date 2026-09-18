@@ -665,6 +665,24 @@ impl Shell {
             true,
             None,
         );
+        let fixture_complete = MenuItem::with_id(
+            "fixture_complete",
+            "Simulate synthetic dictation result",
+            true,
+            None,
+        );
+        let fixture_empty = MenuItem::with_id(
+            "fixture_empty",
+            "Simulate empty dictation result",
+            true,
+            None,
+        );
+        let fixture_duplicate = MenuItem::with_id(
+            "fixture_duplicate",
+            "Simulate duplicate dictation result",
+            true,
+            None,
+        );
         let local_restore = MenuItem::with_id(
             "local_restore",
             "Restore clipboard from local paste…",
@@ -691,6 +709,9 @@ impl Shell {
             menu.append(&fixture_paste).map_err(|e| e.to_string())?;
             menu.append(&fixture_capture).map_err(|e| e.to_string())?;
             menu.append(&fixture_send).map_err(|e| e.to_string())?;
+            menu.append(&fixture_complete).map_err(|e| e.to_string())?;
+            menu.append(&fixture_empty).map_err(|e| e.to_string())?;
+            menu.append(&fixture_duplicate).map_err(|e| e.to_string())?;
         }
         let tray = TrayIconBuilder::new()
             .with_title("Control")
@@ -792,19 +813,13 @@ impl Shell {
         }
     }
     fn start(&mut self) {
-        let focus = match Focus::current() {
-            Ok(f) if !f.target.secure && f.target.editable => Some(f),
-            Ok(f) if f.target.secure => {
+        let focus = match self.preflight_focus() {
+            Ok(focus) => focus,
+            Err(reason) => {
                 self.cancel();
-                self.show(DeliveryFailure::SecureTarget.message());
+                self.show(reason.message());
                 return;
             }
-            Ok(_) if !self.remote_mode => {
-                self.cancel();
-                self.show(DeliveryFailure::UnsupportedTarget.message());
-                return;
-            }
-            _ => None,
         };
         let platform = fotw_audio::platform::macos::MacOsPlatform::new();
         if platform.permission(Permission::Microphone) != PermissionState::Granted {
@@ -813,13 +828,7 @@ impl Shell {
             self.show("Use Set up permissions in the Control menu, then try again.");
             return;
         }
-        self.focus = if self.remote_mode { None } else { focus };
-        self.control = Arc::new(AtomicU8::new(0));
-        self.receiving = Arc::new(AtomicBool::new(false));
-        self.started = Instant::now();
-        self.last.clear();
-        self.indicator.clear();
-        self.status("◌ Starting microphone…");
+        self.begin_attempt(focus, "◌ Starting microphone…");
         let control = self.control.clone();
         let completed = self.completed.clone();
         let generation = self.core.generation();
@@ -846,6 +855,49 @@ impl Shell {
             })();
             let _ = completed.send(Completion { generation, result });
         });
+    }
+    fn preflight_focus(&self) -> Result<Option<Focus>, DeliveryFailure> {
+        match Focus::current() {
+            Ok(f) if !f.target.secure && f.target.editable => Ok((!self.remote_mode).then_some(f)),
+            Ok(f) if f.target.secure => Err(DeliveryFailure::SecureTarget),
+            Ok(_) if !self.remote_mode => Err(DeliveryFailure::UnsupportedTarget),
+            _ => Ok(None),
+        }
+    }
+    fn begin_attempt(&mut self, focus: Option<Focus>, status: &str) {
+        self.focus = focus;
+        self.control = Arc::new(AtomicU8::new(0));
+        self.receiving = Arc::new(AtomicBool::new(false));
+        self.started = Instant::now();
+        self.last.clear();
+        self.indicator.clear();
+        self.status(status);
+    }
+    fn simulate_completion(&mut self, text: &str, duplicate: bool) {
+        if !self.local_fixture || self.remote_mode || !self.core.start_manual() {
+            return;
+        }
+        let focus = match self.preflight_focus() {
+            Ok(focus) => focus,
+            Err(reason) => {
+                self.cancel();
+                self.show(reason.message());
+                return;
+            }
+        };
+        self.begin_attempt(focus, "Synthetic result queued");
+        let generation = self.core.generation();
+        self.core.stop();
+        let _ = self.completed.send(Completion {
+            generation,
+            result: Ok(text.into()),
+        });
+        if duplicate {
+            let _ = self.completed.send(Completion {
+                generation,
+                result: Ok("Late synthetic duplicate".into()),
+            });
+        }
     }
     fn finish(&mut self) {
         self.control.store(1, Ordering::Release);
@@ -998,6 +1050,13 @@ impl Shell {
                         Ok(outcome) => self.show(outcome.message()),
                         Err(reason) => self.show(reason.message()),
                     }
+                }
+                "fixture_complete" if self.local_fixture => {
+                    self.simulate_completion(LOCAL_FIXTURE_TEXT, false)
+                }
+                "fixture_empty" if self.local_fixture => self.simulate_completion("", false),
+                "fixture_duplicate" if self.local_fixture => {
+                    self.simulate_completion(LOCAL_FIXTURE_TEXT, true)
                 }
                 "local_restore" if self.core.phase == Phase::Idle && !self.remote_mode => {
                     self.restore_local_clipboard();
