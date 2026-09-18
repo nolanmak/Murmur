@@ -33,6 +33,7 @@ use std::{
 };
 use tray_icon::{TrayIcon, TrayIconBuilder};
 type CF = *const c_void;
+const LOCAL_FIXTURE_TEXT: &str = "Murmur fixture Café 👋";
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
     fn AXIsProcessTrusted() -> bool;
@@ -614,6 +615,7 @@ struct Shell {
     clipboard_lease: crate::remote_clipboard::Lease,
     local_lease: LocalLease,
     local_fixture: bool,
+    fixture_target: Option<Focus>,
     clipboard_attempt: Option<crate::remote::Attempt>,
     selected_remote: crate::remote_review::Selection<RustDeskWindow>,
 }
@@ -651,6 +653,18 @@ impl Shell {
             MenuItem::with_id("remote_restore", "Restore previous clipboard…", true, None);
         let fixture_paste =
             MenuItem::with_id("fixture_paste", "Insert synthetic test phrase", true, None);
+        let fixture_capture = MenuItem::with_id(
+            "fixture_capture",
+            "Capture synthetic test target",
+            true,
+            None,
+        );
+        let fixture_send = MenuItem::with_id(
+            "fixture_send",
+            "Insert at captured synthetic target",
+            true,
+            None,
+        );
         let local_restore = MenuItem::with_id(
             "local_restore",
             "Restore clipboard from local paste…",
@@ -675,6 +689,8 @@ impl Shell {
         }
         if local_fixture {
             menu.append(&fixture_paste).map_err(|e| e.to_string())?;
+            menu.append(&fixture_capture).map_err(|e| e.to_string())?;
+            menu.append(&fixture_send).map_err(|e| e.to_string())?;
         }
         let tray = TrayIconBuilder::new()
             .with_title("Control")
@@ -707,7 +723,7 @@ impl Shell {
             indicator: Indicator::default(),
             warning: None,
             last: if local_fixture {
-                "Murmur fixture Café 👋".into()
+                LOCAL_FIXTURE_TEXT.into()
             } else if remote_fixture {
                 "Synthetic dictation test — Café 👋".into()
             } else {
@@ -727,6 +743,7 @@ impl Shell {
             clipboard_lease: Default::default(),
             local_lease: LocalLease::default(),
             local_fixture,
+            fixture_target: None,
             clipboard_attempt: None,
             selected_remote: Default::default(),
         })
@@ -941,7 +958,42 @@ impl Shell {
                 "fixture_paste" if self.local_fixture && self.core.phase == Phase::Idle => {
                     let result = Focus::current()
                         .map_err(|_| DeliveryFailure::MissingTarget)
-                        .and_then(|target| target.insert(&self.last, &mut self.local_lease));
+                        .and_then(|target| {
+                            target.insert(LOCAL_FIXTURE_TEXT, &mut self.local_lease)
+                        });
+                    match result {
+                        Ok(outcome) => self.show(outcome.message()),
+                        Err(reason) => self.show(reason.message()),
+                    }
+                }
+                "fixture_capture" if self.local_fixture && self.core.phase == Phase::Idle => {
+                    match Focus::current() {
+                        Ok(target) if target.target.secure => {
+                            self.fixture_target = None;
+                            self.show(DeliveryFailure::SecureTarget.message());
+                        }
+                        Ok(target) if !target.target.editable => {
+                            self.fixture_target = None;
+                            self.show(DeliveryFailure::UnsupportedTarget.message());
+                        }
+                        Ok(target) => {
+                            self.fixture_target = Some(target);
+                            self.show("Synthetic target captured");
+                        }
+                        Err(_) => {
+                            self.fixture_target = None;
+                            self.show(DeliveryFailure::MissingTarget.message());
+                        }
+                    }
+                }
+                "fixture_send" if self.local_fixture && self.core.phase == Phase::Idle => {
+                    let result = self
+                        .fixture_target
+                        .take()
+                        .ok_or(DeliveryFailure::MissingTarget)
+                        .and_then(|target| {
+                            target.insert(LOCAL_FIXTURE_TEXT, &mut self.local_lease)
+                        });
                     match result {
                         Ok(outcome) => self.show(outcome.message()),
                         Err(reason) => self.show(reason.message()),
