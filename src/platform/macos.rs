@@ -3,7 +3,7 @@
 use crate::{
     core::{Dictation, Phase},
     indicator::{self, Indicator, Look},
-    insertion::{Target, allowed},
+    insertion::{Target, allowed, same_window},
     local_clipboard::Lease as LocalLease,
     local_delivery::{Failure as DeliveryFailure, Outcome as DeliveryOutcome},
     platform::macos_local_clipboard::MacLocalBoard,
@@ -162,7 +162,11 @@ impl Focus {
         let now = Self::current().map_err(|_| DeliveryFailure::TargetChanged)?;
         if !allowed(&self.target, &now.target, text)
             || !unsafe { CFEqual(self.element.0, now.element.0) }
-            || matches!((&self.window, &now.window), (Some(before), Some(after)) if !unsafe { CFEqual(before.0, after.0) })
+            || !same_window(
+                self.window.as_ref(),
+                now.window.as_ref(),
+                |before, after| unsafe { CFEqual(before.0, after.0) },
+            )
         {
             return Err(if now.target.secure {
                 DeliveryFailure::SecureTarget
@@ -202,7 +206,11 @@ fn paste_text(
         };
         if !allowed(&focus.target, &now.target, text)
             || !unsafe { CFEqual(focus.element.0, now.element.0) }
-            || matches!((&focus.window, &now.window), (Some(before), Some(after)) if !unsafe { CFEqual(before.0, after.0) })
+            || !same_window(
+                focus.window.as_ref(),
+                now.window.as_ref(),
+                |before, after| unsafe { CFEqual(before.0, after.0) },
+            )
         {
             return false;
         }

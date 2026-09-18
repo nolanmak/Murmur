@@ -37,7 +37,8 @@ pub fn same_window<T>(
 ) -> bool {
     match (before, after) {
         (Some(before), Some(after)) => equal(before, after),
-        _ => true,
+        (None, None) => true,
+        _ => false,
     }
 }
 #[derive(Clone, Debug)]
