@@ -70,9 +70,36 @@ fn main() {
         Err(Failure::UnsupportedClipboard)
     ));
     assert_eq!(board.changeCount(), revision);
+
+    // A type with no materialized data must be rejected before the board is cleared.
+    board.clearContents();
+    unsafe {
+        board.declareTypes_owner(&NSArray::from_slice(&[&*plain]), None);
+    }
+    let unavailable_revision = board.changeCount();
+    assert!(matches!(
+        adapter.snapshot(),
+        Err(Failure::UnsupportedClipboard)
+    ));
+    assert_eq!(board.changeCount(), unavailable_revision);
+
+    // A materialized promised type is still unsafe to preserve as a plain item.
+    board.clearContents();
+    let promised = NSPasteboardItem::new();
+    let promised_type = NSString::from_str("com.apple.pasteboard.promised-file-url");
+    assert!(promised.setString_forType(&NSString::from_str("synthetic"), &promised_type));
+    let promised_ref: [&ProtocolObject<dyn NSPasteboardWriting>; 1] =
+        [ProtocolObject::from_ref(&*promised)];
+    assert!(board.writeObjects(&NSArray::from_slice(&promised_ref)));
+    let promised_revision = board.changeCount();
+    assert!(matches!(
+        adapter.snapshot(),
+        Err(Failure::UnsupportedClipboard)
+    ));
+    assert_eq!(board.changeCount(), promised_revision);
     board.clearContents();
     println!(
-        "local native clipboard empty/single/multi-item, bounds and newer owner checks passed"
+        "local native clipboard empty/single/multi-item, bounds, unavailable/promised data and newer owner checks passed"
     );
 }
 #[cfg(not(target_os = "macos"))]
