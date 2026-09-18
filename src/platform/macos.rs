@@ -775,6 +775,7 @@ impl Shell {
                 return;
             }
             Ok(_) if !self.remote_mode => {
+                self.cancel();
                 self.show(DeliveryFailure::UnsupportedTarget.message());
                 return;
             }
