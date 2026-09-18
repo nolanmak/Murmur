@@ -9,10 +9,14 @@ struct FakeBoard {
     fail_write: bool,
     fail_dispatch: bool,
     mutate_before_replace: bool,
+    unavailable_snapshot: bool,
     dispatches: usize,
 }
 impl Board for FakeBoard {
     fn snapshot(&mut self) -> Result<Snapshot, Failure> {
+        if self.unavailable_snapshot {
+            return Err(Failure::UnsupportedClipboard);
+        }
         Ok(Snapshot {
             revision: Revision(self.revision),
             items: self.items.clone(),
@@ -143,4 +147,42 @@ fn oversized_single_item_is_rejected_before_replacement() {
     );
     assert_eq!(board.revision, 0);
     assert_eq!(board.dispatches, 0);
+}
+
+#[test]
+fn unavailable_or_too_many_formats_never_mutate_clipboard() {
+    let mut board = FakeBoard {
+        items: vec![text("old")],
+        unavailable_snapshot: true,
+        ..Default::default()
+    };
+    let mut lease = Lease::default();
+    assert_eq!(
+        lease.send(&mut board, "test"),
+        Err(Failure::UnsupportedClipboard)
+    );
+    assert_eq!(board.revision, 0);
+    board.unavailable_snapshot = false;
+    board.items[0].formats = (0..33).map(|_| text("x").formats.remove(0)).collect();
+    assert_eq!(
+        lease.send(&mut board, "test"),
+        Err(Failure::UnsupportedClipboard)
+    );
+    assert_eq!(board.revision, 0);
+}
+#[test]
+fn aggregate_size_limit_rejects_three_individually_supported_items() {
+    let mut board = FakeBoard {
+        items: vec![text("a"), text("b"), text("c")],
+        ..Default::default()
+    };
+    for item in &mut board.items {
+        item.formats[0].data = vec![b'x'; 6 * 1024 * 1024];
+    }
+    let mut lease = Lease::default();
+    assert_eq!(
+        lease.send(&mut board, "test"),
+        Err(Failure::UnsupportedClipboard)
+    );
+    assert_eq!(board.revision, 0);
 }
