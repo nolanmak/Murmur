@@ -52,3 +52,7 @@ codegen-units = 1
 [[test]]
 name = "macos_clipboard"
 harness = false
+
+[[test]]
+name = "local_pasteboard"
+harness = false

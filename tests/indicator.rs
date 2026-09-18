@@ -216,3 +216,25 @@ fn notices_keep_the_recovery_hint() {
         assert!(short.chars().count() <= NOTICE_CHARS, "{short}");
     }
 }
+
+#[test]
+fn local_delivery_notice_expires_while_permission_warning_remains_independent() {
+    use murmur::{
+        core::Phase,
+        indicator::{Indicator, Look, NOTICE_MS},
+    };
+    let mut indicator = Indicator::default();
+    indicator.message(
+        "Transcript ready · clipboard format unsupported. Use Copy Last Transcript",
+        100,
+    );
+    assert_eq!(indicator.look(100, Phase::Idle, false, false), Look::Notice);
+    assert_eq!(
+        indicator.look(100 + NOTICE_MS, Phase::Idle, false, false),
+        Look::Idle
+    );
+    assert_eq!(
+        indicator.look(100 + NOTICE_MS, Phase::Idle, false, true),
+        Look::Warning
+    );
+}
