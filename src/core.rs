@@ -6,6 +6,12 @@ pub enum Phase {
     Recording,
     Processing,
 }
+#[derive(Debug, PartialEq, Eq)]
+pub enum CompletionEffect {
+    Transcript(String),
+    Empty,
+    Error(String),
+}
 #[derive(Debug, Default)]
 pub struct Dictation {
     pub phase: Phase,
@@ -57,6 +63,22 @@ impl Dictation {
     }
     pub fn accepts(&self, id: u64) -> bool {
         self.generation == id && self.phase == Phase::Processing
+    }
+    pub fn complete(
+        &mut self,
+        id: u64,
+        result: Result<String, String>,
+    ) -> Option<CompletionEffect> {
+        if !self.accepts(id) {
+            return None;
+        }
+        let effect = match result {
+            Ok(text) if !text.trim().is_empty() => CompletionEffect::Transcript(text),
+            Ok(_) => CompletionEffect::Empty,
+            Err(error) => CompletionEffect::Error(error),
+        };
+        self.finish();
+        Some(effect)
     }
     pub fn stop(&mut self) -> bool {
         if self.phase == Phase::Recording {

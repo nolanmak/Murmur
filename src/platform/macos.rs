@@ -1,7 +1,7 @@
 //! macOS-only boundary: AppKit shell, Control event tap and accessibility insertion.
 //! All retained CF/AX objects stay on the main thread. Workers receive no UI pointers.
 use crate::{
-    core::{Dictation, Phase},
+    core::{CompletionEffect, Dictation, Phase},
     indicator::{self, Indicator, Look},
     insertion::{Target, allowed, same_window},
     local_clipboard::Lease as LocalLease,
@@ -1034,12 +1034,11 @@ impl Shell {
             self.finish();
         }
         while let Ok(done) = self.result.try_recv() {
-            if done.generation != self.core.generation() {
+            let Some(effect) = self.core.complete(done.generation, done.result) else {
                 continue;
-            }
-            let accepts = self.core.accepts(done.generation);
-            match done.result {
-                Ok(text) if accepts && !text.trim().is_empty() => {
+            };
+            match effect {
+                CompletionEffect::Transcript(text) => {
                     eprintln!(
                         "transcription complete: {} characters",
                         text.chars().count()
@@ -1059,10 +1058,9 @@ impl Shell {
                         }
                     }
                 }
-                Ok(_) => self.show("No speech detected"),
-                Err(e) => self.show(&e),
+                CompletionEffect::Empty => self.show("No speech detected"),
+                CompletionEffect::Error(e) => self.show(&e),
             }
-            self.core.finish();
             self.focus = None;
         }
         if self.retry_at.elapsed() > Duration::from_secs(3) {
