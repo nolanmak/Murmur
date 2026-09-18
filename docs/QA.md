@@ -17,7 +17,13 @@ Run these through the built .app, with harmless text and an approved provider ke
 - [ ] Switching app/field during recording or processing blocks insertion.
 - [ ] Secure/password fields and unsupported AX targets are blocked.
 - [ ] Multiline/control characters never submit a form or terminal command automatically.
-- [ ] Clipboard is unchanged unless Copy Last Transcript is explicitly chosen.
+- [ ] AXSelectedText insertion leaves the clipboard unchanged. Terminal/browser
+      paste preserves supported items for explicit restoration; a newer clipboard
+      owner is never overwritten.
+- [ ] With a supported multi-item clipboard, synthetic Unicode text appears exactly
+      once in Ghostty and Apple Terminal without Enter; record iTerm2 separately.
+- [ ] Delayed terminal paste, clipboard restoration, concurrent copy, and
+      unsupported-format manual recovery are verified against disposable inputs.
 - [ ] Default mic/Bluetooth changes and unplugging stop or report an error safely.
 - [ ] Network disconnect, invalid key and delayed end-of-stream produce bounded errors.
 - [ ] 120-second limit, Quit and process exit release the microphone.
