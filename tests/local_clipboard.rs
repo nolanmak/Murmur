@@ -121,6 +121,24 @@ fn pending_recovery_blocks_next_write_and_oversize_snapshot_leaves_board_untouch
 }
 
 #[test]
+fn an_external_clipboard_change_releases_the_old_lease_for_the_next_paste() {
+    let mut board = FakeBoard {
+        items: vec![text("old")],
+        ..Default::default()
+    };
+    let mut lease = Lease::default();
+    lease.send(&mut board, "first").unwrap();
+    board.revision += 1;
+    board.items = vec![text("copied elsewhere")];
+
+    lease.send(&mut board, "second").unwrap();
+
+    assert!(board.items == vec![text("second")]);
+    assert_eq!(board.dispatches, 2);
+    assert!(lease.pending());
+}
+
+#[test]
 fn revision_change_before_replacement_preserves_existing_items() {
     let mut board = FakeBoard {
         items: vec![text("old")],

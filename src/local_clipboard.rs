@@ -71,10 +71,16 @@ impl Lease {
         self.saved.is_some()
     }
     pub fn send(&mut self, board: &mut impl Board, text: &str) -> Result<(), Failure> {
-        if self.pending() {
-            return Err(Failure::PendingRestore);
-        }
         let before = board.snapshot()?;
+        if let Some((owned, _)) = self.saved.as_ref() {
+            if *owned == before.revision {
+                return Err(Failure::PendingRestore);
+            }
+            // The clipboard has a newer owner. Its contents must win, so the
+            // old restoration lease is no longer actionable and can be
+            // released before starting this new paste.
+            self.saved = None;
+        }
         if !within_bounds(&before.items) {
             return Err(Failure::UnsupportedClipboard);
         }
