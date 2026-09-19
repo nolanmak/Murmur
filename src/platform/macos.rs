@@ -600,7 +600,7 @@ struct Shell {
     pill: Pill,
     indicator: Indicator,
     warning: Option<&'static str>,
-    last: String,
+    last: crate::transcript::Latest,
     started: Instant,
     retry_at: Instant,
     smoke: bool,
@@ -748,7 +748,7 @@ impl Shell {
             } else if remote_fixture {
                 "Synthetic dictation test — Café 👋".into()
             } else {
-                String::new()
+                crate::transcript::Latest::default()
             },
             started: Instant::now(),
             retry_at: Instant::now(),
@@ -813,6 +813,10 @@ impl Shell {
         }
     }
     fn start(&mut self) {
+        // A new user attempt supersedes any old remote-review/copy action.
+        // Clear it before preflight so a failed attempt cannot leave a stale
+        // "Transcript ready" action that appears to belong to this attempt.
+        self.last.begin();
         let focus = match self.preflight_focus() {
             Ok(focus) => focus,
             Err(reason) => {
@@ -869,7 +873,7 @@ impl Shell {
         self.control = Arc::new(AtomicU8::new(0));
         self.receiving = Arc::new(AtomicBool::new(false));
         self.started = Instant::now();
-        self.last.clear();
+        self.last.begin();
         self.indicator.clear();
         self.status(status);
     }
@@ -1102,7 +1106,7 @@ impl Shell {
                         "transcription complete: {} characters",
                         text.chars().count()
                     );
-                    self.last = text.clone();
+                    self.last.set(text.clone());
                     if self.remote_mode {
                         self.show("Transcript ready · Review for RustDesk…");
                     } else {
