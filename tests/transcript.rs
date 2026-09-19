@@ -1,4 +1,19 @@
 use murmur::transcript::Transcript;
+
+#[test]
+fn starting_a_new_attempt_clears_the_previous_recovery_transcript() {
+    let mut latest = murmur::transcript::Latest::from("old remote transcript");
+    latest.begin();
+    assert!(latest.is_empty());
+}
+
+#[test]
+fn a_completed_attempt_replaces_the_previous_recovery_transcript() {
+    let mut latest = murmur::transcript::Latest::from("old remote transcript");
+    latest.begin();
+    latest.set("new transcript");
+    assert_eq!(latest.as_ref(), "new transcript");
+}
 #[test]
 fn partial_revisions_are_replaced_and_finals_are_not_duplicated() {
     let mut t = Transcript::default();
