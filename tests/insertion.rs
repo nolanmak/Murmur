@@ -1,5 +1,29 @@
 use murmur::insertion::{Target, allowed};
 #[test]
+fn messages_composer_uses_paste_even_when_ax_write_reports_success() {
+    use murmur::insertion::native_paste_surface;
+    for role in ["AXTextField", "AXTextArea"] {
+        assert!(native_paste_surface("com.apple.MobileSMS", role, ""));
+    }
+    for role in ["AXButton", "AXGroup", "AXStaticText", "AXSecureTextField"] {
+        assert!(!native_paste_surface("com.apple.MobileSMS", role, ""));
+    }
+    assert!(!native_paste_surface(
+        "com.apple.MobileSMS",
+        "AXTextField",
+        "AXSecureTextField"
+    ));
+    assert!(!native_paste_surface(
+        "com.apple.MobileSMS",
+        "AXTextField",
+        "AXPasswordField"
+    ));
+    assert!(!native_paste_surface("com.apple.Notes", "AXTextField", ""));
+    assert!(native_paste_surface("com.google.Chrome", "AXTextArea", ""));
+    assert!(native_paste_surface("com.apple.Terminal", "AXTextArea", ""));
+}
+
+#[test]
 fn browser_editors_and_address_bars_use_native_paste() {
     use murmur::insertion::browser_surface;
     assert!(browser_surface("com.google.Chrome", "AXComboBox", ""));

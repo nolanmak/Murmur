@@ -158,8 +158,7 @@ impl Focus {
             .and_then(|app| app.bundleIdentifier())
             .map(|id| id.to_string())
             .unwrap_or_default();
-        let paste_only = crate::insertion::terminal_surface(&bundle, &role, &subrole)
-            || crate::insertion::browser_surface(&bundle, &role, &subrole);
+        let paste_only = crate::insertion::native_paste_surface(&bundle, &role, &subrole);
         let editable = crate::insertion::text_role(&role, &subrole) || paste_only;
         eprintln!("focus role={role} editable={editable} secure={secure} paste={paste_only}");
         let window = attribute(element.0, "AXWindow");

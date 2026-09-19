@@ -1,4 +1,10 @@
 //! Native implementations must retain and compare the actual AX element too.
+pub fn native_paste_surface(bundle: &str, role: &str, subrole: &str) -> bool {
+    terminal_surface(bundle, role, subrole) || browser_surface(bundle, role, subrole)
+        // Messages can acknowledge AXSelectedText without updating its composer.
+        || (bundle == "com.apple.MobileSMS" && text_role(role, subrole))
+}
+
 pub fn browser_surface(bundle: &str, role: &str, subrole: &str) -> bool {
     matches!(
         bundle,

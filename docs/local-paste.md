@@ -1,6 +1,6 @@
 # Local macOS paste and clipboard recovery
 
-Murmur writes directly into text fields that accept an Accessibility selected-text write. Browsers and terminals use a temporary clipboard item followed by Command-V. Dispatching that shortcut cannot prove the target consumed the text, so the app reports **Paste sent · verify text in target**. It never sends Enter or runs the transcript as a command.
+Murmur writes directly into text fields that accept an Accessibility selected-text write. Browsers, terminals and Messages use a temporary clipboard item followed by Command-V. Messages can acknowledge a direct Accessibility write without updating its composer. Dispatching the paste shortcut cannot prove the target consumed the text, so the app reports **Paste sent · verify text in target**. It never sends Enter or runs the transcript as a command.
 
 Before a local paste, Murmur materializes supported clipboard items in order, retaining each type identifier and its bytes. The limits are 32 items, 32 formats per item, 8 MiB per item and 16 MiB total. Unavailable data and promised formats are unsupported. In those cases, transcription remains available through **Copy Last Transcript (replaces clipboard)**, and the clipboard is left alone. The explicit copy action can replace clipboard contents; use it only after considering what is currently copied.
 
