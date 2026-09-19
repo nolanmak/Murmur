@@ -39,7 +39,10 @@ paste profile reset on app restart; no transcript or destination is saved.
   simple text locally, then retry. Multiple items, unknown formats, and large or
   unavailable clipboard representations are rejected instead of discarded.
 - Restore the pending previous clipboard before copying another reviewed
-  transcript. If a write partially fails, the recovery snapshot remains available.
+  transcript while Murmur still owns it. If another app or user copy has
+  replaced it, Murmur detects that revision on the next review and releases
+  the stale recovery lease without overwriting the newer copy. If a write
+  partially fails, the recovery snapshot remains available.
 - A local copy is not evidence of remote delivery. Clipboard permissions, a locked
   host, a disconnected session, or unsupported host configuration may prevent
   transfer; this fallback cannot distinguish them automatically.

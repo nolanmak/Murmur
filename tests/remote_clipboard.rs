@@ -218,6 +218,24 @@ fn stale_attempt_and_duplicate_cleanup_cannot_restore_another_attempt() {
     );
     assert_eq!(payload(&c), b"second");
 }
+
+#[test]
+fn an_external_clipboard_change_releases_the_old_remote_lease_for_retry() {
+    let mut c = original();
+    let mut lease = Lease::default();
+    lease.share(&mut c, Attempt(1), "first").unwrap();
+    c.revision += 1;
+    c.formats = vec![Format {
+        name: "public.utf8-plain-text".into(),
+        bytes: b"copied elsewhere".to_vec(),
+    }];
+
+    lease.share(&mut c, Attempt(2), "second").unwrap();
+
+    assert_eq!(payload(&c), b"second");
+    assert_eq!(c.writes, 2);
+    assert!(lease.pending());
+}
 #[test]
 fn partial_copy_failure_keeps_recovery_data_and_never_reports_success() {
     let mut c = Fake {

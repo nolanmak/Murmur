@@ -66,13 +66,18 @@ impl Lease {
         id: Attempt,
         text: &str,
     ) -> Result<(), Error> {
-        if self.pending() {
-            return Err(Error::Busy);
-        }
         if !crate::remote::valid_text(text) {
             return Err(Error::InvalidText);
         }
         let snapshot = clipboard.snapshot()?;
+        if let Some(saved) = self.saved.as_ref() {
+            if saved.owned == snapshot.revision {
+                return Err(Error::Busy);
+            }
+            // A newer clipboard owner supersedes our old remote-copy lease.
+            // Do not attempt to restore over that newer content.
+            self.saved = None;
+        }
         match clipboard.replace(snapshot.revision, text) {
             Ok(owned) => {
                 self.saved = Some(Saved {
