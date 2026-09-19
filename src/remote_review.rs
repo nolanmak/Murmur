@@ -89,3 +89,8 @@ impl Review {
 pub fn rustdesk_bundle(bundle: &str) -> bool {
     matches!(bundle, "com.carriez.rustdesk" | "com.carriez.flutterHbb")
 }
+
+/// Whether this attempt should capture for remote review instead of local AX insertion.
+pub fn recording_destination(manual_remote: bool, rustdesk_focused: bool) -> bool {
+    manual_remote || rustdesk_focused
+}

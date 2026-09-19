@@ -61,6 +61,7 @@ unsafe extern "C" {
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
     fn CFRelease(value: CF);
+    static kCFBooleanTrue: CF;
     fn CFEqual(a: CF, b: CF) -> bool;
     fn CFHash(value: CF) -> usize;
     fn CFStringCreateWithCString(allocator: CF, text: *const c_char, encoding: u32) -> CF;
@@ -119,7 +120,27 @@ impl Focus {
             return Err("Enable Accessibility in System Settings, then relaunch".into());
         }
         let system = Owned(unsafe { AXUIElementCreateSystemWide() });
+        let focused_app = attribute(system.0, "AXFocusedApplication");
+        if let Some(app) = focused_app.as_ref() {
+            let mut pid = 0;
+            unsafe { AXUIElementGetPid(app.0, &mut pid) };
+            let bundle = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+                .and_then(|app| app.bundleIdentifier())
+                .map(|id| id.to_string())
+                .unwrap_or_default();
+            if crate::insertion::browser_surface(&bundle, "AXTextField", "") {
+                let key = cfstr("AXEnhancedUserInterface");
+                unsafe { AXUIElementSetAttributeValue(app.0, key.0, kCFBooleanTrue) };
+                let key = cfstr("AXManualAccessibility");
+                unsafe { AXUIElementSetAttributeValue(app.0, key.0, kCFBooleanTrue) };
+            }
+        }
         let element = attribute(system.0, "AXFocusedUIElement")
+            .or_else(|| {
+                focused_app
+                    .as_ref()
+                    .and_then(|app| attribute(app.0, "AXFocusedUIElement"))
+            })
             .ok_or("Click an editable text field first")?;
         let mut pid = 0;
         unsafe { AXUIElementGetPid(element.0, &mut pid) };
@@ -608,6 +629,8 @@ struct Shell {
     launched: Instant,
     receiving: Arc<AtomicBool>,
     remote_mode: bool,
+    recording_remote: bool,
+    recording_remote_target: Option<RustDeskWindow>,
     remote_toggle: MenuItem,
     remote_profile: MenuItem,
     profile: crate::remote::Profile,
@@ -757,6 +780,8 @@ impl Shell {
             launched: Instant::now(),
             receiving: Arc::new(AtomicBool::new(false)),
             remote_mode: remote_fixture,
+            recording_remote: remote_fixture,
+            recording_remote_target: None,
             remote_toggle,
             remote_profile,
             profile: crate::remote::Profile::Mac,
@@ -800,7 +825,7 @@ impl Shell {
     fn ready(&self) -> &'static str {
         match self.warning {
             Some(warning) => warning,
-            None if self.remote_mode => "Remote mode: use Start/Stop in menu",
+            None if self.remote_mode => "Hold Control to record for remote review",
             None => "Hold Control to dictate",
         }
     }
@@ -813,6 +838,11 @@ impl Shell {
         }
     }
     fn start(&mut self) {
+        self.recording_remote_target = RustDeskWindow::selected();
+        self.recording_remote = crate::remote_review::recording_destination(
+            self.remote_mode,
+            self.recording_remote_target.is_some(),
+        );
         // A new user attempt supersedes any old remote-review/copy action.
         // Clear it before preflight so a failed attempt cannot leave a stale
         // "Transcript ready" action that appears to belong to this attempt.
@@ -861,6 +891,9 @@ impl Shell {
         });
     }
     fn preflight_focus(&self) -> Result<Option<Focus>, DeliveryFailure> {
+        if self.recording_remote_target.is_some() {
+            return Ok(None);
+        }
         match Focus::current() {
             Ok(f) if !f.target.secure && f.target.editable => Ok((!self.remote_mode).then_some(f)),
             Ok(f) if f.target.secure => Err(DeliveryFailure::SecureTarget),
@@ -944,10 +977,6 @@ impl Shell {
         }
         while let Ok(event) = self.input.try_recv() {
             match event {
-                Input::HotkeyDown | Input::HotkeyAbort if self.remote_mode => {}
-                Input::Flags(_, _) if self.remote_mode => {
-                    self.show("Remote mode: use Start/Stop in menu")
-                }
                 Input::HotkeyDown => {
                     let now = self.now();
                     self.indicator.arm(now)
@@ -987,7 +1016,7 @@ impl Shell {
                         "Remote review mode: Off"
                     });
                     if self.remote_mode {
-                        self.show("Remote mode: use Start/Stop in menu");
+                        self.show("Hold Control to record for remote review");
                     } else {
                         self.indicator.clear();
                         self.status(self.ready());
@@ -1005,7 +1034,7 @@ impl Shell {
                         profile_name(self.profile)
                     ));
                 }
-                "remote_review" if self.core.phase == Phase::Idle && self.remote_mode => {
+                "remote_review" if self.core.phase == Phase::Idle && self.recording_remote => {
                     self.review_remote()
                 }
                 "remote_restore" if self.core.phase == Phase::Idle => {
@@ -1072,7 +1101,7 @@ impl Shell {
                     self.finish();
                 }
                 "cancel" => self.cancel(),
-                "copy" if self.remote_mode && self.core.phase == Phase::Idle => {
+                "copy" if self.recording_remote && self.core.phase == Phase::Idle => {
                     self.review_remote()
                 }
                 "copy" if !self.last.is_empty() => {
@@ -1107,7 +1136,9 @@ impl Shell {
                         text.chars().count()
                     );
                     self.last.set(text.clone());
-                    if self.remote_mode {
+                    if self.recording_remote_target.is_some() {
+                        self.copy_automatic_remote(&text);
+                    } else if self.recording_remote {
                         self.show("Transcript ready · Review for RustDesk…");
                     } else {
                         let result = self
@@ -1205,6 +1236,30 @@ impl RustDeskWindow {
     }
 }
 impl Shell {
+    fn copy_automatic_remote(&mut self, text: &str) {
+        let Some(target) = self.recording_remote_target.take() else {
+            return;
+        };
+        if target.revalidate() != Some(target.token) {
+            self.show("Transcript ready · RustDesk focus changed. Review for RustDesk");
+            return;
+        }
+        let mtm = MainThreadMarker::new().expect("shell main thread");
+        let mut clipboard =
+            super::macos_clipboard::MacClipboard::new(NSPasteboard::generalPasteboard(), mtm);
+        let attempt = crate::remote::Attempt(self.core.generation());
+        let result = self.clipboard_lease.share(&mut clipboard, attempt, text);
+        if self.clipboard_lease.pending() {
+            self.clipboard_attempt = Some(attempt);
+        }
+        match result {
+            Ok(()) => self.show("Fresh transcript copied · paste in RustDesk"),
+            Err(crate::remote_clipboard::Error::InvalidText) => {
+                self.show("Remote transcript must be a single line · Review for RustDesk")
+            }
+            Err(_) => self.show("Remote copy failed · Review for RustDesk or restore clipboard"),
+        }
+    }
     fn observe_remote_window(&mut self) {
         use crate::remote_review::Foreground;
         if self.last.is_empty() {

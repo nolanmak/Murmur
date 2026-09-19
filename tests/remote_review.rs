@@ -1,4 +1,11 @@
 use murmur::remote_review::*;
+
+#[test]
+fn focused_rustdesk_records_without_a_manual_mode_toggle() {
+    assert!(recording_destination(false, true));
+    assert!(!recording_destination(false, false));
+    assert!(recording_destination(true, false));
+}
 fn window() -> Option<Window> {
     Some(Window {
         process: 42,

@@ -1,5 +1,16 @@
 # RustDesk dictation: manual review preview
 
+## Automatic recording in a focused RustDesk window
+
+Hold Control with the intended RustDesk remote window focused to record on the
+Mac; release to finish and copy the fresh transcript. No mode toggle is needed.
+Focus is checked again before copying. Paste manually into the remote terminal
+with its normal shortcut. Murmur cannot observe the remote text field or confirm
+delivery. Clipboard sync may share text with other connected sessions, so keep
+only the intended session connected. The Control modifier still reaches RustDesk.
+Local browser and terminal fields continue using local insertion automatically.
+The manual review controls below remain available as an alternative.
+
 This development feature keeps speech capture and provider credentials on the
 local Mac. **Automatic remote paste is not available yet.** The current fallback
 copies reviewed text; you perform the paste in RustDesk yourself.
