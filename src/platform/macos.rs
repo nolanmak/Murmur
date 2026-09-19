@@ -1228,10 +1228,6 @@ impl Shell {
     }
     fn review_remote(&mut self) {
         use crate::remote_review::Error;
-        if self.clipboard_lease.pending() {
-            self.show("Restore the previous clipboard before copying another transcript");
-            return;
-        }
         self.observe_remote_window();
         let selected = self.selected_remote.take();
         let id = match self

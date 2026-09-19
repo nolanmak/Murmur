@@ -58,6 +58,7 @@ struct Saved {
     id: Attempt,
     owned: Revision,
     formats: Vec<Format>,
+    reusable: bool,
 }
 impl Lease {
     pub fn share(
@@ -71,27 +72,41 @@ impl Lease {
         }
         let snapshot = clipboard.snapshot()?;
         if let Some(saved) = self.saved.as_ref() {
-            if saved.owned == snapshot.revision {
+            if saved.owned == snapshot.revision && (!saved.reusable || saved.id == id) {
                 return Err(Error::Busy);
             }
             // A newer clipboard owner supersedes our old remote-copy lease.
             // Do not attempt to restore over that newer content.
-            self.saved = None;
+            if saved.owned != snapshot.revision {
+                self.saved = None;
+            }
         }
         match clipboard.replace(snapshot.revision, text) {
             Ok(owned) => {
+                let formats = self
+                    .saved
+                    .take()
+                    .map(|s| s.formats)
+                    .unwrap_or(snapshot.formats);
                 self.saved = Some(Saved {
                     id,
                     owned,
-                    formats: snapshot.formats,
+                    formats,
+                    reusable: true,
                 });
                 Ok(())
             }
             Err(WriteFailure::Owned(owned)) => {
+                let formats = self
+                    .saved
+                    .take()
+                    .map(|s| s.formats)
+                    .unwrap_or(snapshot.formats);
                 self.saved = Some(Saved {
                     id,
                     owned,
-                    formats: snapshot.formats,
+                    formats,
+                    reusable: false,
                 });
                 Err(Error::WriteFailed)
             }
@@ -111,6 +126,7 @@ impl Lease {
         if reason.is_none() {
             return Ok(Recovery::Retained);
         }
+        saved.reusable = false;
         match clipboard.restore(saved.owned, &saved.formats) {
             Ok(_) => {
                 self.saved = None;

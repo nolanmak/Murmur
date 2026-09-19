@@ -65,6 +65,7 @@ fn within_bounds(items: &[Item]) -> bool {
 #[derive(Default)]
 pub struct Lease {
     saved: Option<(Revision, Vec<Item>)>,
+    reusable: bool,
 }
 impl Lease {
     pub fn pending(&self) -> bool {
@@ -73,13 +74,15 @@ impl Lease {
     pub fn send(&mut self, board: &mut impl Board, text: &str) -> Result<(), Failure> {
         let before = board.snapshot()?;
         if let Some((owned, _)) = self.saved.as_ref() {
-            if *owned == before.revision {
+            if *owned == before.revision && !self.reusable {
                 return Err(Failure::PendingRestore);
             }
             // The clipboard has a newer owner. Its contents must win, so the
             // old restoration lease is no longer actionable and can be
             // released before starting this new paste.
-            self.saved = None;
+            if *owned != before.revision {
+                self.saved = None;
+            }
         }
         if !within_bounds(&before.items) {
             return Err(Failure::UnsupportedClipboard);
@@ -92,21 +95,34 @@ impl Lease {
         }];
         match board.replace(before.revision, &replacement) {
             Ok(owned) => {
-                self.saved = Some((owned, before.items));
+                let original = self
+                    .saved
+                    .take()
+                    .map(|(_, items)| items)
+                    .unwrap_or(before.items);
+                self.saved = Some((owned, original));
             }
             Err(WriteFailure::Owned(owned)) => {
-                self.saved = Some((owned, before.items));
+                let original = self
+                    .saved
+                    .take()
+                    .map(|(_, items)| items)
+                    .unwrap_or(before.items);
+                self.saved = Some((owned, original));
+                self.reusable = false;
                 return Err(Failure::WriteFailed);
             }
             Err(WriteFailure::Changed) => return Err(Failure::Changed),
             Err(WriteFailure::Unchanged) => return Err(Failure::WriteFailed),
         }
-        if !board.dispatch_paste() {
+        self.reusable = board.dispatch_paste();
+        if !self.reusable {
             return Err(Failure::DispatchFailed);
         }
         Ok(())
     }
     pub fn restore(&mut self, board: &mut impl Board) -> Result<(), Failure> {
+        self.reusable = false;
         let (owned, saved) = self.saved.as_ref().ok_or(Failure::PendingRestore)?;
         match board.replace(*owned, saved) {
             Ok(_) => {

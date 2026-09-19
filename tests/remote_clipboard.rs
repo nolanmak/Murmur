@@ -190,7 +190,7 @@ fn stale_attempt_and_duplicate_cleanup_cannot_restore_another_attempt() {
     let mut c = original();
     let mut lease = Lease::default();
     lease.share(&mut c, Attempt(1), "first").unwrap();
-    assert_eq!(lease.share(&mut c, Attempt(2), "second"), Err(Error::Busy));
+    assert_eq!(lease.share(&mut c, Attempt(1), "second"), Err(Error::Busy));
     assert_eq!(
         lease.recover(
             &mut c,
@@ -321,4 +321,21 @@ fn invalid_transcripts_never_reach_the_system_clipboard() {
         );
         assert_eq!(c.writes, 0);
     }
+}
+
+#[test]
+fn consecutive_reviewed_copies_preserve_the_original_recovery_snapshot() {
+    let mut c = original();
+    let mut lease = Lease::default();
+    lease.share(&mut c, Attempt(1), "first").unwrap();
+    lease.share(&mut c, Attempt(2), "second").unwrap();
+    assert_eq!(payload(&c), b"second");
+    assert_eq!(
+        lease.recover(&mut c, Attempt(1), Some(RestoreReason::UserRequested)),
+        Ok(Recovery::Nothing)
+    );
+    lease
+        .recover(&mut c, Attempt(2), Some(RestoreReason::UserRequested))
+        .unwrap();
+    assert_eq!(payload(&c), b"original");
 }

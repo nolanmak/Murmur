@@ -99,18 +99,17 @@ fn newer_copy_is_never_restored_over_and_failed_write_keeps_recovery() {
     assert_eq!(board.dispatches, 0);
 }
 #[test]
-fn pending_recovery_blocks_next_write_and_oversize_snapshot_leaves_board_untouched() {
+fn consecutive_pastes_preserve_original_and_oversize_snapshot_leaves_board_untouched() {
     let mut board = FakeBoard {
         items: vec![text("old")],
         ..Default::default()
     };
     let mut lease = Lease::default();
     lease.send(&mut board, "first").unwrap();
-    assert_eq!(
-        lease.send(&mut board, "second"),
-        Err(Failure::PendingRestore)
-    );
+    lease.send(&mut board, "second").unwrap();
+    assert_eq!(board.dispatches, 2);
     lease.restore(&mut board).unwrap();
+    assert!(board.items == vec![text("old")]);
     board.items = (0..33).map(|_| text("x")).collect();
     let before = board.revision;
     assert_eq!(
