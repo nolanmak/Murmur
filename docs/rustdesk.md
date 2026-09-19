@@ -47,8 +47,10 @@ paste profile reset on app restart; no transcript or destination is saved.
   remained active or that RustDesk did not reconnect inside the same window.
 - If confirmation is unchecked, nothing is copied. Open review again to confirm.
 - If a clipboard cannot be preserved, the transcript remains available. Copy
-  simple text locally, then retry. Multiple items, unknown formats, and large or
-  unavailable clipboard representations are rejected instead of discarded.
+  simple text locally, then retry. Materialized custom formats are preserved
+  alongside text. Multiple items, promised or unavailable representations,
+  more than 32 formats, names longer than 256 bytes, or data exceeding 16 MiB
+  are rejected before replacing the clipboard.
 - A new explicitly reviewed copy can replace the previous successful copy,
   retaining the original clipboard snapshot for optional restoration. Finish
   pasting the previous transcript before reviewing the next one. Failed writes

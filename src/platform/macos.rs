@@ -1254,10 +1254,10 @@ impl Shell {
         }
         match result {
             Ok(()) => self.show("Fresh transcript copied · paste in RustDesk"),
-            Err(crate::remote_clipboard::Error::InvalidText) => {
-                self.show("Remote transcript must be a single line · Review for RustDesk")
+            Err(reason) => {
+                eprintln!("remote_copy reason={reason:?}");
+                self.show(reason.message());
             }
-            Err(_) => self.show("Remote copy failed · Review for RustDesk or restore clipboard"),
         }
     }
     fn observe_remote_window(&mut self) {
@@ -1332,8 +1332,10 @@ impl Shell {
         }
         match result {
             Ok(()) => self.show("Copied · paste manually in RustDesk"),
-            Err(crate::remote_clipboard::Error::Unsupported) => self.show("Clipboard format cannot be preserved; keep transcript and try after copying plain text"),
-            Err(_) => self.show("Copy failed or clipboard changed; use Restore previous clipboard if available"),
+            Err(reason) => {
+                eprintln!("remote_copy reason={reason:?}");
+                self.show(reason.message());
+            }
         }
     }
     fn restore_local_clipboard(&mut self) {

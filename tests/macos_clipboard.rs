@@ -26,7 +26,7 @@ mod native {
     fn native_adapter_round_trips_unicode_and_multiple_materialized_formats() {
         let board = Board::new();
         set(&board.0, "original");
-        let rtf = NSString::from_str("public.rtf");
+        let rtf = NSString::from_str("com.example.materialized-metadata");
         unsafe {
             board.0.addTypes_owner(&NSArray::from_slice(&[&*rtf]), None);
         }
@@ -62,6 +62,10 @@ mod native {
         assert_eq!(
             board.0.stringForType(&text_type()).unwrap().to_string(),
             "original"
+        );
+        assert_eq!(
+            board.0.dataForType(&rtf).unwrap().to_vec(),
+            br"{\rtf1 original}"
         );
         assert_eq!(
             board.0.dataForType(&rtf).unwrap().to_vec(),
@@ -142,7 +146,61 @@ mod native {
         native_adapter_preserves_newer_owner_and_refuses_stale_writes();
         native_adapter_rejects_multiple_items_without_modifying_them();
         native_adapter_restores_an_empty_clipboard();
-        println!("4 native clipboard contracts passed on the main thread");
+        for name in ["com.example.filepromise", &"x".repeat(257)] {
+            let board = Board::new();
+            set(&board.0, "original");
+            let kind = NSString::from_str(name);
+            unsafe {
+                board
+                    .0
+                    .addTypes_owner(&NSArray::from_slice(&[&*kind]), None);
+            }
+            assert!(
+                board
+                    .0
+                    .setData_forType(Some(&NSData::with_bytes(b"fixture")), &kind)
+            );
+            let revision = board.0.changeCount();
+            let mut clipboard =
+                MacClipboard::new(board.0.clone(), objc2::MainThreadMarker::new().unwrap());
+            assert_eq!(
+                Lease::default().share(&mut clipboard, Attempt(1), "fixture"),
+                Err(Error::Unsupported)
+            );
+            assert_eq!(board.0.changeCount(), revision);
+        }
+        println!("Native clipboard custom-format recovery and rejection contracts passed");
+        for oversized in [false, true] {
+            let board = Board::new();
+            set(&board.0, "original");
+            let count = if oversized { 1 } else { 33 };
+            for index in 0..count {
+                let kind = NSString::from_str(&format!("com.example.fixture.{index}"));
+                unsafe {
+                    board
+                        .0
+                        .addTypes_owner(&NSArray::from_slice(&[&*kind]), None);
+                }
+                let bytes = if oversized {
+                    vec![0; 16 * 1024 * 1024 + 1]
+                } else {
+                    vec![0]
+                };
+                assert!(
+                    board
+                        .0
+                        .setData_forType(Some(&NSData::with_bytes(&bytes)), &kind)
+                );
+            }
+            let revision = board.0.changeCount();
+            let mut clipboard =
+                MacClipboard::new(board.0.clone(), objc2::MainThreadMarker::new().unwrap());
+            assert_eq!(
+                Lease::default().share(&mut clipboard, Attempt(1), "fixture"),
+                Err(Error::Unsupported)
+            );
+            assert_eq!(board.0.changeCount(), revision);
+        }
     }
 }
 fn main() {

@@ -64,7 +64,7 @@ impl Clipboard for MacClipboard {
             return Err(Error::Unsupported);
         }
         let kinds = self.board.types().ok_or(Error::Unavailable)?;
-        if kinds.iter().any(|kind| !supported(&kind.to_string())) {
+        if kinds.len() > 32 || kinds.iter().any(|kind| !supported(&kind.to_string())) {
             return Err(Error::Unsupported);
         }
         let mut formats = Vec::new();
@@ -109,18 +109,5 @@ impl Clipboard for MacClipboard {
     }
 }
 fn supported(kind: &str) -> bool {
-    matches!(
-        kind,
-        "public.utf8-plain-text"
-            | "public.utf16-plain-text"
-            | "public.rtf"
-            | "public.html"
-            | "public.png"
-            | "public.tiff"
-            | "public.jpeg"
-            | "NSStringPboardType"
-            | "NeXT Rich Text Format v1.0 pasteboard type"
-            | "public.utf16-external-plain-text"
-            | "CorePasteboardFlavorType 0x75743136"
-    )
+    !kind.is_empty() && kind.len() <= 256 && !kind.to_lowercase().contains("promise")
 }

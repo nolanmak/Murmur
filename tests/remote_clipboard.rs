@@ -1,4 +1,22 @@
 use murmur::{remote::Attempt, remote_clipboard::*};
+#[test]
+fn copy_failures_have_distinct_bounded_actionable_messages() {
+    let errors = [
+        Error::Busy,
+        Error::Unsupported,
+        Error::Unavailable,
+        Error::Changed,
+        Error::WriteFailed,
+        Error::InvalidText,
+    ];
+    let messages: std::collections::HashSet<_> = errors.iter().map(|e| e.message()).collect();
+    assert_eq!(messages.len(), errors.len());
+    assert!(
+        messages
+            .iter()
+            .all(|m| m.len() < 110 && !m.contains("copied"))
+    );
+}
 #[derive(Default)]
 struct Fake {
     revision: u64,

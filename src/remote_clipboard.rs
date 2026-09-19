@@ -22,6 +22,22 @@ pub enum Error {
     WriteFailed,
     InvalidText,
 }
+impl Error {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::Busy => "Remote copy blocked · restore previous clipboard, then review again",
+            Self::Unsupported => {
+                "Remote clipboard format unsupported · copy plain text, then review again"
+            }
+            Self::Unavailable => "Remote clipboard unavailable · review again to retry",
+            Self::Changed => "Clipboard changed during remote copy · review again to retry",
+            Self::WriteFailed => {
+                "Remote clipboard write failed · restore previous clipboard, then review again"
+            }
+            Self::InvalidText => "Remote transcript must be a single line · record again",
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WriteFailure {
     Unchanged(Error),
