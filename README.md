@@ -79,10 +79,10 @@ cargo run -- doctor  # shows credential source, never the value
   Audio goes directly to Deepgram under your key while dictating; its API charges apply.
 - 120-second session limit; bounded audio queue, capture watchdog and network deadlines.
 - Audio/transcripts stay in memory. Nothing is written to a history database or log.
-  Manual Copy Last Transcript changes the clipboard only when selected. Terminal
-  and browser insertion also use a temporary clipboard item until explicit restore.
+  Manual Copy Last Transcript changes the clipboard only when selected. Local
+  insertion also uses a temporary clipboard item until explicit restore.
 - Focus, field identity, secure-field status and editability are checked before local insertion.
-  Local insertion uses AXSelectedText or a native paste shortcut for supported fields.
+  Local insertion uses a native paste shortcut for recognized text inputs in any app.
   Multiline/control-character output requires manual copying; no Enter key is synthesized.
 - Changing apps or fields blocks automatic insertion. Cancelling invalidates late results.
 - No provider fallback, LLM cleanup, screen context, analytics or vendor relay.

@@ -4,7 +4,7 @@
 
 Native Control flagsChanged events with a 350 ms hold threshold → pure Dictation state machine → microphone worker →
 lock-free bounded ring → FlyOnTheWall resampler → Deepgram WebSocket → final
-transcript → original Accessibility target check → AXSelectedText insertion.
+transcript → original Accessibility target check → guarded clipboard and native paste shortcut.
 
 AppKit and retained AX objects stay on the main thread. Audio and credential
 resolution run off-thread. The callback performs no allocation or network work.

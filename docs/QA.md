@@ -17,9 +17,10 @@ Run these through the built .app, with harmless text and an approved provider ke
 - [ ] Switching app/field during recording or processing blocks insertion.
 - [ ] Secure/password fields and unsupported AX targets are blocked.
 - [ ] Multiline/control characters never submit a form or terminal command automatically.
-- [ ] AXSelectedText insertion leaves the clipboard unchanged. Terminal/browser
-      paste preserves supported items for explicit restoration; a newer clipboard
+- [ ] Local paste preserves supported items for explicit restoration; a newer clipboard
       owner is never overwritten.
+- [ ] WhatsApp, Slack, Discord and an unknown app's recognized inputs use native
+      paste; verify actual synthetic text, consecutive pastes and selection replacement.
 - [ ] With a supported multi-item clipboard, synthetic Unicode text appears exactly
       once in Ghostty and Apple Terminal without Enter; record iTerm2 separately.
 - [ ] Delayed terminal paste, clipboard restoration, concurrent copy, and

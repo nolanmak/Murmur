@@ -112,7 +112,6 @@ struct Focus {
     element: Owned,
     window: Option<Owned>,
     target: Target,
-    paste_only: bool,
 }
 impl Focus {
     fn current() -> Result<Self, String> {
@@ -122,16 +121,11 @@ impl Focus {
         let system = Owned(unsafe { AXUIElementCreateSystemWide() });
         let focused_app = attribute(system.0, "AXFocusedApplication");
         if let Some(app) = focused_app.as_ref() {
-            let mut pid = 0;
-            unsafe { AXUIElementGetPid(app.0, &mut pid) };
-            let bundle = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
-                .and_then(|app| app.bundleIdentifier())
-                .map(|id| id.to_string())
-                .unwrap_or_default();
-            if crate::insertion::browser_surface(&bundle, "AXTextField", "") {
-                let key = cfstr("AXEnhancedUserInterface");
-                unsafe { AXUIElementSetAttributeValue(app.0, key.0, kCFBooleanTrue) };
-                let key = cfstr("AXManualAccessibility");
+            // Chromium/Electron may not expose focused editors until requested.
+            // Try capabilities rather than maintaining an app-name allowlist.
+            // Unsupported attributes are ignored; a real focused input is still required.
+            for name in ["AXEnhancedUserInterface", "AXManualAccessibility"] {
+                let key = cfstr(name);
                 unsafe { AXUIElementSetAttributeValue(app.0, key.0, kCFBooleanTrue) };
             }
         }
@@ -158,9 +152,8 @@ impl Focus {
             .and_then(|app| app.bundleIdentifier())
             .map(|id| id.to_string())
             .unwrap_or_default();
-        let paste_only = crate::insertion::native_paste_surface(&bundle, &role, &subrole);
-        let editable = crate::insertion::text_role(&role, &subrole) || paste_only;
-        eprintln!("focus role={role} editable={editable} secure={secure} paste={paste_only}");
+        let editable = crate::insertion::native_paste_surface(&bundle, &role, &subrole);
+        eprintln!("focus role={role} editable={editable} secure={secure} paste={editable}");
         let window = attribute(element.0, "AXWindow");
         let target = Target {
             pid,
@@ -172,7 +165,6 @@ impl Focus {
             element,
             window,
             target,
-            paste_only,
         })
     }
     fn insert(
@@ -197,15 +189,7 @@ impl Focus {
                 DeliveryFailure::TargetChanged
             });
         }
-        let key = cfstr("AXSelectedText");
-        let value = cfstr(text);
-        if self.paste_only {
-            return paste_text(text, lease, self);
-        }
-        if unsafe { AXUIElementSetAttributeValue(now.element.0, key.0, value.0) } != 0 {
-            return paste_text(text, lease, self);
-        }
-        Ok(DeliveryOutcome::AxWrite)
+        paste_text(text, lease, self)
     }
 }
 fn paste_text(

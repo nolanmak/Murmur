@@ -21,7 +21,6 @@ fn every_delivery_failure_has_an_actionable_bounded_message() {
         Outcome::PasteSent.message(),
         "Paste sent · verify text in target"
     );
-    assert_eq!(Outcome::AxWrite.message(), "Text inserted");
 }
 #[test]
 fn clipboard_failures_distinguish_unsupported_changed_and_pending() {

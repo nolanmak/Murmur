@@ -1,13 +1,11 @@
 //! Local insertion outcomes. Messages contain no clipboard or transcript data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
-    AxWrite,
     PasteSent,
 }
 impl Outcome {
     pub fn message(self) -> &'static str {
         match self {
-            Self::AxWrite => "Text inserted",
             Self::PasteSent => "Paste sent · verify text in target",
         }
     }

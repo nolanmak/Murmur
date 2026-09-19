@@ -18,14 +18,41 @@ fn messages_composer_uses_paste_even_when_ax_write_reports_success() {
         "AXTextField",
         "AXPasswordField"
     ));
-    assert!(!native_paste_surface("com.apple.Notes", "AXTextField", ""));
+    assert!(native_paste_surface("com.apple.Notes", "AXTextField", ""));
     assert!(native_paste_surface("com.google.Chrome", "AXTextArea", ""));
     assert!(native_paste_surface("com.apple.Terminal", "AXTextArea", ""));
+}
+#[test]
+fn any_app_text_input_uses_paste_without_a_bundle_allowlist() {
+    use murmur::insertion::native_paste_surface;
+    for bundle in [
+        "net.whatsapp.WhatsApp",
+        "com.tinyspeck.slackmacgap",
+        "com.hnc.Discord",
+        "com.example.unknown",
+        "",
+    ] {
+        for role in ["AXTextField", "AXTextArea", "AXComboBox"] {
+            assert!(native_paste_surface(bundle, role, ""), "{bundle} {role}");
+            for subrole in ["AXSecureTextField", "AXPasswordField"] {
+                assert!(!native_paste_surface(bundle, role, subrole));
+            }
+        }
+        for role in [
+            "AXButton",
+            "AXGroup",
+            "AXWebArea",
+            "AXStaticText",
+            "AXSecureTextField",
+        ] {
+            assert!(!native_paste_surface(bundle, role, ""));
+        }
+    }
 }
 
 #[test]
 fn browser_editors_and_address_bars_use_native_paste() {
-    use murmur::insertion::browser_surface;
+    use murmur::insertion::native_paste_surface as browser_surface;
     assert!(browser_surface("com.google.Chrome", "AXComboBox", ""));
     assert!(browser_surface("com.apple.Safari", "AXTextArea", ""));
     assert!(browser_surface("org.mozilla.firefox", "AXTextField", ""));
@@ -35,7 +62,7 @@ fn browser_editors_and_address_bars_use_native_paste() {
         "AXTextField",
         "AXSecureTextField"
     ));
-    assert!(!browser_surface("com.example.app", "AXComboBox", ""));
+    assert!(browser_surface("com.example.app", "AXComboBox", ""));
 }
 #[test]
 fn terminal_surfaces_use_paste_instead_of_direct_ax_writes() {

@@ -1,24 +1,10 @@
 //! Native implementations must retain and compare the actual AX element too.
 pub fn native_paste_surface(bundle: &str, role: &str, subrole: &str) -> bool {
-    terminal_surface(bundle, role, subrole) || browser_surface(bundle, role, subrole)
-        // Messages can acknowledge AXSelectedText without updating its composer.
-        || (bundle == "com.apple.MobileSMS" && text_role(role, subrole))
+    // A successful AXSelectedText write does not prove the editor consumed it.
+    // Use the app's normal paste handling for every recognized text input.
+    text_role(role, subrole) || terminal_surface(bundle, role, subrole)
 }
 
-pub fn browser_surface(bundle: &str, role: &str, subrole: &str) -> bool {
-    matches!(
-        bundle,
-        "com.google.Chrome"
-            | "com.google.Chrome.beta"
-            | "com.google.Chrome.canary"
-            | "com.apple.Safari"
-            | "com.apple.SafariTechnologyPreview"
-            | "org.mozilla.firefox"
-            | "com.microsoft.edgemac"
-            | "com.brave.Browser"
-            | "company.thebrowser.Browser"
-    ) && text_role(role, subrole)
-}
 pub fn terminal_surface(bundle: &str, role: &str, subrole: &str) -> bool {
     matches!(
         bundle,
