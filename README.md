@@ -34,9 +34,12 @@ to an existing development certificate for stable signing across rebuilds.
 It does not install a trust certificate or require a signing account. Start capture from the app bundle,
 not a shell process, so macOS assigns permissions to this app.
 
-1. Open the **Control** menu-bar item and choose **Set up permissions**.
-2. Allow Microphone and enable this app in System Settings → Privacy & Security → Accessibility.
-   If macOS requests Input Monitoring, grant it and relaunch.
+1. On first launch Murmur asks for Microphone, Accessibility and Input Monitoring one
+   at a time. Until all are granted, the menu status names each missing permission and
+   **Set up permissions** opens the right System Settings pane.
+2. After granting Input Monitoring, choose **Reopen Murmur**; macOS applies it only to
+   a new launch. Dictation that could not be delivered (no Microphone, or no
+   Accessibility for local insertion) is refused before recording.
 3. Keep Wispr Flow on Fn. This app does not bind Fn.
    Hold **Control for 350 ms** to begin dictation; a quick tap remains a normal Control key.
    Modified Control shortcuts pass through normally.
