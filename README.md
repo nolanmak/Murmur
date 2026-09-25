@@ -29,8 +29,12 @@ cargo clippy --locked --all-targets -- -D warnings
 open Murmur.app
 ```
 
-The script uses an ad-hoc developer signature by default. Set MURMUR_SIGN_IDENTITY
-to an existing development certificate for stable signing across rebuilds.
+The script signs with MURMUR_SIGN_IDENTITY when set, otherwise the local
+`FlyOnTheWall Dev` identity when present (unlocking its dev keychain), so macOS
+permissions survive rebuilds. Without either it signs ad-hoc and warns: macOS then
+drops Accessibility and Input Monitoring on every rebuild. Set
+MURMUR_REQUIRE_IDENTITY=1 to fail instead. The bundle is signed and verified in
+`target/stage` first; a failed signature leaves the installed app unchanged.
 It does not install a trust certificate or require a signing account. Start capture from the app bundle,
 not a shell process, so macOS assigns permissions to this app.
 
