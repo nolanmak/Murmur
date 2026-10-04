@@ -74,3 +74,15 @@ fn manual_copy_failure_is_not_reported_as_success_and_pending_restore_blocks_it(
     board.fail = false;
     assert_eq!(copy_transcript(&mut board, false, transcript), Ok(()));
 }
+
+#[test]
+fn missing_field_before_recording_says_nothing_was_recorded() {
+    let message = Failure::NoFocusedField.message();
+    assert!(message.contains("No text field found"), "{message}");
+    assert!(message.contains("click into a text field"), "{message}");
+    assert!(!message.contains("Transcript"), "{message}");
+    assert_eq!(
+        murmur::indicator::classify(message),
+        murmur::indicator::Kind::Notice
+    );
+}
