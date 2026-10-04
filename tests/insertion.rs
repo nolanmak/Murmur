@@ -136,3 +136,71 @@ fn a_new_or_missing_window_observation_blocks_delivery() {
     assert!(!same_window(Some(&7), None, equal));
     assert!(!same_window(None, Some(&7), equal));
 }
+
+mod settle {
+    use murmur::insertion::{FOCUS_STEP, FOCUS_WAIT, Probe, settle_focus};
+    use std::cell::Cell;
+    use std::time::Duration;
+
+    /// Runs `settle_focus` over scripted probes with a fake sleep; returns (result, probes, slept).
+    fn run(script: &[Option<Probe>]) -> (Option<Probe>, usize, Duration) {
+        let calls = Cell::new(0);
+        let slept = Cell::new(Duration::ZERO);
+        let result = settle_focus(
+            || {
+                let i = calls.get();
+                calls.set(i + 1);
+                script[i.min(script.len() - 1)]
+            },
+            |probe| *probe,
+            |step| slept.set(slept.get() + step),
+        );
+        (result, calls.get(), slept.get())
+    }
+
+    #[test]
+    fn editable_focus_is_used_without_waiting() {
+        assert_eq!(
+            run(&[Some(Probe::Editable)]),
+            (Some(Probe::Editable), 1, Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn browser_tree_that_appears_later_is_found() {
+        // Chrome reports nothing, then its web area, then the composer.
+        let (result, probes, slept) =
+            run(&[None, None, Some(Probe::NotEditable), Some(Probe::Editable)]);
+        assert_eq!(result, Some(Probe::Editable));
+        assert_eq!(probes, 4);
+        assert_eq!(slept, FOCUS_STEP * 3);
+    }
+
+    #[test]
+    fn secure_fields_stop_immediately() {
+        assert_eq!(
+            run(&[Some(Probe::Secure)]),
+            (Some(Probe::Secure), 1, Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn gives_up_at_the_budget_with_the_last_observation() {
+        let (result, probes, slept) = run(&[None]);
+        assert_eq!(result, None);
+        assert_eq!(slept, FOCUS_WAIT);
+        assert_eq!(
+            probes as u32,
+            FOCUS_WAIT.as_millis() as u32 / FOCUS_STEP.as_millis() as u32 + 1
+        );
+        let (result, _, slept) = run(&[Some(Probe::NotEditable)]);
+        assert_eq!(result, Some(Probe::NotEditable));
+        assert_eq!(slept, FOCUS_WAIT);
+    }
+
+    #[test]
+    fn budget_matches_the_issue() {
+        assert_eq!(FOCUS_STEP, Duration::from_millis(50));
+        assert_eq!(FOCUS_WAIT, Duration::from_millis(750));
+    }
+}

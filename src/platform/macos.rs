@@ -3,7 +3,7 @@
 use crate::{
     core::{CompletionEffect, Dictation, Phase},
     indicator::{self, Indicator, Look},
-    insertion::{Target, allowed, same_window},
+    insertion::{Probe, Target, allowed, same_window, settle_focus},
     local_clipboard::Lease as LocalLease,
     local_delivery::{Failure as DeliveryFailure, Outcome as DeliveryOutcome},
     platform::macos_local_clipboard::MacLocalBoard,
@@ -877,10 +877,27 @@ impl Shell {
         if self.recording_remote_target.is_some() {
             return Ok(None);
         }
-        match Focus::current() {
-            Ok(f) if !f.target.secure && f.target.editable => Ok((!self.remote_mode).then_some(f)),
-            Ok(f) if f.target.secure => Err(DeliveryFailure::SecureTarget),
-            Ok(_) if !self.remote_mode => Err(DeliveryFailure::UnsupportedTarget),
+        let focus = if self.remote_mode {
+            Focus::current().ok()
+        } else {
+            settle_focus(
+                || Focus::current().ok(),
+                |f| match (f.target.secure, f.target.editable) {
+                    (true, _) => Probe::Secure,
+                    (_, true) => Probe::Editable,
+                    _ => Probe::NotEditable,
+                },
+                std::thread::sleep,
+            )
+        };
+        match focus {
+            Some(f) if !f.target.secure && f.target.editable => {
+                Ok((!self.remote_mode).then_some(f))
+            }
+            Some(f) if f.target.secure => Err(DeliveryFailure::SecureTarget),
+            Some(_) if !self.remote_mode => Err(DeliveryFailure::UnsupportedTarget),
+            // Recording with nowhere to paste would only end in "Transcript ready".
+            None if !self.remote_mode => Err(DeliveryFailure::NoFocusedField),
             _ => Ok(None),
         }
     }

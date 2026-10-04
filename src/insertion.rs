@@ -51,3 +51,34 @@ pub fn allowed(a: &Target, b: &Target, text: &str) -> bool {
         && !text.trim().is_empty()
         && !text.chars().any(char::is_control)
 }
+
+/// How the focused element looks to Accessibility right now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Probe {
+    Editable,
+    Secure,
+    NotEditable,
+}
+pub const FOCUS_STEP: std::time::Duration = std::time::Duration::from_millis(50);
+pub const FOCUS_WAIT: std::time::Duration = std::time::Duration::from_millis(750);
+/// Re-probes focus while it is missing or not yet editable. Browsers such as Chrome
+/// build their accessibility tree asynchronously after it is enabled, so the first
+/// read can be empty. Returns the last observation once ready or out of budget.
+pub fn settle_focus<T>(
+    mut probe: impl FnMut() -> Option<T>,
+    classify: impl Fn(&T) -> Probe,
+    mut sleep: impl FnMut(std::time::Duration),
+) -> Option<T> {
+    let mut waited = std::time::Duration::ZERO;
+    loop {
+        let seen = probe();
+        let settled = seen
+            .as_ref()
+            .is_some_and(|focus| classify(focus) != Probe::NotEditable);
+        if settled || waited >= FOCUS_WAIT {
+            return seen;
+        }
+        sleep(FOCUS_STEP);
+        waited += FOCUS_STEP;
+    }
+}
