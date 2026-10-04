@@ -3,7 +3,10 @@
 use crate::{
     core::{CompletionEffect, Dictation, Phase},
     indicator::{self, Indicator, Look},
-    insertion::{Probe, Target, allowed, same_window, settle_focus},
+    insertion::{
+        Preflight, Probe, Target, allowed, late_target, preflight, prewarm_attributes, same_window,
+        settle_focus,
+    },
     local_clipboard::Lease as LocalLease,
     local_delivery::{Failure as DeliveryFailure, Outcome as DeliveryOutcome},
     platform::macos_local_clipboard::MacLocalBoard,
@@ -191,6 +194,21 @@ impl Focus {
         }
         paste_text(text, lease, self)
     }
+}
+fn probe(focus: &Focus) -> Probe {
+    match (focus.target.secure, focus.target.editable) {
+        (true, _) => Probe::Secure,
+        (_, true) => Probe::Editable,
+        _ => Probe::NotEditable,
+    }
+}
+fn focused_app_pid() -> i32 {
+    let system = Owned(unsafe { AXUIElementCreateSystemWide() });
+    let mut pid = 0;
+    if let Some(app) = attribute(system.0, "AXFocusedApplication") {
+        unsafe { AXUIElementGetPid(app.0, &mut pid) };
+    }
+    pid
 }
 fn paste_text(
     text: &str,
@@ -624,6 +642,11 @@ struct Shell {
     fixture_target: Option<Focus>,
     clipboard_attempt: Option<crate::remote::Attempt>,
     selected_remote: crate::remote_review::Selection<RustDeskWindow>,
+    /// App focused when dictation started; a late-resolved target must be in it.
+    start_pid: i32,
+    /// Last app asked to expose accessibility, when, and when focus was last checked.
+    prewarmed: (i32, Instant),
+    prewarm_checked: Instant,
 }
 impl Shell {
     fn new(mtm: MainThreadMarker) -> Result<Self, String> {
@@ -775,6 +798,9 @@ impl Shell {
             fixture_target: None,
             clipboard_attempt: None,
             selected_remote: Default::default(),
+            start_pid: 0,
+            prewarmed: (0, Instant::now()),
+            prewarm_checked: Instant::now(),
         })
     }
     fn status(&self, message: &str) {
@@ -873,33 +899,48 @@ impl Shell {
             let _ = completed.send(Completion { generation, result });
         });
     }
-    fn preflight_focus(&self) -> Result<Option<Focus>, DeliveryFailure> {
+    fn preflight_focus(&mut self) -> Result<Option<Focus>, DeliveryFailure> {
+        self.start_pid = 0;
         if self.recording_remote_target.is_some() {
             return Ok(None);
         }
-        let focus = if self.remote_mode {
-            Focus::current().ok()
-        } else {
-            settle_focus(
-                || Focus::current().ok(),
-                |f| match (f.target.secure, f.target.editable) {
-                    (true, _) => Probe::Secure,
-                    (_, true) => Probe::Editable,
-                    _ => Probe::NotEditable,
-                },
-                std::thread::sleep,
-            )
-        };
-        match focus {
-            Some(f) if !f.target.secure && f.target.editable => {
-                Ok((!self.remote_mode).then_some(f))
-            }
-            Some(f) if f.target.secure => Err(DeliveryFailure::SecureTarget),
-            Some(_) if !self.remote_mode => Err(DeliveryFailure::UnsupportedTarget),
-            // Recording with nowhere to paste would only end in "Transcript ready".
-            None if !self.remote_mode => Err(DeliveryFailure::NoFocusedField),
-            _ => Ok(None),
+        self.start_pid = focused_app_pid();
+        // One probe only: waiting here would delay the microphone and lose speech.
+        // A field that is still being exposed is resolved when the transcript is ready.
+        let focus = Focus::current().ok();
+        match preflight(focus.as_ref().map(probe), self.remote_mode) {
+            Preflight::Use => Ok(focus),
+            Preflight::RecordUnresolved => Ok(None),
+            Preflight::Refuse(failure) => Err(failure),
         }
+    }
+    /// Target for a dictation that started before the app exposed its focused field.
+    fn late_focus(&self) -> Option<Focus> {
+        settle_focus(|| Focus::current().ok(), probe, std::thread::sleep)
+            .filter(|f| late_target(self.start_pid, f.target.pid, probe(f)))
+    }
+    /// Asks the frontmost app to build its accessibility tree before Control is held.
+    fn prewarm(&mut self) {
+        if self.prewarm_checked.elapsed() < Duration::from_millis(250) {
+            return;
+        }
+        self.prewarm_checked = Instant::now();
+        let pid = focused_app_pid();
+        let (last, at) = self.prewarmed;
+        // Chrome can drop the request later, so repeat it periodically.
+        if pid <= 0 || (pid == last && at.elapsed() < Duration::from_secs(3)) {
+            return;
+        }
+        let bundle = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+            .and_then(|app| app.bundleIdentifier())
+            .map(|id| id.to_string())
+            .unwrap_or_default();
+        let app = Owned(unsafe { AXUIElementCreateApplication(pid) });
+        for name in prewarm_attributes(&bundle) {
+            let key = cfstr(name);
+            unsafe { AXUIElementSetAttributeValue(app.0, key.0, kCFBooleanTrue) };
+        }
+        self.prewarmed = (pid, Instant::now());
     }
     fn begin_attempt(&mut self, focus: Option<Focus>, status: &str) {
         self.focus = focus;
@@ -942,6 +983,9 @@ impl Shell {
     }
     fn pump(&mut self) {
         self.observe_remote_window();
+        if self.core.phase == Phase::Idle {
+            self.prewarm();
+        }
         if self.smoke && !self.smoke_started && self.launched.elapsed() > Duration::from_secs(2) {
             self.smoke_started = true;
             if self.core.start_manual() {
@@ -1141,9 +1185,15 @@ impl Shell {
                     } else if self.recording_remote {
                         self.show("Transcript ready · Review for RustDesk…");
                     } else {
+                        let late = if self.focus.is_none() {
+                            self.late_focus()
+                        } else {
+                            None
+                        };
                         let result = self
                             .focus
                             .as_ref()
+                            .or(late.as_ref())
                             .ok_or(DeliveryFailure::MissingTarget)
                             .and_then(|f| f.insert(&text, &mut self.local_lease));
                         match result {

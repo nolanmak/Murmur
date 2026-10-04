@@ -204,3 +204,76 @@ mod settle {
         assert_eq!(FOCUS_WAIT, Duration::from_millis(750));
     }
 }
+
+mod start {
+    use murmur::insertion::{Preflight, Probe, late_target, preflight, prewarm_attributes};
+    use murmur::local_delivery::Failure;
+
+    #[test]
+    fn missing_focus_still_records_so_slow_trees_can_resolve_later() {
+        // Discord (Electron) and Chrome may expose nothing for seconds after
+        // accessibility is requested; refusing here made Discord unusable.
+        assert_eq!(preflight(None, false), Preflight::RecordUnresolved);
+        assert_eq!(preflight(None, true), Preflight::RecordUnresolved);
+    }
+
+    #[test]
+    fn known_targets_keep_their_existing_decisions() {
+        assert_eq!(preflight(Some(Probe::Editable), false), Preflight::Use);
+        assert_eq!(
+            preflight(Some(Probe::Editable), true),
+            Preflight::RecordUnresolved
+        );
+        for remote in [false, true] {
+            assert_eq!(
+                preflight(Some(Probe::Secure), remote),
+                Preflight::Refuse(Failure::SecureTarget)
+            );
+        }
+        assert_eq!(
+            preflight(Some(Probe::NotEditable), false),
+            Preflight::Refuse(Failure::UnsupportedTarget)
+        );
+        assert_eq!(
+            preflight(Some(Probe::NotEditable), true),
+            Preflight::RecordUnresolved
+        );
+    }
+
+    #[test]
+    fn late_target_must_be_an_editable_field_in_the_app_dictation_started_in() {
+        assert!(late_target(42, 42, Probe::Editable));
+        assert!(!late_target(42, 7, Probe::Editable), "switched apps");
+        assert!(!late_target(42, 42, Probe::Secure));
+        assert!(!late_target(42, 42, Probe::NotEditable));
+        assert!(!late_target(0, 0, Probe::Editable), "unknown start app");
+    }
+
+    #[test]
+    fn prewarm_turns_on_electron_accessibility_everywhere_and_browser_mode_only_for_chromium() {
+        for bundle in [
+            "com.hnc.Discord",
+            "com.tinyspeck.slackmacgap",
+            "com.apple.Notes",
+            "",
+        ] {
+            assert_eq!(
+                prewarm_attributes(bundle),
+                ["AXManualAccessibility"],
+                "{bundle}"
+            );
+        }
+        for bundle in [
+            "com.google.Chrome",
+            "com.brave.Browser",
+            "com.microsoft.edgemac",
+            "company.thebrowser.Browser",
+        ] {
+            assert_eq!(
+                prewarm_attributes(bundle),
+                ["AXManualAccessibility", "AXEnhancedUserInterface"],
+                "{bundle}"
+            );
+        }
+    }
+}
