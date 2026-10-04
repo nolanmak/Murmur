@@ -616,6 +616,9 @@ struct Shell {
     recording_remote_target: Option<RustDeskWindow>,
     remote_toggle: MenuItem,
     remote_profile: MenuItem,
+    /// Present only when launched from an app bundle; `cargo run` never installs.
+    login: Option<(crate::login_item::LoginItem, std::path::PathBuf)>,
+    login_toggle: MenuItem,
     profile: crate::remote::Profile,
     review: crate::remote_review::Review,
     clipboard_lease: crate::remote_clipboard::Lease,
@@ -644,6 +647,22 @@ impl Shell {
         );
         let setup = MenuItem::with_id("setup", "Set up permissions", true, None);
         let quit = MenuItem::with_id("quit", "Quit Murmur", true, None);
+        let login = std::env::current_exe()
+            .ok()
+            .and_then(|exe| crate::login_item::app_bundle(&exe))
+            .zip(crate::login_item::LoginItem::for_user())
+            .map(|(bundle, item)| (item, bundle));
+        if let Some((item, bundle)) = &login
+            && let Err(error) = item.sync(bundle)
+        {
+            eprintln!("open at login: cannot write LaunchAgent: {error}");
+        }
+        let login_toggle = MenuItem::with_id(
+            "open_at_login",
+            login_label(login.as_ref().is_some_and(|(item, _)| item.is_enabled())),
+            login.is_some(),
+            None,
+        );
         let remote_toggle = MenuItem::with_id("remote_mode", "Remote review mode: Off", true, None);
         if remote_fixture {
             remote_toggle.set_text("Remote review mode: On");
@@ -706,6 +725,7 @@ impl Shell {
             &remote_review,
             &restore,
             &local_restore,
+            &login_toggle,
             &setup,
             &quit,
         ] {
@@ -767,6 +787,8 @@ impl Shell {
             recording_remote_target: None,
             remote_toggle,
             remote_profile,
+            login,
+            login_toggle,
             profile: crate::remote::Profile::Mac,
             review: Default::default(),
             clipboard_lease: Default::default(),
@@ -1017,6 +1039,15 @@ impl Shell {
                         profile_name(self.profile)
                     ));
                 }
+                "open_at_login" => {
+                    if let Some((item, bundle)) = &self.login {
+                        let enabled = !item.is_enabled();
+                        match item.set_enabled(enabled, bundle) {
+                            Ok(()) => self.login_toggle.set_text(login_label(enabled)),
+                            Err(_) => self.show("Could not change Open at login"),
+                        }
+                    }
+                }
                 "remote_review" if self.core.phase == Phase::Idle && self.recording_remote => {
                     self.review_remote()
                 }
@@ -1159,6 +1190,13 @@ impl Shell {
             self.status(self.ready());
         }
         self.pill.render(look, now);
+    }
+}
+fn login_label(enabled: bool) -> &'static str {
+    if enabled {
+        "Open at login: On"
+    } else {
+        "Open at login: Off"
     }
 }
 fn profile_name(profile: crate::remote::Profile) -> &'static str {
