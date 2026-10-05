@@ -858,17 +858,13 @@ impl Shell {
                 let tap = platform
                     .open_mic(&DeviceId::new("default"), FormatRequest::any())
                     .map_err(|_| "No microphone available".to_string())?;
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|_| "Cannot start audio runtime".to_string())?;
-                runtime.block_on(crate::capture::run_observed(
+                crate::capture::block_on_detached(crate::capture::run_observed(
                     tap,
                     credentials.key.expose().into(),
                     control,
                     fotw_stt::DeepgramEndpoint::production(),
                     receiving,
-                ))
+                ))?
             })();
             let _ = completed.send(Completion { generation, result });
         });
