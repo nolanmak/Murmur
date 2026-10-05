@@ -138,3 +138,20 @@ async fn release_drains_microphone_through_resampler_and_closes_capture() {
     assert!(stopped.load(Ordering::SeqCst) > 0);
     server.await.unwrap();
 }
+#[test]
+fn stalled_dns_lookup_does_not_hold_back_a_failed_result() {
+    // Offline, getaddrinfo can block for tens of seconds after the connect
+    // deadline has already failed the attempt.
+    let started = std::time::Instant::now();
+    let result = murmur::capture::block_on_detached(async {
+        let lookup = tokio::task::spawn_blocking(|| std::thread::sleep(Duration::from_secs(5)));
+        tokio::time::timeout(Duration::from_millis(50), lookup)
+            .await
+            .map_err(|_| "Provider connection timed out")
+    });
+    assert_eq!(
+        result.unwrap().unwrap_err(),
+        "Provider connection timed out"
+    );
+    assert!(started.elapsed() < Duration::from_secs(2));
+}
