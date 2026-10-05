@@ -1,6 +1,6 @@
 //! Bounded, allocation-free handoff from FlyOnTheWall's microphone callback.
 use crate::resample::{Downmixer, Resampler16k};
-use fotw_audio::{AudioTap, CaptureTimestamp, FrameFlags, FrameSink, TapError};
+use fotw_audio::{AudioTap, CaptureTimestamp, FrameFlags, FrameSink, StreamFormat, TapError};
 use rtrb::{Producer, RingBuffer};
 use std::sync::{
     Arc,
@@ -32,6 +32,45 @@ struct Guard(Box<dyn AudioTap>);
 impl Drop for Guard {
     fn drop(&mut self) {
         let _ = self.0.stop();
+    }
+}
+/// Longest wait for the microphone to start. CoreAudio's `AudioDeviceStart` can
+/// block forever when its IO thread never reaches the running state; a healthy
+/// built-in or Bluetooth input starts well inside this.
+pub const MIC_START_DEADLINE: Duration = Duration::from_secs(4);
+/// Starts the tap off the async thread so a wedged CoreAudio start cannot pin
+/// the attempt in its loading state, and Esc still cancels while it waits.
+async fn start_within_deadline(
+    mut tap: Box<dyn AudioTap>,
+    sink: Box<dyn FrameSink>,
+    control: &AtomicU8,
+) -> Result<(Guard, Result<StreamFormat, TapError>), String> {
+    let (tx, mut rx) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let started = tap.start(sink);
+        // The attempt already gave up: close a microphone that opened late.
+        if let Err((mut tap, _)) = tx.send((tap, started)) {
+            let _ = tap.stop();
+        }
+    });
+    let deadline = tokio::time::sleep(MIC_START_DEADLINE);
+    tokio::pin!(deadline);
+    let mut tick = tokio::time::interval(Duration::from_millis(10));
+    loop {
+        tokio::select! {
+            started = &mut rx => {
+                let (tap, started) = started.map_err(|_| "Microphone startup failed")?;
+                return Ok((Guard(tap), started));
+            }
+            _ = &mut deadline => {
+                return Err("Microphone did not start; check the input device and try again".into());
+            }
+            _ = tick.tick() => {
+                if control.load(Ordering::Acquire) == 2 {
+                    return Err("Cancelled".into());
+                }
+            }
+        }
     }
 }
 /// Control: 0 recording, 1 finish, 2 cancel. No audio or transcript touches disk.
@@ -70,15 +109,14 @@ pub async fn run_observed(
     }
     let failed = Arc::new(AtomicBool::new(false));
     let (producer, mut consumer) = RingBuffer::new(192_000);
-    let mut guard = Guard(tap);
-    let format = guard
-        .0
-        .start(Box::new(Sink {
-            producer,
-            failed: failed.clone(),
-            receiving,
-        }))
-        .map_err(|_| "Cannot start microphone; check permission and input device")?;
+    let sink = Box::new(Sink {
+        producer,
+        failed: failed.clone(),
+        receiving,
+    });
+    let (mut guard, started) = start_within_deadline(tap, sink, &control).await?;
+    let format =
+        started.map_err(|_| "Cannot start microphone; check permission and input device")?;
     let mut resampler =
         Resampler16k::new(format.sample_rate_hz, 1).map_err(|_| "Unsupported microphone format")?;
     // Ten seconds of 10 ms chunks covers the bounded eight-second TLS handshake.
