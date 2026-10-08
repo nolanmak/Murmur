@@ -1,5 +1,10 @@
 # Murmur
 
+[![CI](https://github.com/nolanmak/Murmur/actions/workflows/ci.yml/badge.svg)](https://github.com/nolanmak/Murmur/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
+**Voice dictation for your Mac. Built at Ship Systems, shared as open source.**
+
 A macOS voice dictation app built from FlyOnTheWall's Rust audio and transcription stack.
 **Hold Control, speak, release to insert. Esc cancels.** Murmur turns your speech
 into text, inspired by the dictation workflow of [Wispr Flow](https://wisprflow.ai/features).
@@ -20,9 +25,17 @@ work. No claim of full Wispr Flow parity is made.
 
 ## Build and run
 
-Requires macOS 14.4+, Xcode command-line tools and Rust 1.95.0 (pinned).
+Requires macOS 14.4+, Git, Xcode command-line tools, Rust installed through rustup
+(the toolchain is pinned to 1.95.0), and your own Deepgram API key.
+FlyOnTheWall does not need to be installed. This is a source-based developer preview;
+there is no signed/notarized public release yet.
 
 ```sh
+git clone https://github.com/nolanmak/Murmur.git
+cd Murmur
+cp .env.example .env
+# Edit .env and set DEEPGRAM_API_KEY before starting the app.
+
 cargo test --locked --workspace
 cargo clippy --locked --all-targets -- -D warnings
 ./scripts/build-app.sh
@@ -96,3 +109,18 @@ See [architecture](docs/ARCHITECTURE.md), [provenance](docs/PROVENANCE.md),
 [QA](docs/QA.md) and [contributing](CONTRIBUTING.md).
 
 Local macOS paste behavior and recovery are documented in [local paste](docs/local-paste.md).
+
+## Contributing and support
+
+Bug reports, documentation improvements, and pull requests are welcome. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, or
+[open an issue](https://github.com/nolanmak/Murmur/issues) with your macOS version,
+reproduction steps, and expected behavior. Use synthetic text and remove private
+data from logs and screenshots. See [SECURITY.md](SECURITY.md) for sensitive reports.
+
+## License and credits
+
+Murmur is licensed under [Apache 2.0](LICENSE). Reused FlyOnTheWall components
+are credited in [NOTICE](NOTICE) and [the provenance record](docs/PROVENANCE.md).
+Murmur is an independent project inspired by Wispr Flow, with no affiliation or
+claim of feature parity.

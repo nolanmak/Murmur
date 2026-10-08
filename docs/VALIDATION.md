@@ -56,3 +56,20 @@ a release task; TTS_SIGN_IDENTITY supports an existing development identity.
 - The current Listening animation indicates the requested session state; it does not yet
   prove the microphone has opened while credential loading is pending. Treat this as a
   known UX limitation, not a passed end-to-end capture test.
+
+## Open-source readiness review — 2026-10-08
+
+- GitHub recognizes the Apache-2.0 license. LICENSE, NOTICE, and vendored-source
+  provenance are present; no license change was needed.
+- README now includes cloning, first-run Deepgram configuration, Ship Systems
+  attribution, contribution links, and source-preview limitations.
+- SECURITY.md documents private reporting and sensitive-data handling. GitHub
+  private vulnerability reporting is enabled.
+- Gitleaks scanned all 64 previously published commits, the current source, and
+  published issue/comment text with no credential findings. Scanner results are
+  not proof that every possible secret or private detail is detectable.
+- `cargo audit` reported no known dependency vulnerabilities. Formatting, repository
+  boundary checks, and relative links in updated documentation passed.
+- The public main code commit's [macOS/Linux CI](https://github.com/nolanmak/Murmur/actions/runs/35417506513)
+  passed. This review changes documentation only and does not certify new native
+  microphone, editor, or device behavior.
