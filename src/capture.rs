@@ -34,6 +34,19 @@ impl Drop for Guard {
         let _ = self.0.stop();
     }
 }
+/// Runs one attempt on a private runtime and returns as soon as it resolves.
+/// Offline, a timed-out connect leaves getaddrinfo blocking on a pool thread for
+/// tens of seconds; dropping the runtime would wait for it and keep the
+/// indicator loading, so shutdown abandons that thread instead.
+pub fn block_on_detached<F: std::future::Future>(attempt: F) -> Result<F::Output, String> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| "Cannot start audio runtime".to_string())?;
+    let output = runtime.block_on(attempt);
+    runtime.shutdown_background();
+    Ok(output)
+}
 /// Control: 0 recording, 1 finish, 2 cancel. No audio or transcript touches disk.
 pub async fn run(
     tap: Box<dyn AudioTap>,
