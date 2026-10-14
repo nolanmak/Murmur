@@ -23,6 +23,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 [dependencies]
+tempfile = "3"
 fotw-audio = { path = "vendor/fotw-audio" }
 fotw-stt = { path = "vendor/fotw-stt" }
 fotw-secrets = { path = "vendor/fotw-secrets" }
@@ -43,7 +44,6 @@ objc2-app-kit = { version = "0.3.2", features = ["NSApplication", "NSRunningAppl
 tray-icon = { version = "0.24", default-features = false }
 muda = { version = "0.19", default-features = false }
 [dev-dependencies]
-tempfile = "3"
 futures-util = { workspace = true, features = ["sink", "std"] }
 tokio-tungstenite = "0.29"
 [profile.release]

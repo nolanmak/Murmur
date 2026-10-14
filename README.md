@@ -124,3 +124,20 @@ Murmur is licensed under [Apache 2.0](LICENSE). Reused FlyOnTheWall components
 are credited in [NOTICE](NOTICE) and [the provenance record](docs/PROVENANCE.md).
 Murmur is an independent project inspired by Wispr Flow, with no affiliation or
 claim of feature parity.
+
+### Start automatically after restart
+
+Launch the packaged `Murmur.app` once. It enables **Open at login** by default,
+so Murmur opens when you sign in after restarting macOS. The menu's **Open at
+login: On/Off** item controls this setting; Off persists across manual launches.
+Launching an unpackaged development executable does not register a login item.
+
+The app maintains `~/Library/LaunchAgents/com.shipsystems.texttospeech.login.plist`
+and updates its target when launched from a new location. Keep the installed app
+at a permanent path, not in a temporary build/worktree directory. If setup fails,
+the menu offers a retry; check write access to `~/Library/LaunchAgents` and
+`~/Library/Application Support/Murmur`. Registration does not bypass macOS login
+or system background-item restrictions. Quitting Murmur intentionally stops it
+for the current session; the next login starts it again if the setting is On.
+
+Native validation and restart acceptance steps: [login startup QA](docs/login-startup.md).
