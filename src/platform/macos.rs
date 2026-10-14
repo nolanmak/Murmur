@@ -590,6 +590,13 @@ impl Pill {
         }
     }
 }
+#[derive(Clone, Copy)]
+enum LoginRetry {
+    // Re-read the saved preference; startup may not have been able to inspect it.
+    Sync,
+    SetEnabled(bool),
+}
+
 struct Shell {
     core: Dictation,
     control: Arc<AtomicU8>,
@@ -616,6 +623,10 @@ struct Shell {
     recording_remote_target: Option<RustDeskWindow>,
     remote_toggle: MenuItem,
     remote_profile: MenuItem,
+    /// Present only when launched from an app bundle; `cargo run` never installs.
+    login: Option<(crate::login_item::LoginItem, std::path::PathBuf)>,
+    login_toggle: MenuItem,
+    login_retry: Option<LoginRetry>,
     profile: crate::remote::Profile,
     review: crate::remote_review::Review,
     clipboard_lease: crate::remote_clipboard::Lease,
@@ -644,6 +655,33 @@ impl Shell {
         );
         let setup = MenuItem::with_id("setup", "Set up permissions", true, None);
         let quit = MenuItem::with_id("quit", "Quit Murmur", true, None);
+        let login = std::env::current_exe()
+            .ok()
+            .and_then(|exe| crate::login_item::app_bundle(&exe))
+            .zip(crate::login_item::LoginItem::for_user())
+            .map(|(bundle, item)| (item, bundle));
+        let login_retry = login.as_ref().and_then(|(item, bundle)| {
+            if let Err(error) = item.sync(bundle) {
+                eprintln!("open at login: cannot update LaunchAgent: {error}");
+                Some(LoginRetry::Sync)
+            } else {
+                None
+            }
+        });
+        let login_toggle = MenuItem::with_id(
+            "open_at_login",
+            if login_retry.is_some() {
+                "Open at login: Setup failed — click to retry"
+            } else {
+                login_label(
+                    login
+                        .as_ref()
+                        .is_some_and(|(item, bundle)| item.is_enabled(bundle)),
+                )
+            },
+            login.is_some(),
+            None,
+        );
         let remote_toggle = MenuItem::with_id("remote_mode", "Remote review mode: Off", true, None);
         if remote_fixture {
             remote_toggle.set_text("Remote review mode: On");
@@ -706,6 +744,7 @@ impl Shell {
             &remote_review,
             &restore,
             &local_restore,
+            &login_toggle,
             &setup,
             &quit,
         ] {
@@ -767,6 +806,9 @@ impl Shell {
             recording_remote_target: None,
             remote_toggle,
             remote_profile,
+            login,
+            login_toggle,
+            login_retry,
             profile: crate::remote::Profile::Mac,
             review: Default::default(),
             clipboard_lease: Default::default(),
@@ -1017,6 +1059,31 @@ impl Shell {
                         profile_name(self.profile)
                     ));
                 }
+                "open_at_login" => {
+                    if let Some((item, bundle)) = &self.login {
+                        let action = self
+                            .login_retry
+                            .unwrap_or_else(|| LoginRetry::SetEnabled(!item.is_enabled(bundle)));
+                        let result = match action {
+                            LoginRetry::Sync => item.sync(bundle).map(|_| ()),
+                            LoginRetry::SetEnabled(enabled) => item.set_enabled(enabled, bundle),
+                        };
+                        match result {
+                            Ok(()) => {
+                                self.login_retry = None;
+                                self.login_toggle
+                                    .set_text(login_label(item.is_enabled(bundle)));
+                            }
+                            Err(error) => {
+                                eprintln!("open at login: cannot update LaunchAgent: {error}");
+                                self.login_retry = Some(action);
+                                self.login_toggle
+                                    .set_text("Open at login: Setup failed — click to retry");
+                                self.show("Open at login failed — check Library/LaunchAgents and Murmur Application Support permissions, then retry");
+                            }
+                        }
+                    }
+                }
                 "remote_review" if self.core.phase == Phase::Idle && self.recording_remote => {
                     self.review_remote()
                 }
@@ -1159,6 +1226,13 @@ impl Shell {
             self.status(self.ready());
         }
         self.pill.render(look, now);
+    }
+}
+fn login_label(enabled: bool) -> &'static str {
+    if enabled {
+        "Open at login: On"
+    } else {
+        "Open at login: Off"
     }
 }
 fn profile_name(profile: crate::remote::Profile) -> &'static str {
