@@ -590,6 +590,13 @@ impl Pill {
         }
     }
 }
+#[derive(Clone, Copy)]
+enum LoginRetry {
+    // Re-read the saved preference; startup may not have been able to inspect it.
+    Sync,
+    SetEnabled(bool),
+}
+
 struct Shell {
     core: Dictation,
     control: Arc<AtomicU8>,
@@ -619,7 +626,7 @@ struct Shell {
     /// Present only when launched from an app bundle; `cargo run` never installs.
     login: Option<(crate::login_item::LoginItem, std::path::PathBuf)>,
     login_toggle: MenuItem,
-    login_retry_enabled: Option<bool>,
+    login_retry: Option<LoginRetry>,
     profile: crate::remote::Profile,
     review: crate::remote_review::Review,
     clipboard_lease: crate::remote_clipboard::Lease,
@@ -653,17 +660,17 @@ impl Shell {
             .and_then(|exe| crate::login_item::app_bundle(&exe))
             .zip(crate::login_item::LoginItem::for_user())
             .map(|(bundle, item)| (item, bundle));
-        let login_retry_enabled = login.as_ref().and_then(|(item, bundle)| {
+        let login_retry = login.as_ref().and_then(|(item, bundle)| {
             if let Err(error) = item.sync(bundle) {
                 eprintln!("open at login: cannot update LaunchAgent: {error}");
-                Some(!item.is_opted_out())
+                Some(LoginRetry::Sync)
             } else {
                 None
             }
         });
         let login_toggle = MenuItem::with_id(
             "open_at_login",
-            if login_retry_enabled.is_some() {
+            if login_retry.is_some() {
                 "Open at login: Setup failed — click to retry"
             } else {
                 login_label(
@@ -801,7 +808,7 @@ impl Shell {
             remote_profile,
             login,
             login_toggle,
-            login_retry_enabled,
+            login_retry,
             profile: crate::remote::Profile::Mac,
             review: Default::default(),
             clipboard_lease: Default::default(),
@@ -1054,18 +1061,22 @@ impl Shell {
                 }
                 "open_at_login" => {
                     if let Some((item, bundle)) = &self.login {
-                        let enabled = self
-                            .login_retry_enabled
-                            .unwrap_or_else(|| !item.is_enabled(bundle));
-                        match item.set_enabled(enabled, bundle) {
+                        let action = self
+                            .login_retry
+                            .unwrap_or_else(|| LoginRetry::SetEnabled(!item.is_enabled(bundle)));
+                        let result = match action {
+                            LoginRetry::Sync => item.sync(bundle).map(|_| ()),
+                            LoginRetry::SetEnabled(enabled) => item.set_enabled(enabled, bundle),
+                        };
+                        match result {
                             Ok(()) => {
-                                self.login_retry_enabled = None;
+                                self.login_retry = None;
                                 self.login_toggle
                                     .set_text(login_label(item.is_enabled(bundle)));
                             }
                             Err(error) => {
                                 eprintln!("open at login: cannot update LaunchAgent: {error}");
-                                self.login_retry_enabled = Some(enabled);
+                                self.login_retry = Some(action);
                                 self.login_toggle
                                     .set_text("Open at login: Setup failed — click to retry");
                                 self.show("Open at login failed — check Library/LaunchAgents and Murmur Application Support permissions, then retry");

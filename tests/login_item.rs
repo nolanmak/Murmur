@@ -164,3 +164,26 @@ fn generated_plist_parses_with_exact_argument_boundaries() {
         app.to_str().unwrap()
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn unreadable_opt_out_never_reports_enabled_or_discards_preference() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = tempfile::tempdir().unwrap();
+    let login = item(home.path());
+    let app = Path::new("/Apps/Murmur.app");
+    login.set_enabled(false, app).unwrap();
+    std::fs::create_dir_all(login.agent_path().parent().unwrap()).unwrap();
+    std::fs::write(login.agent_path(), login_item::agent_plist(app)).unwrap();
+    let preferences = home.path().join("Library/Application Support/Murmur");
+    let permissions = std::fs::metadata(&preferences).unwrap().permissions();
+    std::fs::set_permissions(&preferences, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let result = login.sync(app);
+    let enabled = login.is_enabled(app);
+    std::fs::set_permissions(&preferences, permissions).unwrap();
+    assert!(result.is_err());
+    assert!(!enabled, "unknown opt-out must not be treated as absent");
+    login.sync(app).unwrap();
+    assert!(!login.agent_path().exists());
+    assert!(preferences.join("open-at-login-disabled").exists());
+}

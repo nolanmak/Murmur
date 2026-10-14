@@ -45,4 +45,8 @@ with tempfile.TemporaryDirectory(prefix="murmur-login-qa-") as directory:
         finally:
             if process.poll() is None:
                 process.terminate()
-            process.wait(timeout=10)
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()

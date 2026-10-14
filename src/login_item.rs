@@ -68,19 +68,19 @@ impl LoginItem {
 
     /// True only for the registration for this bundle, never just file existence.
     pub fn is_enabled(&self, bundle: &Path) -> bool {
-        !self.is_opted_out()
+        matches!(self.is_opted_out(), Ok(false))
             && std::fs::read_to_string(self.agent_path())
                 .is_ok_and(|text| text == agent_plist(bundle))
     }
 
-    pub fn is_opted_out(&self) -> bool {
-        self.opt_out_path().exists()
+    fn is_opted_out(&self) -> io::Result<bool> {
+        self.opt_out_path().try_exists()
     }
 
     /// Refresh the agent, or finish removing it when the user opted out.
     /// A failed previous disable must not silently leave an active login file.
     pub fn sync(&self, bundle: &Path) -> io::Result<bool> {
-        if self.opt_out_path().try_exists()? {
+        if self.is_opted_out()? {
             return remove_if_present(&self.agent_path());
         }
         self.install(bundle)
@@ -114,7 +114,7 @@ impl LoginItem {
             }
         } else {
             std::fs::create_dir_all(opt_out.parent().expect("opt-out path has a parent"))?;
-            std::fs::write(&opt_out, "")?;
+            std::fs::File::create(&opt_out)?.sync_all()?;
             remove_if_present(&self.agent_path())?;
         }
         Ok(())
