@@ -224,3 +224,54 @@ async fn rejects_oversize_response() {
     );
     server.await.unwrap();
 }
+
+#[test]
+fn invalid_settings_block_capture_until_explicit_saved_choice() {
+    use murmur::speech::{Provider, Selection};
+    for bytes in [
+        b"invalid json".as_slice(),
+        br#"{"provider":"local-whisper","local_endpoint":"http://remote.example"}"#,
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("speech.json");
+        std::fs::write(&path, bytes).unwrap();
+        let mut selection = Selection::load(Ok(path.clone()));
+        assert!(selection.error().is_some());
+        assert!(
+            selection
+                .capture_provider(|| panic!("blocked settings accessed credentials"))
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        selection.choose(Provider::LocalWhisper, &path).unwrap();
+        assert!(selection.error().is_none());
+        assert!(matches!(
+            selection
+                .capture_provider(|| panic!("local choice accessed credentials"))
+                .unwrap(),
+            murmur::capture::CaptureProvider::Local(_)
+        ));
+    }
+}
+#[test]
+fn unreadable_settings_and_failed_repair_remain_blocked() {
+    use murmur::speech::{Provider, Selection};
+    let dir = tempfile::tempdir().unwrap();
+    let mut selection = Selection::load(Ok(dir.path().to_owned()));
+    assert!(selection.error().is_some());
+    assert!(
+        selection
+            .choose(Provider::LocalWhisper, dir.path())
+            .is_err()
+    );
+    assert!(
+        selection
+            .capture_provider(|| panic!("failed repair accessed credentials"))
+            .is_err()
+    );
+    assert!(
+        Selection::load(Err("Cannot locate home directory".into()))
+            .error()
+            .is_some()
+    );
+}

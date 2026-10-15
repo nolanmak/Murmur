@@ -608,7 +608,7 @@ struct Shell {
     completed: mpsc::Sender<Completion>,
     _tray: TrayIcon,
     status: MenuItem,
-    speech: crate::speech::Settings,
+    speech: crate::speech::Selection,
     speech_toggle: MenuItem,
     pill: Pill,
     indicator: Indicator,
@@ -646,10 +646,13 @@ impl Shell {
             cfg!(debug_assertions) && std::env::args().any(|arg| arg == "--local-fixture");
         let menu = Menu::new();
         let status = MenuItem::with_id("status", "Hold Control to dictate", false, None);
-        let speech = crate::speech::Settings::load(&crate::speech::Settings::path()?)?;
+        let speech = crate::speech::Selection::load(crate::speech::Settings::path());
+        if speech.error().is_some() {
+            status.set_text("Speech settings invalid — choose Local Whisper in the Transcription menu to repair");
+        }
         let speech_toggle = MenuItem::with_id(
             "speech_provider",
-            speech_label(&speech.provider),
+            speech_label(speech.provider()),
             true,
             None,
         );
@@ -860,6 +863,9 @@ impl Shell {
         }
     }
     fn ready(&self) -> &'static str {
+        if self.speech.error().is_some() {
+            return "Speech settings invalid — choose Local Whisper in the Transcription menu to repair";
+        }
         match self.warning {
             Some(warning) => warning,
             None if self.remote_mode => "Hold Control to record for remote review",
@@ -875,6 +881,11 @@ impl Shell {
         }
     }
     fn start(&mut self) {
+        if self.speech.error().is_some() {
+            self.cancel();
+            self.show(self.ready());
+            return;
+        }
         self.recording_remote_target = RustDeskWindow::selected();
         self.recording_remote = crate::remote_review::recording_destination(
             self.remote_mode,
@@ -1037,16 +1048,18 @@ impl Shell {
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             match event.id.as_ref() {
                 "speech_provider" => {
-                    let mut next = self.speech.clone();
-                    next.provider = match next.provider {
-                        crate::speech::Provider::Deepgram => crate::speech::Provider::LocalWhisper,
-                        crate::speech::Provider::LocalWhisper => crate::speech::Provider::Deepgram,
+                    let provider = match self.speech.provider() {
+                        Some(crate::speech::Provider::LocalWhisper) => {
+                            crate::speech::Provider::Deepgram
+                        }
+                        _ => crate::speech::Provider::LocalWhisper,
                     };
-                    match crate::speech::Settings::path().and_then(|path| next.save(&path)) {
+                    match crate::speech::Settings::path()
+                        .and_then(|path| self.speech.choose(provider, &path))
+                    {
                         Ok(()) => {
-                            self.speech = next;
                             self.speech_toggle
-                                .set_text(speech_label(&self.speech.provider));
+                                .set_text(speech_label(self.speech.provider()));
                             self.show("Transcription provider saved for the next recording");
                         }
                         Err(error) => self.show(&error),
@@ -1612,9 +1625,12 @@ pub fn run() -> Result<(), String> {
     Ok(())
 }
 
-fn speech_label(provider: &crate::speech::Provider) -> &'static str {
+fn speech_label(provider: Option<&crate::speech::Provider>) -> &'static str {
     match provider {
-        crate::speech::Provider::Deepgram => "Transcription: Deepgram (click for local)",
-        crate::speech::Provider::LocalWhisper => "Transcription: Local Whisper (click for cloud)",
+        Some(crate::speech::Provider::Deepgram) => "Transcription: Deepgram (click for local)",
+        Some(crate::speech::Provider::LocalWhisper) => {
+            "Transcription: Local Whisper (click for cloud)"
+        }
+        None => "Transcription: invalid settings — click to select Local Whisper",
     }
 }

@@ -81,3 +81,20 @@ Boundary TDD: `cargo test --lib maximum_capture_clips_scheduler_overshoot_and_re
 first failed with missing `append_local_pcm` (E0425), then passed after bounded
 accumulation was introduced. The test preserves the last 10 ms of permitted
 speech while discarding a late callback and 200 ms resampler padding.
+
+## Invalid settings recovery
+
+Malformed, unreadable or non-loopback settings keep the menu-bar app open in a
+blocked state. The Transcription menu identifies the error and offers an explicit
+Local Whisper selection to repair settings. Recording is blocked before microphone
+startup or credential resolution; settings are preserved until the user chooses
+repair, and remain blocked if saving fails. There is no automatic cloud fallback.
+After selecting local, the user can switch to Deepgram with another explicit menu
+selection. For filesystem permission errors, fix access to the settings directory
+before retrying.
+
+Recovery TDD: `cargo test --test local_stt invalid_settings_block_capture_until_explicit_saved_choice`
+failed with missing `Selection` (E0432), then passed with the recoverable state.
+Tests also cover invalid endpoints, unreadable settings, failed repair, preserved
+bytes before selection and a credential resolver that panics if called while
+blocked. Native menu recovery remains a manual UI acceptance check.

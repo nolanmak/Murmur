@@ -74,3 +74,35 @@ impl Settings {
         Ok(())
     }
 }
+
+/// A recoverable configuration failure must never silently select a cloud provider.
+#[derive(Clone, Debug)]
+pub struct Selection(Result<Settings, String>);
+impl Selection {
+    pub fn load(path: Result<PathBuf, String>) -> Self {
+        Self(path.and_then(|path| Settings::load(&path)))
+    }
+    pub fn error(&self) -> Option<&str> {
+        self.0.as_ref().err().map(String::as_str)
+    }
+    pub fn provider(&self) -> Option<&Provider> {
+        self.0.as_ref().ok().map(|s| &s.provider)
+    }
+    pub fn capture_provider(
+        &self,
+        credentials: impl FnOnce() -> Result<crate::config::Credentials, String>,
+    ) -> Result<crate::capture::CaptureProvider, String> {
+        self.0
+            .as_ref()
+            .map_err(Clone::clone)?
+            .capture_provider(credentials)
+    }
+    /// Commit a user choice only after persistence succeeds; otherwise stay blocked.
+    pub fn choose(&mut self, provider: Provider, path: &Path) -> Result<(), String> {
+        let mut settings = self.0.as_ref().cloned().unwrap_or_default();
+        settings.provider = provider;
+        settings.save(path)?;
+        self.0 = Ok(settings);
+        Ok(())
+    }
+}
