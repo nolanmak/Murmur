@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import select
 import shutil
 import socket
 import subprocess
@@ -107,6 +108,29 @@ def ready(port):
         return False
 
 
+def read_supervisor_token(fd, timeout=5):
+    """Read a single bounded secret frame from the parent's private pipe."""
+    deadline = time.monotonic() + timeout
+    frame = bytearray()
+    while len(frame) <= 65:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([fd], [], [], remaining)[0]:
+            raise ValueError("supervisor secret handoff timed out")
+        chunk = os.read(fd, 66 - len(frame))
+        if not chunk:
+            raise ValueError("supervisor secret handoff was incomplete")
+        frame.extend(chunk)
+        if b"\n" in frame:
+            break
+    if (
+        len(frame) != 65
+        or frame[-1:] != b"\n"
+        or any(byte not in b"0123456789abcdef" for byte in frame[:-1])
+    ):
+        raise ValueError("invalid supervisor secret handoff")
+    return frame[:-1].decode("ascii")
+
+
 def supervise(state, binary, port, token, timeout):
     child = None
     stopping = False
@@ -201,7 +225,6 @@ def main():
     internal = commands.add_parser("_supervise", help=argparse.SUPPRESS)
     internal.add_argument("binary")
     internal.add_argument("port", type=int)
-    internal.add_argument("token")
     internal.add_argument("timeout", type=float)
     args = parser.parse_args()
     state = (
@@ -219,7 +242,9 @@ def main():
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
     state.chmod(0o700)
     if args.command == "_supervise":
-        supervise(state, args.binary, args.port, args.token, args.timeout)
+        token = read_supervisor_token(sys.stdin.fileno())
+        sys.stdin.close()
+        supervise(state, args.binary, args.port, token, args.timeout)
         return
     with (state / "lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -316,14 +341,15 @@ def main():
                     "_supervise",
                     binary,
                     str(port),
-                    token,
                     str(args.timeout),
                 ],
                 start_new_session=True,
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+            supervisor.stdin.write((token + "\n").encode("ascii"))
+            supervisor.stdin.close()
             deadline = time.monotonic() + args.timeout
             while time.monotonic() < deadline and supervisor.poll() is None:
                 record = read_json(state / "runtime.json")

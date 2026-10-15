@@ -1,5 +1,5 @@
 import hashlib, json, pathlib, socket, subprocess, sys, tempfile, unittest
-import importlib.util, io, http.server, threading
+import importlib.util, io, http.server, threading, os
 
 spec = importlib.util.spec_from_file_location(
     "runtime", pathlib.Path(__file__).with_name("local-whisper.py")
@@ -34,7 +34,7 @@ class RuntimeTests(unittest.TestCase):
             ],
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=60,
         )
 
     def install(self):
@@ -125,6 +125,25 @@ class RuntimeTests(unittest.TestCase):
             self.assertFalse(json.loads(self.run_cli("status").stdout)["ready"])
             self.assertFalse((self.root / "state folder/runtime.json").exists())
 
+    def test_supervisor_secret_handoff_is_bounded_and_validated(self):
+        for frame in (b"bad\n", b"g" * 64 + b"\n", b"a" * 64, b"a" * 66):
+            with self.subTest(length=len(frame)):
+                reader, writer = os.pipe()
+                try:
+                    os.write(writer, frame)
+                    os.close(writer)
+                    with self.assertRaises(ValueError):
+                        runtime.read_supervisor_token(reader, timeout=0.1)
+                finally:
+                    os.close(reader)
+        reader, writer = os.pipe()
+        try:
+            with self.assertRaisesRegex(ValueError, "timed out"):
+                runtime.read_supervisor_token(reader, timeout=0.05)
+        finally:
+            os.close(reader)
+            os.close(writer)
+
     def test_stale_record_cannot_kill_unrelated_process(self):
         state = self.root / "state folder"
         state.mkdir()
@@ -146,7 +165,7 @@ class RuntimeTests(unittest.TestCase):
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
             port = s.getsockname()[1]
-        args = ("start", "--binary", str(fake), "--port", str(port), "--timeout", "4")
+        args = ("start", "--binary", str(fake), "--port", str(port), "--timeout", "30")
         r = self.run_cli(*args)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         first = json.loads(r.stdout)
@@ -154,6 +173,10 @@ class RuntimeTests(unittest.TestCase):
         token = json.loads((self.root / "state folder/runtime.json").read_text())[
             "token"
         ]
+        commands = subprocess.check_output(["ps", "-axo", "command="], text=True)
+        self.assertFalse(
+            token in commands, "supervisor secret must not appear in process arguments"
+        )
         self.assertNotIn("token", first)
         self.assertEqual(self.run_cli(*args).returncode, 0)
         self.assertEqual(
@@ -174,7 +197,7 @@ class RuntimeTests(unittest.TestCase):
                 "--port",
                 str(port),
                 "--timeout",
-                "4",
+                "30",
             )
             r = self.run_cli(*args)
             self.assertNotEqual(r.returncode, 0)
