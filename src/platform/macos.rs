@@ -608,6 +608,8 @@ struct Shell {
     completed: mpsc::Sender<Completion>,
     _tray: TrayIcon,
     status: MenuItem,
+    speech: crate::speech::Settings,
+    speech_toggle: MenuItem,
     pill: Pill,
     indicator: Indicator,
     warning: Option<&'static str>,
@@ -644,6 +646,13 @@ impl Shell {
             cfg!(debug_assertions) && std::env::args().any(|arg| arg == "--local-fixture");
         let menu = Menu::new();
         let status = MenuItem::with_id("status", "Hold Control to dictate", false, None);
+        let speech = crate::speech::Settings::load(&crate::speech::Settings::path()?)?;
+        let speech_toggle = MenuItem::with_id(
+            "speech_provider",
+            speech_label(&speech.provider),
+            true,
+            None,
+        );
         let cancel = MenuItem::with_id("cancel", "Cancel dictation (Esc)", true, None);
         let start = MenuItem::with_id("start", "Start dictation", true, None);
         let stop = MenuItem::with_id("stop", "Stop dictation", true, None);
@@ -735,6 +744,7 @@ impl Shell {
         );
         for item in [
             &status,
+            &speech_toggle,
             &start,
             &stop,
             &cancel,
@@ -785,6 +795,8 @@ impl Shell {
             completed,
             _tray: tray,
             status,
+            speech,
+            speech_toggle,
             pill,
             indicator: Indicator::default(),
             warning: None,
@@ -892,10 +904,10 @@ impl Shell {
         let completed = self.completed.clone();
         let generation = self.core.generation();
         let receiving = self.receiving.clone();
+        let speech = self.speech.clone();
         std::thread::spawn(move || {
             let result = (|| {
-                let credentials = crate::config::load()?;
-                eprintln!("credentials loaded via {}", credentials.source);
+                let provider = speech.capture_provider(crate::config::load)?;
                 let platform = fotw_audio::platform::macos::MacOsPlatform::new();
                 let tap = platform
                     .open_mic(&DeviceId::new("default"), FormatRequest::any())
@@ -904,12 +916,8 @@ impl Shell {
                     .enable_all()
                     .build()
                     .map_err(|_| "Cannot start audio runtime".to_string())?;
-                runtime.block_on(crate::capture::run_observed(
-                    tap,
-                    credentials.key.expose().into(),
-                    control,
-                    fotw_stt::DeepgramEndpoint::production(),
-                    receiving,
+                runtime.block_on(crate::capture::run_provider_observed(
+                    tap, provider, control, receiving,
                 ))
             })();
             let _ = completed.send(Completion { generation, result });
@@ -1028,6 +1036,22 @@ impl Shell {
         }
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             match event.id.as_ref() {
+                "speech_provider" => {
+                    let mut next = self.speech.clone();
+                    next.provider = match next.provider {
+                        crate::speech::Provider::Deepgram => crate::speech::Provider::LocalWhisper,
+                        crate::speech::Provider::LocalWhisper => crate::speech::Provider::Deepgram,
+                    };
+                    match crate::speech::Settings::path().and_then(|path| next.save(&path)) {
+                        Ok(()) => {
+                            self.speech = next;
+                            self.speech_toggle
+                                .set_text(speech_label(&self.speech.provider));
+                            self.show("Transcription provider saved for the next recording");
+                        }
+                        Err(error) => self.show(&error),
+                    }
+                }
                 "remote_mode" => {
                     if self.local_lease.pending() || self.clipboard_lease.pending() {
                         self.show("Restore previous clipboard before changing modes");
@@ -1586,4 +1610,11 @@ pub fn run() -> Result<(), String> {
         unsafe { NSTimer::scheduledTimerWithTimeInterval_repeats_block(0.02, true, &block) };
     app.run();
     Ok(())
+}
+
+fn speech_label(provider: &crate::speech::Provider) -> &'static str {
+    match provider {
+        crate::speech::Provider::Deepgram => "Transcription: Deepgram (click for local)",
+        crate::speech::Provider::LocalWhisper => "Transcription: Local Whisper (click for cloud)",
+    }
 }

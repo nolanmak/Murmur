@@ -138,3 +138,60 @@ async fn release_drains_microphone_through_resampler_and_closes_capture() {
     assert!(stopped.load(Ordering::SeqCst) > 0);
     server.await.unwrap();
 }
+#[tokio::test]
+async fn local_release_sends_wav_without_cloud_key_and_stops_microphone() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = murmur::local_stt::LocalEndpoint::new(&format!(
+        "http://{}",
+        listener.local_addr().unwrap()
+    ))
+    .unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut bytes = Vec::new();
+        loop {
+            let mut buf = [0; 8192];
+            let n = socket.read(&mut buf).await.unwrap();
+            assert!(n > 0);
+            bytes.extend_from_slice(&buf[..n]);
+            if let Some(end) = bytes.windows(4).position(|v| v == b"\r\n\r\n") {
+                let header = String::from_utf8_lossy(&bytes[..end]).to_lowercase();
+                let length: usize = header
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length: "))
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                if bytes.len() >= end + 4 + length {
+                    break;
+                }
+            }
+        }
+        assert!(bytes.windows(4).any(|v| v == b"RIFF"));
+        let body = r#"{"text":"Local fixture."}"#;
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+    });
+    let (tap, control, started, stopped) = fixture(48000, 0);
+    let result = murmur::capture::run_provider_observed(
+        tap,
+        murmur::capture::CaptureProvider::Local(endpoint),
+        control,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result, "Local fixture.");
+    assert_eq!(started.load(Ordering::SeqCst), 1);
+    assert!(stopped.load(Ordering::SeqCst) > 0);
+    server.await.unwrap();
+}

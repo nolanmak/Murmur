@@ -141,3 +141,9 @@ or system background-item restrictions. Quitting Murmur intentionally stops it
 for the current session; the next login starts it again if the setting is On.
 
 Native validation and restart acceptance steps: [login startup QA](docs/login-startup.md).
+
+## Local transcription
+
+Local Whisper supports offline dictation after explicit engine/model setup. Choose
+**Transcription: Local Whisper** in the menu, or run `murmur speech local`.
+See [setup, privacy and acceptance evidence](docs/local-whisper.md).
