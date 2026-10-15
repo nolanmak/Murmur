@@ -116,10 +116,7 @@ pub async fn run_provider_observed(
                 let mut rx = rx;
                 let mut pcm = Vec::new();
                 while let Some(chunk) = rx.recv().await {
-                    if pcm.len() + chunk.len() > 16000 * 120 + 3200 {
-                        return Err("Local audio exceeds 120-second capture limit".into());
-                    }
-                    pcm.extend(chunk);
+                    append_local_pcm(&mut pcm, chunk);
                 }
                 crate::local_stt::transcribe(
                     &endpoint,
@@ -163,5 +160,30 @@ pub async fn run_provider_observed(
               }
              }
             }
+    }
+}
+
+/// Retain at most 120 seconds of actual capture, including on a late stop tick.
+/// Once full, discard callback overshoot and the resampler's artificial drain tail.
+/// The transport separately rejects oversized caller-provided input.
+fn append_local_pcm(pcm: &mut Vec<i16>, chunk: Vec<i16>) {
+    let remaining = (16000_usize * 120).saturating_sub(pcm.len());
+    pcm.extend(chunk.into_iter().take(remaining));
+}
+
+#[cfg(test)]
+mod local_buffer_tests {
+    #[test]
+    fn maximum_capture_clips_scheduler_overshoot_and_resampler_padding() {
+        let mut pcm = vec![1; 16000 * 120 - 160];
+        // Last 10 ms of speech, a late 10 ms callback, then the 200 ms drain.
+        let mut final_chunk = vec![2; 320];
+        final_chunk.extend(vec![0; 3200]);
+        super::append_local_pcm(&mut pcm, final_chunk);
+        assert_eq!(pcm.len(), 16000 * 120);
+        assert_eq!(&pcm[pcm.len() - 160..], &[2; 160]);
+        super::append_local_pcm(&mut pcm, vec![3; 160]);
+        assert_eq!(pcm.len(), 16000 * 120);
+        assert_eq!(pcm.last(), Some(&2));
     }
 }

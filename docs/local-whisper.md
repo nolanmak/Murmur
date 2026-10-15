@@ -35,7 +35,9 @@ existing installations; `cargo run -- speech deepgram` restores it.
 
 Hold Control, speak, release. Local mode captures at most 120 seconds, converts
 in memory to mono 16 kHz PCM WAV, and posts `/inference` after release. It has a
-separate 180-second inference timeout. Escape, focus validation and generation
+separate 180-second inference timeout. At the maximum duration, the accumulator
+keeps exactly the first 120 seconds; late callback samples and synthetic resampler
+drain padding are clipped instead of rejecting the completed recording. Escape, focus validation and generation
 checks reuse the existing delivery protections. Digital silence is skipped
 before inference; this is a conservative amplitude guard, not a speech detector,
 and noisy silence can still produce hallucinations with Whisper.
@@ -74,3 +76,8 @@ Native microphone, Control hold/release, focus switch, Escape, sleep/wake and
 cross-application insertion remain explicit manual acceptance gates. Automated
 fixtures do not establish those checks; keep their GitHub checkboxes open until
 performed. Runtime cancellation and noisy-silence quality remain limitations.
+
+Boundary TDD: `cargo test --lib maximum_capture_clips_scheduler_overshoot_and_resampler_padding`
+first failed with missing `append_local_pcm` (E0425), then passed after bounded
+accumulation was introduced. The test preserves the last 10 ms of permitted
+speech while discarding a late callback and 200 ms resampler padding.
