@@ -14,3 +14,6 @@ pub mod resample;
 pub mod space_hotkey;
 pub mod streaming;
 pub mod transcript;
+
+pub mod local_stt;
+pub mod speech;

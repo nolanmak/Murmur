@@ -1,0 +1,23 @@
+{
+  "clean1": "Please move the meeting to Thursday morning and send everyone an updated invitation.",
+  "clean2": "The weather is clear today. I will walk to the store and buy some coffee before lunch.",
+  "clean3": "We finished the first draft yesterday. The next step is to review the changes and prepare the final report.",
+  "clean4": "Could you check the schedule and tell me whether we have enough time to finish this task today?",
+  "clean5": "This recording is a test of local speech recognition. No internet connection should be needed to understand these words.",
+  "clean6": "After breakfast we will take the train into the city and meet our friends near the museum.",
+  "clean7": "Remember to close the window before leaving the house. The forecast says it will rain later this afternoon.",
+  "clean8": "Please save a copy of the document and put it in the folder for next week.",
+  "clean9": "The package arrived this morning. Everything was packed carefully and nothing appears to be missing.",
+  "clean10": "Let us start with the simplest example and make sure it works before adding any more features.",
+  "clean11": "I would like a table for four people on Saturday evening, preferably beside a window.",
+  "clean12": "Thank you for your help with the project. Your comments made the instructions much easier to follow.",
+  "clean13": "Turn left at the next street and continue for two blocks. The library is on the right.",
+  "clean14": "We should test the new settings before the meeting starts so that everyone can hear clearly.",
+  "clean15": "The team agreed to fix the current problems before beginning work on the next version.",
+  "clean16": "There are several ways to solve this problem. Let us compare them carefully and choose one.",
+  "clean17": "I left my notebook on the kitchen table. Please bring it with you when you come over.",
+  "clean18": "The train leaves at nine tomorrow morning. We should arrive at the station at least twenty minutes early.",
+  "clean19": "Put the blue box on the shelf and leave the smaller green box beside the door.",
+  "clean20": "The lights are working again. We can finish cleaning the room and move the chairs back into place.",
+  "technical": "Run the unit tests, review the pull request, and restart the local Whisper server. Check the TypeScript compiler and the Rust build."
+}

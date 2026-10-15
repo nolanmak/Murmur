@@ -65,6 +65,28 @@ pub async fn run_observed(
     endpoint: fotw_stt::DeepgramEndpoint,
     receiving: Arc<AtomicBool>,
 ) -> Result<String, String> {
+    run_provider_observed(
+        tap,
+        CaptureProvider::Deepgram { key, endpoint },
+        control,
+        receiving,
+    )
+    .await
+}
+#[derive(Clone)]
+pub enum CaptureProvider {
+    Deepgram {
+        key: String,
+        endpoint: fotw_stt::DeepgramEndpoint,
+    },
+    Local(crate::local_stt::LocalEndpoint),
+}
+pub async fn run_provider_observed(
+    tap: Box<dyn AudioTap>,
+    provider: CaptureProvider,
+    control: Arc<AtomicU8>,
+    receiving: Arc<AtomicBool>,
+) -> Result<String, String> {
     if control.load(Ordering::Acquire) != 0 {
         return Err("Cancelled before microphone startup".into());
     }
@@ -84,7 +106,28 @@ pub async fn run_observed(
     // Ten seconds of 10 ms chunks covers the bounded eight-second TLS handshake.
     // The previous 320 ms queue overflowed before a live connection could open.
     let (tx, rx) = tokio::sync::mpsc::channel(1024);
-    let network = crate::streaming::transcribe(key, rx, endpoint, Duration::from_secs(8));
+    let local = matches!(&provider, CaptureProvider::Local(_));
+    let network = async {
+        match provider {
+            CaptureProvider::Deepgram { key, endpoint } => {
+                crate::streaming::transcribe(key, rx, endpoint, Duration::from_secs(8)).await
+            }
+            CaptureProvider::Local(endpoint) => {
+                let mut rx = rx;
+                let mut pcm = Vec::new();
+                while let Some(chunk) = rx.recv().await {
+                    append_local_pcm(&mut pcm, chunk);
+                }
+                crate::local_stt::transcribe(
+                    &endpoint,
+                    &pcm,
+                    control.clone(),
+                    Duration::from_secs(180),
+                )
+                .await
+            }
+        }
+    };
     tokio::pin!(network);
     let started = std::time::Instant::now();
     let mut last_frame = started;
@@ -97,7 +140,7 @@ pub async fn run_observed(
              result=&mut network=>return result,
              _=tick.tick()=>{
               if control.load(Ordering::Acquire)==2 {return Err("Cancelled".into());}
-        if finish_started.is_some_and(|at:std::time::Instant|at.elapsed()>Duration::from_secs(10)){return Err("Finalization timed out; no text inserted".into());}
+        if finish_started.is_some_and(|at:std::time::Instant|at.elapsed()>Duration::from_secs(if local { 181 } else { 10 })){return Err("Finalization timed out; no text inserted".into());}
               if failed.load(Ordering::Acquire){return Err("Audio buffer overflow or microphone failure; no text inserted".into());}
               if !finishing {
                if control.load(Ordering::Acquire)==1 || started.elapsed()>=Duration::from_secs(120) {
@@ -117,5 +160,30 @@ pub async fn run_observed(
               }
              }
             }
+    }
+}
+
+/// Retain at most 120 seconds of actual capture, including on a late stop tick.
+/// Once full, discard callback overshoot and the resampler's artificial drain tail.
+/// The transport separately rejects oversized caller-provided input.
+fn append_local_pcm(pcm: &mut Vec<i16>, chunk: Vec<i16>) {
+    let remaining = (16000_usize * 120).saturating_sub(pcm.len());
+    pcm.extend(chunk.into_iter().take(remaining));
+}
+
+#[cfg(test)]
+mod local_buffer_tests {
+    #[test]
+    fn maximum_capture_clips_scheduler_overshoot_and_resampler_padding() {
+        let mut pcm = vec![1; 16000 * 120 - 160];
+        // Last 10 ms of speech, a late 10 ms callback, then the 200 ms drain.
+        let mut final_chunk = vec![2; 320];
+        final_chunk.extend(vec![0; 3200]);
+        super::append_local_pcm(&mut pcm, final_chunk);
+        assert_eq!(pcm.len(), 16000 * 120);
+        assert_eq!(&pcm[pcm.len() - 160..], &[2; 160]);
+        super::append_local_pcm(&mut pcm, vec![3; 160]);
+        assert_eq!(pcm.len(), 16000 * 120);
+        assert_eq!(pcm.last(), Some(&2));
     }
 }
