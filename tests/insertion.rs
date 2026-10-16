@@ -136,3 +136,144 @@ fn a_new_or_missing_window_observation_blocks_delivery() {
     assert!(!same_window(Some(&7), None, equal));
     assert!(!same_window(None, Some(&7), equal));
 }
+
+mod settle {
+    use murmur::insertion::{FOCUS_STEP, FOCUS_WAIT, Probe, settle_focus};
+    use std::cell::Cell;
+    use std::time::Duration;
+
+    /// Runs `settle_focus` over scripted probes with a fake sleep; returns (result, probes, slept).
+    fn run(script: &[Option<Probe>]) -> (Option<Probe>, usize, Duration) {
+        let calls = Cell::new(0);
+        let slept = Cell::new(Duration::ZERO);
+        let result = settle_focus(
+            || {
+                let i = calls.get();
+                calls.set(i + 1);
+                script[i.min(script.len() - 1)]
+            },
+            |probe| *probe,
+            |step| slept.set(slept.get() + step),
+        );
+        (result, calls.get(), slept.get())
+    }
+
+    #[test]
+    fn editable_focus_is_used_without_waiting() {
+        assert_eq!(
+            run(&[Some(Probe::Editable)]),
+            (Some(Probe::Editable), 1, Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn browser_tree_that_appears_later_is_found() {
+        // Chrome reports nothing, then its web area, then the composer.
+        let (result, probes, slept) =
+            run(&[None, None, Some(Probe::NotEditable), Some(Probe::Editable)]);
+        assert_eq!(result, Some(Probe::Editable));
+        assert_eq!(probes, 4);
+        assert_eq!(slept, FOCUS_STEP * 3);
+    }
+
+    #[test]
+    fn secure_fields_stop_immediately() {
+        assert_eq!(
+            run(&[Some(Probe::Secure)]),
+            (Some(Probe::Secure), 1, Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn gives_up_at_the_budget_with_the_last_observation() {
+        let (result, probes, slept) = run(&[None]);
+        assert_eq!(result, None);
+        assert_eq!(slept, FOCUS_WAIT);
+        assert_eq!(
+            probes as u32,
+            FOCUS_WAIT.as_millis() as u32 / FOCUS_STEP.as_millis() as u32 + 1
+        );
+        let (result, _, slept) = run(&[Some(Probe::NotEditable)]);
+        assert_eq!(result, Some(Probe::NotEditable));
+        assert_eq!(slept, FOCUS_WAIT);
+    }
+
+    #[test]
+    fn budget_matches_the_issue() {
+        assert_eq!(FOCUS_STEP, Duration::from_millis(50));
+        assert_eq!(FOCUS_WAIT, Duration::from_millis(750));
+    }
+}
+
+mod start {
+    use murmur::insertion::{Preflight, Probe, late_target, preflight, prewarm_attributes};
+    use murmur::local_delivery::Failure;
+
+    #[test]
+    fn missing_focus_still_records_so_slow_trees_can_resolve_later() {
+        // Discord (Electron) and Chrome may expose nothing for seconds after
+        // accessibility is requested; refusing here made Discord unusable.
+        assert_eq!(preflight(None, false), Preflight::RecordUnresolved);
+        assert_eq!(preflight(None, true), Preflight::RecordUnresolved);
+    }
+
+    #[test]
+    fn known_targets_keep_their_existing_decisions() {
+        assert_eq!(preflight(Some(Probe::Editable), false), Preflight::Use);
+        assert_eq!(
+            preflight(Some(Probe::Editable), true),
+            Preflight::RecordUnresolved
+        );
+        for remote in [false, true] {
+            assert_eq!(
+                preflight(Some(Probe::Secure), remote),
+                Preflight::Refuse(Failure::SecureTarget)
+            );
+        }
+        assert_eq!(
+            preflight(Some(Probe::NotEditable), false),
+            Preflight::Refuse(Failure::UnsupportedTarget)
+        );
+        assert_eq!(
+            preflight(Some(Probe::NotEditable), true),
+            Preflight::RecordUnresolved
+        );
+    }
+
+    #[test]
+    fn late_target_must_be_an_editable_field_in_the_app_dictation_started_in() {
+        assert!(late_target(42, 42, Probe::Editable));
+        assert!(!late_target(42, 7, Probe::Editable), "switched apps");
+        assert!(!late_target(42, 42, Probe::Secure));
+        assert!(!late_target(42, 42, Probe::NotEditable));
+        assert!(!late_target(0, 0, Probe::Editable), "unknown start app");
+    }
+
+    #[test]
+    fn prewarm_turns_on_electron_accessibility_everywhere_and_browser_mode_only_for_chromium() {
+        for bundle in [
+            "com.hnc.Discord",
+            "com.tinyspeck.slackmacgap",
+            "com.apple.Notes",
+            "",
+        ] {
+            assert_eq!(
+                prewarm_attributes(bundle),
+                ["AXManualAccessibility"],
+                "{bundle}"
+            );
+        }
+        for bundle in [
+            "com.google.Chrome",
+            "com.brave.Browser",
+            "com.microsoft.edgemac",
+            "company.thebrowser.Browser",
+        ] {
+            assert_eq!(
+                prewarm_attributes(bundle),
+                ["AXManualAccessibility", "AXEnhancedUserInterface"],
+                "{bundle}"
+            );
+        }
+    }
+}
