@@ -166,20 +166,34 @@ impl NativeInput {
             return Ok(());
         };
         self.lease.phase(MicrophoneState::Stopping);
-        let result = tap.stop().map_err(|_| {
-            "Microphone stop unconfirmed; no text inserted; reopen Murmur".to_string()
-        });
-        if result.is_ok() {
-            // This boundary must precede watcher destruction: later route
-            // notifications cannot invalidate audio from a stopped tap.
+        let result = tap.stop_observed(&mut || {
+            // Native Stop can succeed before registration/resource release.
+            // Route notifications after this boundary cannot invalidate audio
+            // already captured, even while cleanup still owns the lease.
             self.stopped.store(true, Ordering::Release);
             self.lease.phase(MicrophoneState::CleaningUp);
-        } else {
+        });
+        let evidence = result.as_ref().err().and_then(TapError::cleanup_state);
+        if result.is_ok() || evidence.is_some_and(|state| state.capture_stopped()) {
+            self.stopped.store(true, Ordering::Release);
+            self.lease.phase(MicrophoneState::CleaningUp);
+        } else if !self.stopped.load(Ordering::Acquire) {
             self.lease.phase(MicrophoneState::Unconfirmed);
         }
+        let released = result.is_ok() || evidence.is_some_and(|state| state.resources_released());
+        let result = result.map_err(|_| {
+            if released {
+                "Microphone stopped; native cleanup reported an error; no text inserted; try again"
+            } else if self.stopped.load(Ordering::Acquire) {
+                "Microphone stopped but cleanup failed; no text inserted; reopen Murmur"
+            } else {
+                "Microphone stop unconfirmed; no text inserted; reopen Murmur"
+            }
+            .to_string()
+        });
         drop(tap);
         drop(self.watcher.take());
-        self.lease.cleaned = result.is_ok();
+        self.lease.cleaned = released;
         result
     }
 }
