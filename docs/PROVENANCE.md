@@ -1,7 +1,7 @@
 # Shared FlyOnTheWall components
 
 Source: https://github.com/nolanmak/FlyOnTheWall
-Pinned revision: `19d6b4585bbd2f98f207dce6732493cc42ad91d9`
+Pinned revision: `f310c9a31171f46dc2fc5abef3d21d1b180ad7cf`
 License: Apache-2.0; root LICENSE and NOTICE retained.
 
 Murmur resolves four crates from that immutable Git revision, with matching
@@ -49,3 +49,17 @@ reviewing the producer change. Run both repositories' required checks and the
 consumer conformance suite. Roll back manifest and lockfile changes together.
 A dependency version change does not imply automatic fallback, device recovery
 or local inference policies have been changed.
+
+## Native format upgrade (2026-10-24)
+
+This revision includes merged FlyOnTheWall #137/#138/#139: model-language
+validation, bounded supervisor recovery, and actual microphone format reporting.
+Murmur #66 already preserves stereo frames across ring drains, so it can consume
+the actual multichannel layout without discarding split frames. Unsupported
+layouts fail explicitly; callback layout changes are surfaced as capture faults.
+Murmur still cancels an invalid capture instead of silently inserting partial text.
+
+The shared supervisor policy does not make Murmur use that supervisor, and the
+shared Whisper adapter remains disabled: dictation still uses its managed helper.
+This dependency upgrade does not establish native device/sleep acceptance or
+implement the remaining Murmur device-recovery work in #61/#58.
