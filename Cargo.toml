@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = [".", "vendor/fotw-audio", "vendor/fotw-stt"]
+members = ["."]
 default-members = ["."]
 [workspace.package]
 version = "0.1.0"
@@ -25,9 +25,9 @@ repository.workspace = true
 [dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "stream"] }
 tempfile = "3"
-fotw-audio = { path = "vendor/fotw-audio" }
-fotw-stt = { path = "vendor/fotw-stt" }
-fotw-secrets = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "996fd79c39f7fe19eb14e3ace68c3a493540d12a" }
+fotw-audio = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "e846e56f2ce961400c366410586141a6d04689cf" }
+fotw-stt = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "e846e56f2ce961400c366410586141a6d04689cf" }
+fotw-secrets = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "e846e56f2ce961400c366410586141a6d04689cf" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
 serde.workspace = true
 serde_json.workspace = true
@@ -45,7 +45,9 @@ objc2-app-kit = { version = "0.3.2", features = ["NSApplication", "NSRunningAppl
 tray-icon = { version = "0.24", default-features = false }
 muda = { version = "0.19", default-features = false }
 [dev-dependencies]
-fotw-secrets = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "996fd79c39f7fe19eb14e3ace68c3a493540d12a", features = ["conformance"] }
+fotw-stt = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "e846e56f2ce961400c366410586141a6d04689cf", features = ["conformance"] }
+fotw-audio = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "e846e56f2ce961400c366410586141a6d04689cf", features = ["conformance"] }
+fotw-secrets = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "e846e56f2ce961400c366410586141a6d04689cf", features = ["conformance"] }
 futures-util = { workspace = true, features = ["sink", "std"] }
 tokio-tungstenite = "0.29"
 [profile.release]

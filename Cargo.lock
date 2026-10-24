@@ -738,6 +738,7 @@ dependencies = [
 [[package]]
 name = "fotw-audio"
 version = "0.1.0"
+source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=e846e56f2ce961400c366410586141a6d04689cf#e846e56f2ce961400c366410586141a6d04689cf"
 dependencies = [
  "cidre",
  "thiserror",
@@ -746,7 +747,7 @@ dependencies = [
 [[package]]
 name = "fotw-secrets"
 version = "0.1.0"
-source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=996fd79c39f7fe19eb14e3ace68c3a493540d12a#996fd79c39f7fe19eb14e3ace68c3a493540d12a"
+source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=e846e56f2ce961400c366410586141a6d04689cf#e846e56f2ce961400c366410586141a6d04689cf"
 dependencies = [
  "argon2",
  "bech32",
@@ -760,6 +761,7 @@ dependencies = [
 [[package]]
 name = "fotw-stt"
 version = "0.1.0"
+source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=e846e56f2ce961400c366410586141a6d04689cf#e846e56f2ce961400c366410586141a6d04689cf"
 dependencies = [
  "futures-util",
  "serde",
