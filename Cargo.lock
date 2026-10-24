@@ -571,7 +571,7 @@ dependencies = [
 [[package]]
 name = "fotw-audio"
 version = "0.1.0"
-source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=32cc4590d7c19c3b39fa9e26886d1f8d906c08c0#32cc4590d7c19c3b39fa9e26886d1f8d906c08c0"
+source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=e036ba6a181bfc0abae88c43749f5a04f0e0e4f3#e036ba6a181bfc0abae88c43749f5a04f0e0e4f3"
 dependencies = [
  "cidre",
  "thiserror",
@@ -580,7 +580,7 @@ dependencies = [
 [[package]]
 name = "fotw-dsp"
 version = "0.1.0"
-source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=32cc4590d7c19c3b39fa9e26886d1f8d906c08c0#32cc4590d7c19c3b39fa9e26886d1f8d906c08c0"
+source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=e036ba6a181bfc0abae88c43749f5a04f0e0e4f3#e036ba6a181bfc0abae88c43749f5a04f0e0e4f3"
 dependencies = [
  "rubato",
  "thiserror",
@@ -589,7 +589,7 @@ dependencies = [
 [[package]]
 name = "fotw-secrets"
 version = "0.1.0"
-source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=32cc4590d7c19c3b39fa9e26886d1f8d906c08c0#32cc4590d7c19c3b39fa9e26886d1f8d906c08c0"
+source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=e036ba6a181bfc0abae88c43749f5a04f0e0e4f3#e036ba6a181bfc0abae88c43749f5a04f0e0e4f3"
 dependencies = [
  "apple-native-keyring-store",
  "argon2",
@@ -606,7 +606,7 @@ dependencies = [
 [[package]]
 name = "fotw-stt"
 version = "0.1.0"
-source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=32cc4590d7c19c3b39fa9e26886d1f8d906c08c0#32cc4590d7c19c3b39fa9e26886d1f8d906c08c0"
+source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=e036ba6a181bfc0abae88c43749f5a04f0e0e4f3#e036ba6a181bfc0abae88c43749f5a04f0e0e4f3"
 dependencies = [
  "futures-util",
  "serde",

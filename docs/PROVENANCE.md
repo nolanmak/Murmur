@@ -6,7 +6,7 @@ License: Apache-2.0; root LICENSE and NOTICE retained.
 
 - `fotw-audio`, `fotw-stt`, `fotw-secrets` and `fotw-dsp`: maintained upstream crates
   consumed by immutable Git revision
-  `32cc4590d7c19c3b39fa9e26886d1f8d906c08c0` and Cargo.lock.
+  `e036ba6a181bfc0abae88c43749f5a04f0e0e4f3` and Cargo.lock.
   Their frozen vendor copies were removed after audio, streaming, credentials,
   config and fallback regression checks. Both apps run the shared `conformance`
   suites with synthetic audio and in-memory credentials.
@@ -71,3 +71,30 @@ The synthetic odd-chunk regression failed at 7,040 versus 7,200 samples before
 this change and matches both length and waveform afterward. Planar multichannel
 and non-Float32 native input layouts are explicitly refused by the producer;
 live sample-rate notification/rebuild and physical device acceptance remain open.
+
+
+## Continuous capture clock and watcher cleanup upgrade
+
+The current pin `e036ba6a181bfc0abae88c43749f5a04f0e0e4f3` also uses a
+sleep-aware continuous macOS capture clock and rolls back partially registered
+device watchers. Murmur directly uses both through its microphone tap and its
+per-utterance device watcher. Its existing sleep/wake policy still cancels an
+utterance; this upgrade does not enable automatic recording after wake.
+
+Producer tests verify fractional tick conversion, overflow/saturation, one
+native continuous epoch and real HAL property-listener rollback without opening
+an audio tap. The rollback regression initially retained a callback after the
+second registration failed. All 42 producer audio unit tests and the full local
+producer suite pass. Physical sleep/device/insertion acceptance remains open.
+
+All four shared crates and their conformance dev dependencies move together in
+Cargo.toml/Cargo.lock. The new archive converter and meeting supervisor changes
+are also present in the producer; Murmur continues to use its own dictation
+policy and managed Whisper HTTP engine.
+
+Consumer validation for this pin: formatting, warnings-denied Clippy, full locked
+workspace tests, repository checks, all 10 managed-runtime tests and advisory
+scan pass. The production dependency graph still excludes whisper-rs,
+opusic-sys and ogg. A certificate-required build and strict/deep signature
+verification pass with the existing development identity. No native recording,
+actual sleep, user keychain test or insertion test was performed for this upgrade.
