@@ -9,6 +9,7 @@ use crate::{
     },
     local_clipboard::Lease as LocalLease,
     local_delivery::{Failure as DeliveryFailure, Outcome as DeliveryOutcome},
+    permissions::{self, Access, Grant, Onboarding, Request, Route, Snapshot},
     platform::macos_local_clipboard::MacLocalBoard,
 };
 use block2::RcBlock;
@@ -57,6 +58,9 @@ unsafe extern "C" {
     fn CGEventGetIntegerValueField(event: CF, field: u32) -> i64;
     fn CGEventTapEnable(tap: CF, enable: bool);
     fn CGPreflightListenEventAccess() -> bool;
+    fn CGRequestListenEventAccess() -> bool;
+    fn AXIsProcessTrustedWithOptions(options: CF) -> bool;
+    static kAXTrustedCheckOptionPrompt: CF;
     fn CGEventCreateKeyboardEvent(source: CF, key: u16, down: bool) -> CF;
     fn CGEventSetFlags(event: CF, flags: u64);
     fn CGEventPost(tap: u32, event: CF);
@@ -74,6 +78,24 @@ unsafe extern "C" {
     fn CFRunLoopAddSource(runloop: CF, source: CF, mode: CF);
     fn CFRunLoopRemoveSource(runloop: CF, source: CF, mode: CF);
     static kCFRunLoopCommonModes: CF;
+    fn CFDictionaryCreate(
+        allocator: CF,
+        keys: *const CF,
+        values: *const CF,
+        count: isize,
+        key_callbacks: *const c_void,
+        value_callbacks: *const c_void,
+    ) -> CF;
+    fn CFDictionaryGetValue(dictionary: CF, key: CF) -> CF;
+    fn CFNumberGetValue(number: CF, kind: isize, value: *mut c_void) -> bool;
+    static kCFTypeDictionaryKeyCallBacks: u8;
+    static kCFTypeDictionaryValueCallBacks: u8;
+}
+#[link(name = "Security", kind = "framework")]
+unsafe extern "C" {
+    fn SecCodeCopySelf(flags: u32, code: *mut CF) -> i32;
+    fn SecCodeCopySigningInformation(code: CF, flags: u32, information: *mut CF) -> i32;
+    static kSecCodeInfoFlags: CF;
 }
 #[link(name = "AVFoundation", kind = "framework")]
 unsafe extern "C" {}
@@ -608,6 +630,13 @@ impl Pill {
         }
     }
 }
+#[derive(Clone, Copy)]
+enum LoginRetry {
+    // Re-read the saved preference; startup may not have been able to inspect it.
+    Sync,
+    SetEnabled(bool),
+}
+
 struct Shell {
     core: Dictation,
     control: Arc<AtomicU8>,
@@ -619,9 +648,14 @@ struct Shell {
     completed: mpsc::Sender<Completion>,
     _tray: TrayIcon,
     status: MenuItem,
+    speech: crate::speech::Selection,
+    speech_toggle: MenuItem,
     pill: Pill,
     indicator: Indicator,
-    warning: Option<&'static str>,
+    warning: Option<String>,
+    permissions: Snapshot,
+    onboarding: Onboarding,
+    prompted_at: Instant,
     last: crate::transcript::Latest,
     started: Instant,
     retry_at: Instant,
@@ -629,11 +663,18 @@ struct Shell {
     smoke_started: bool,
     launched: Instant,
     receiving: Arc<AtomicBool>,
+    microphone_startup: crate::capture::MicrophoneStartup,
+    speech_progress: crate::fallback::Progress,
+    speech_stage: crate::fallback::Stage,
     remote_mode: bool,
     recording_remote: bool,
     recording_remote_target: Option<RustDeskWindow>,
     remote_toggle: MenuItem,
     remote_profile: MenuItem,
+    /// Present only when launched from an app bundle; `cargo run` never installs.
+    login: Option<(crate::login_item::LoginItem, std::path::PathBuf)>,
+    login_toggle: MenuItem,
+    login_retry: Option<LoginRetry>,
     profile: crate::remote::Profile,
     review: crate::remote_review::Review,
     clipboard_lease: crate::remote_clipboard::Lease,
@@ -656,6 +697,16 @@ impl Shell {
             cfg!(debug_assertions) && std::env::args().any(|arg| arg == "--local-fixture");
         let menu = Menu::new();
         let status = MenuItem::with_id("status", "Hold Control to dictate", false, None);
+        let speech = crate::speech::Selection::load(crate::speech::Settings::path());
+        if speech.error().is_some() {
+            status.set_text("Speech settings invalid — choose Local Whisper in the Transcription menu to repair");
+        }
+        let speech_toggle = MenuItem::with_id(
+            "speech_provider",
+            speech_label(speech.provider()),
+            true,
+            None,
+        );
         let cancel = MenuItem::with_id("cancel", "Cancel dictation (Esc)", true, None);
         let start = MenuItem::with_id("start", "Start dictation", true, None);
         let stop = MenuItem::with_id("stop", "Stop dictation", true, None);
@@ -666,7 +717,35 @@ impl Shell {
             None,
         );
         let setup = MenuItem::with_id("setup", "Set up permissions", true, None);
+        let reopen = MenuItem::with_id("reopen", "Reopen Murmur", true, None);
         let quit = MenuItem::with_id("quit", "Quit Murmur", true, None);
+        let login = std::env::current_exe()
+            .ok()
+            .and_then(|exe| crate::login_item::app_bundle(&exe))
+            .zip(crate::login_item::LoginItem::for_user())
+            .map(|(bundle, item)| (item, bundle));
+        let login_retry = login.as_ref().and_then(|(item, bundle)| {
+            if let Err(error) = item.sync(bundle) {
+                eprintln!("open at login: cannot update LaunchAgent: {error}");
+                Some(LoginRetry::Sync)
+            } else {
+                None
+            }
+        });
+        let login_toggle = MenuItem::with_id(
+            "open_at_login",
+            if login_retry.is_some() {
+                "Open at login: Setup failed — click to retry"
+            } else {
+                login_label(
+                    login
+                        .as_ref()
+                        .is_some_and(|(item, bundle)| item.is_enabled(bundle)),
+                )
+            },
+            login.is_some(),
+            None,
+        );
         let remote_toggle = MenuItem::with_id("remote_mode", "Remote review mode: Off", true, None);
         if remote_fixture {
             remote_toggle.set_text("Remote review mode: On");
@@ -720,6 +799,7 @@ impl Shell {
         );
         for item in [
             &status,
+            &speech_toggle,
             &start,
             &stop,
             &cancel,
@@ -729,7 +809,9 @@ impl Shell {
             &remote_review,
             &restore,
             &local_restore,
+            &login_toggle,
             &setup,
+            &reopen,
             &quit,
         ] {
             menu.append(item).map_err(|e| e.to_string())?;
@@ -751,12 +833,8 @@ impl Shell {
         let pill = Pill::new(mtm)?;
         let (sender, input) = mpsc::sync_channel(128);
         let tap = EventTap::new(sender.clone());
-        eprintln!(
-            "permissions accessibility={} input_monitoring={} keyboard_listener={}",
-            unsafe { AXIsProcessTrusted() },
-            unsafe { CGPreflightListenEventAccess() },
-            tap.is_some()
-        );
+        let permissions = permission_snapshot(signed_ad_hoc());
+        eprintln!("{}", permissions.report(tap.is_some()));
         let (completed, result) = mpsc::channel();
         Ok(Self {
             core: Dictation::default(),
@@ -769,9 +847,14 @@ impl Shell {
             completed,
             _tray: tray,
             status,
+            speech,
+            speech_toggle,
             pill,
             indicator: Indicator::default(),
             warning: None,
+            permissions,
+            onboarding: Onboarding::default(),
+            prompted_at: Instant::now(),
             last: if local_fixture {
                 LOCAL_FIXTURE_TEXT.into()
             } else if remote_fixture {
@@ -785,11 +868,17 @@ impl Shell {
             smoke_started: false,
             launched: Instant::now(),
             receiving: Arc::new(AtomicBool::new(false)),
+            microphone_startup: Default::default(),
+            speech_progress: Default::default(),
+            speech_stage: Default::default(),
             remote_mode: remote_fixture,
             recording_remote: remote_fixture,
             recording_remote_target: None,
             remote_toggle,
             remote_profile,
+            login,
+            login_toggle,
+            login_retry,
             profile: crate::remote::Profile::Mac,
             review: Default::default(),
             clipboard_lease: Default::default(),
@@ -816,26 +905,57 @@ impl Shell {
     fn now(&self) -> u64 {
         self.launched.elapsed().as_millis() as u64
     }
-    fn check_keyboard(&mut self) {
-        let warning = if self.tap.is_none() {
-            Some("Keyboard access unavailable — use Start dictation in the Control menu")
-        } else if !unsafe { CGPreflightListenEventAccess() } {
-            Some("Keyboard permission needed — enable Input Monitoring in System Settings")
-        } else {
-            None
-        };
+    /// Re-reads every grant, walks launch onboarding and refreshes the named warning.
+    fn check_permissions(&mut self) {
+        let snapshot = permission_snapshot(self.permissions.ad_hoc);
+        if permissions::newly_granted(&self.permissions, &snapshot)
+            .contains(&Grant::InputMonitoring)
+        {
+            // A listener created before the grant may never receive events.
+            self.tap = EventTap::new(self.sender.clone());
+        }
+        self.permissions = snapshot;
+        if self.onboarding.waiting() && self.prompted_at.elapsed() >= PROMPT_WAIT {
+            self.onboarding.expire_wait(&snapshot);
+        }
+        if self.core.phase == Phase::Idle
+            && let Some(grant) = self.onboarding.next(&snapshot)
+        {
+            self.prompted_at = Instant::now();
+            perform(permissions::request(grant, &snapshot));
+        }
+        let warning = snapshot.warning().or_else(|| {
+            self.tap.is_none().then(|| {
+                "Keyboard access unavailable — use Start dictation in the Control menu".into()
+            })
+        });
         if warning != self.warning {
+            let show = warning.is_some() || self.core.phase == Phase::Idle;
             self.warning = warning;
-            if warning.is_some() || self.core.phase == Phase::Idle {
-                self.status(self.ready());
+            if show {
+                self.status(&self.ready());
             }
         }
     }
-    fn ready(&self) -> &'static str {
-        match self.warning {
-            Some(warning) => warning,
-            None if self.remote_mode => "Hold Control to record for remote review",
-            None => "Hold Control to dictate",
+    /// Refuses a dictation that cannot be delivered, naming the grant and opening its pane.
+    fn permitted(&mut self, route: Route) -> bool {
+        self.permissions = permission_snapshot(self.permissions.ad_hoc);
+        let Err(grant) = self.permissions.gate(route) else {
+            return true;
+        };
+        self.cancel();
+        fix(grant, &self.permissions);
+        self.show(&permissions::blocked_message(grant, &self.permissions));
+        false
+    }
+    fn ready(&self) -> String {
+        if self.speech.error().is_some() {
+            return "Speech settings invalid — choose Local Whisper in the Transcription menu to repair".into();
+        }
+        match &self.warning {
+            Some(warning) => warning.clone(),
+            None if self.remote_mode => "Hold Control to record for remote review".into(),
+            None => "Hold Control to dictate".into(),
         }
     }
     fn cancel(&mut self) {
@@ -847,6 +967,11 @@ impl Shell {
         }
     }
     fn start(&mut self) {
+        if self.speech.error().is_some() {
+            self.cancel();
+            self.show(&self.ready());
+            return;
+        }
         self.recording_remote_target = RustDeskWindow::selected();
         self.recording_remote = crate::remote_review::recording_destination(
             self.remote_mode,
@@ -856,6 +981,16 @@ impl Shell {
         // Clear it before preflight so a failed attempt cannot leave a stale
         // "Transcript ready" action that appears to belong to this attempt.
         self.last.begin();
+        let route = if self.recording_remote && self.recording_remote_target.is_none() {
+            Route::RemoteReview
+        } else {
+            Route::Local
+        };
+        // Check before recording: without Accessibility a local dictation can only
+        // end as "Transcript ready · choose Copy Last Transcript".
+        if !self.permitted(route) {
+            return;
+        }
         let focus = match self.preflight_focus() {
             Ok(focus) => focus,
             Err(reason) => {
@@ -864,37 +999,26 @@ impl Shell {
                 return;
             }
         };
-        let platform = fotw_audio::platform::macos::MacOsPlatform::new();
-        if platform.permission(Permission::Microphone) != PermissionState::Granted {
-            request_microphone();
-            self.cancel();
-            self.show("Use Set up permissions in the Control menu, then try again.");
-            return;
-        }
         self.begin_attempt(focus, "◌ Starting microphone…");
         let control = self.control.clone();
         let completed = self.completed.clone();
         let generation = self.core.generation();
         let receiving = self.receiving.clone();
+        let startup = self.microphone_startup.clone();
+        let progress = self.speech_progress.clone();
+        let speech = self.speech.clone();
         std::thread::spawn(move || {
             let result = (|| {
-                let credentials = crate::config::load()?;
-                eprintln!("credentials loaded via {}", credentials.source);
+                let provider = speech.capture_provider(crate::config::load)?;
                 let platform = fotw_audio::platform::macos::MacOsPlatform::new();
                 let tap = platform
                     .open_mic(&DeviceId::new("default"), FormatRequest::any())
                     .map_err(|_| "No microphone available".to_string())?;
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|_| "Cannot start audio runtime".to_string())?;
-                runtime.block_on(crate::capture::run_observed(
-                    tap,
-                    credentials.key.expose().into(),
-                    control,
-                    fotw_stt::DeepgramEndpoint::production(),
-                    receiving,
-                ))
+                crate::capture::block_on_detached(
+                    crate::capture::run_provider_with_startup_and_progress(
+                        tap, provider, control, receiving, progress, startup,
+                    ),
+                )?
             })();
             let _ = completed.send(Completion { generation, result });
         });
@@ -946,6 +1070,8 @@ impl Shell {
         self.focus = focus;
         self.control = Arc::new(AtomicU8::new(0));
         self.receiving = Arc::new(AtomicBool::new(false));
+        self.speech_progress = Default::default();
+        self.speech_stage = Default::default();
         self.started = Instant::now();
         self.last.begin();
         self.indicator.clear();
@@ -1047,6 +1173,27 @@ impl Shell {
         }
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             match event.id.as_ref() {
+                "speech_provider" => {
+                    let provider = match self.speech.provider() {
+                        Some(crate::speech::Provider::LocalWhisper) => {
+                            crate::speech::Provider::DeepgramThenLocal
+                        }
+                        Some(crate::speech::Provider::DeepgramThenLocal) => {
+                            crate::speech::Provider::Deepgram
+                        }
+                        _ => crate::speech::Provider::LocalWhisper,
+                    };
+                    match crate::speech::Settings::path()
+                        .and_then(|path| self.speech.choose(provider, &path))
+                    {
+                        Ok(()) => {
+                            self.speech_toggle
+                                .set_text(speech_label(self.speech.provider()));
+                            self.show("Transcription provider saved for the next recording");
+                        }
+                        Err(error) => self.show(&error),
+                    }
+                }
                 "remote_mode" => {
                     if self.local_lease.pending() || self.clipboard_lease.pending() {
                         self.show("Restore previous clipboard before changing modes");
@@ -1063,7 +1210,7 @@ impl Shell {
                         self.show("Hold Control to record for remote review");
                     } else {
                         self.indicator.clear();
-                        self.status(self.ready());
+                        self.status(&self.ready());
                     }
                 }
                 "remote_profile" => {
@@ -1077,6 +1224,31 @@ impl Shell {
                         "Remote paste shortcut: {}",
                         profile_name(self.profile)
                     ));
+                }
+                "open_at_login" => {
+                    if let Some((item, bundle)) = &self.login {
+                        let action = self
+                            .login_retry
+                            .unwrap_or_else(|| LoginRetry::SetEnabled(!item.is_enabled(bundle)));
+                        let result = match action {
+                            LoginRetry::Sync => item.sync(bundle).map(|_| ()),
+                            LoginRetry::SetEnabled(enabled) => item.set_enabled(enabled, bundle),
+                        };
+                        match result {
+                            Ok(()) => {
+                                self.login_retry = None;
+                                self.login_toggle
+                                    .set_text(login_label(item.is_enabled(bundle)));
+                            }
+                            Err(error) => {
+                                eprintln!("open at login: cannot update LaunchAgent: {error}");
+                                self.login_retry = Some(action);
+                                self.login_toggle
+                                    .set_text("Open at login: Setup failed — click to retry");
+                                self.show("Open at login failed — check Library/LaunchAgents and Murmur Application Support permissions, then retry");
+                            }
+                        }
+                    }
                 }
                 "remote_review" if self.core.phase == Phase::Idle && self.recording_remote => {
                     self.review_remote()
@@ -1153,9 +1325,31 @@ impl Shell {
                 }
                 "setup" => {
                     self.cancel();
-                    request_microphone();
-                    let _=std::process::Command::new("open").arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility").spawn();
-                    self.show("Enable Accessibility. Keep Wispr Flow on Fn; hold Control here.");
+                    self.permissions = permission_snapshot(self.permissions.ad_hoc);
+                    match self.permissions.missing().first() {
+                        Some(&grant) => {
+                            fix(grant, &self.permissions);
+                            self.show(&permissions::blocked_message(grant, &self.permissions));
+                        }
+                        None => self.show("All permissions granted"),
+                    }
+                }
+                "reopen" => {
+                    // Input Monitoring grants apply only to a newly launched process.
+                    let bundle = std::env::current_exe()
+                        .ok()
+                        .and_then(|exe| permissions::app_bundle(&exe));
+                    match bundle {
+                        Some(bundle) => {
+                            self.control.store(2, Ordering::Release);
+                            let _ = std::process::Command::new("/bin/sh")
+                                .args(["-c", "sleep 1; /usr/bin/open \"$0\""])
+                                .arg(bundle)
+                                .spawn();
+                            std::process::exit(0)
+                        }
+                        None => self.show("Reopen needs Murmur.app; quit and relaunch it"),
+                    }
                 }
                 "quit" => {
                     self.control.store(2, Ordering::Release);
@@ -1212,10 +1406,22 @@ impl Shell {
                 self.tap = EventTap::new(self.sender.clone());
             }
             self.retry_at = Instant::now();
-            self.check_keyboard();
+            self.check_permissions();
             self.pill.place();
         }
         let now = self.now();
+        let stage = self.speech_progress.stage();
+        if stage != self.speech_stage
+            && matches!(self.core.phase, Phase::Recording | Phase::Processing)
+        {
+            self.speech_stage = stage;
+            let verb = if self.core.phase == Phase::Recording {
+                "Recording"
+            } else {
+                "Transcribing"
+            };
+            self.status(&format!("{verb} · {} · Esc to cancel", stage.label()));
+        }
         let receiving = self.receiving.load(Ordering::Acquire);
         let look = self
             .indicator
@@ -1223,9 +1429,16 @@ impl Shell {
         if self.pill.look == Look::Success
             && matches!(look, Look::Idle | Look::Warning | Look::Armed)
         {
-            self.status(self.ready());
+            self.status(&self.ready());
         }
         self.pill.render(look, now);
+    }
+}
+fn login_label(enabled: bool) -> &'static str {
+    if enabled {
+        "Open at login: On"
+    } else {
+        "Open at login: Off"
     }
 }
 fn profile_name(profile: crate::remote::Profile) -> &'static str {
@@ -1546,6 +1759,81 @@ pub fn preview_remote_review() -> Result<(), String> {
     );
     Ok(())
 }
+/// How long a dismissed system prompt blocks the next onboarding step.
+const PROMPT_WAIT: Duration = Duration::from_secs(20);
+fn microphone_access() -> Access {
+    let platform = fotw_audio::platform::macos::MacOsPlatform::new();
+    match platform.permission(Permission::Microphone) {
+        PermissionState::Granted => Access::Granted,
+        PermissionState::NotDetermined => Access::Undetermined,
+        _ => Access::Denied,
+    }
+}
+fn permission_snapshot(ad_hoc: bool) -> Snapshot {
+    Snapshot {
+        microphone: microphone_access(),
+        accessibility: unsafe { AXIsProcessTrusted() },
+        input_monitoring: unsafe { CGPreflightListenEventAccess() },
+        ad_hoc,
+    }
+}
+/// Reads this process's own signature; no special access is required.
+fn signed_ad_hoc() -> bool {
+    let mut code = ptr::null();
+    if unsafe { SecCodeCopySelf(0, &mut code) } != 0 || code.is_null() {
+        return false;
+    }
+    let code = Owned(code);
+    let mut info = ptr::null();
+    // kSecCSSigningInformation
+    if unsafe { SecCodeCopySigningInformation(code.0, 1 << 1, &mut info) } != 0 || info.is_null() {
+        return false;
+    }
+    let info = Owned(info);
+    let value = unsafe { CFDictionaryGetValue(info.0, kSecCodeInfoFlags) };
+    let mut flags = 0u32;
+    // kCFNumberSInt32Type
+    !value.is_null()
+        && unsafe { CFNumberGetValue(value, 3, (&raw mut flags).cast()) }
+        && permissions::is_ad_hoc(flags)
+}
+/// Explicit user action: the system prompt when one can still appear, otherwise Settings.
+fn fix(grant: Grant, snapshot: &Snapshot) {
+    match permissions::request(grant, snapshot) {
+        Request::MicrophonePrompt => request_microphone(),
+        _ => open_settings(grant),
+    }
+}
+fn perform(request: Request) {
+    match request {
+        Request::MicrophonePrompt => request_microphone(),
+        Request::AccessibilityPrompt => prompt_accessibility(),
+        Request::InputMonitoringPrompt => {
+            unsafe { CGRequestListenEventAccess() };
+        }
+        Request::OpenSettings(grant) => open_settings(grant),
+    }
+}
+fn open_settings(grant: Grant) {
+    let _ = std::process::Command::new("open")
+        .arg(grant.settings_url())
+        .spawn();
+}
+fn prompt_accessibility() {
+    let keys = [unsafe { kAXTrustedCheckOptionPrompt }];
+    let values = [unsafe { kCFBooleanTrue }];
+    let options = Owned(unsafe {
+        CFDictionaryCreate(
+            ptr::null(),
+            keys.as_ptr(),
+            values.as_ptr(),
+            1,
+            (&raw const kCFTypeDictionaryKeyCallBacks).cast(),
+            (&raw const kCFTypeDictionaryValueCallBacks).cast(),
+        )
+    });
+    unsafe { AXIsProcessTrustedWithOptions(options.0) };
+}
 fn request_microphone() {
     let handler = RcBlock::new(|_granted: objc2::runtime::Bool| {});
     if let Some(class) = objc2::runtime::AnyClass::get(c"AVCaptureDevice") {
@@ -1561,7 +1849,7 @@ pub fn run() -> Result<(), String> {
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
     app.finishLaunching();
     let shell = Rc::new(RefCell::new(Shell::new(mtm)?));
-    shell.borrow_mut().check_keyboard();
+    shell.borrow_mut().check_permissions();
     if shell.borrow().remote_mode {
         shell
             .borrow_mut()
@@ -1579,4 +1867,17 @@ pub fn run() -> Result<(), String> {
         unsafe { NSTimer::scheduledTimerWithTimeInterval_repeats_block(0.02, true, &block) };
     app.run();
     Ok(())
+}
+
+fn speech_label(provider: Option<&crate::speech::Provider>) -> &'static str {
+    match provider {
+        Some(crate::speech::Provider::Deepgram) => "Transcription: Deepgram (click for local)",
+        Some(crate::speech::Provider::LocalWhisper) => {
+            "Transcription: Local Whisper (click for cloud → local)"
+        }
+        Some(crate::speech::Provider::DeepgramThenLocal) => {
+            "Transcription: Deepgram → local (click for cloud only)"
+        }
+        None => "Transcription: invalid settings — click to select Local Whisper",
+    }
 }
