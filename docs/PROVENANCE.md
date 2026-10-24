@@ -1,7 +1,7 @@
 # Shared FlyOnTheWall components
 
 Source: https://github.com/nolanmak/FlyOnTheWall
-Pinned revision: `f310c9a31171f46dc2fc5abef3d21d1b180ad7cf`
+Pinned revision: `3acfb22b5aec7673c9169e66523b61e7391508d9`
 License: Apache-2.0; root LICENSE and NOTICE retained.
 
 Murmur resolves four crates from that immutable Git revision, with matching
@@ -63,3 +63,16 @@ The shared supervisor policy does not make Murmur use that supervisor, and the
 shared Whisper adapter remains disabled: dictation still uses its managed helper.
 This dependency upgrade does not establish native device/sleep acceptance or
 implement the remaining Murmur device-recovery work in #61/#58.
+
+## Device notification consumer
+
+The producer revision now includes merged FlyOnTheWall PRs
+[#140](https://github.com/nolanmak/FlyOnTheWall/pull/140),
+[#141](https://github.com/nolanmak/FlyOnTheWall/pull/141) and
+[#142](https://github.com/nolanmak/FlyOnTheWall/pull/142): capture-health APIs,
+callback retirement, a continuous macOS capture clock and rollback of partially
+registered device listeners. Murmur uses the corrected watcher registration for
+its per-attempt default-input notifications. It still owns its dictation policy
+and does not automatically adopt the meeting supervisor. Native input/format/
+sleep notification coverage and bounded native preparation/teardown remain #61
+work; changing the shared clock alone does not complete those policies.

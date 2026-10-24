@@ -76,7 +76,7 @@ utterance while transcription drains. No automatic recording restart occurs.
 The original default-input test returned a successful transcript and failed its
 cancellation assertion. After wiring, a separate boundary test exposed excessive
 cancellation after stop; restricting notification checks to active capture fixed
-it. All 19 capture tests now pass, including input/output distinction, a fresh
+it. All 20 capture tests now pass, including input/output distinction, a fresh
 attempt after a stale notification, completed-audio preservation and prompt
 startup cancellation with late-tap cleanup.
 
@@ -85,3 +85,9 @@ the shared native watcher currently publishes only default-device/device-list
 changes. Native format and sleep event sources, sleep-aware stall clocks,
 background readiness recovery and physical device QA remain unfinished under
 #61. Synthetic event tests do not establish those native acceptance gates.
+
+The route change extraction retains the five-argument startup API, independent
+progress/startup state, panic containment and stereo frame preservation already
+on main. Device-watcher creation and default-device selection are synchronous
+and precede the tap-start deadline; bounding the entire native preparation and
+teardown path remains required before closing #61.
