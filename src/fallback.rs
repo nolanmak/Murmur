@@ -15,6 +15,7 @@ pub enum Stage {
     Cloud = 1,
     Retrying = 2,
     Local = 3,
+    LocalWithoutHints = 4,
 }
 impl Progress {
     pub fn stage(&self) -> Stage {
@@ -22,6 +23,7 @@ impl Progress {
             1 => Stage::Cloud,
             2 => Stage::Retrying,
             3 => Stage::Local,
+            4 => Stage::LocalWithoutHints,
             _ => Stage::Preparing,
         }
     }
@@ -31,12 +33,22 @@ impl Progress {
     }
 }
 impl Stage {
+    /// Keep the capability difference visible even when a fast local result
+    /// completes between two native UI progress polls.
+    pub fn completion_message(self, message: &str) -> String {
+        if self == Self::LocalWithoutHints {
+            format!("{message} · Local recognition hints unavailable")
+        } else {
+            message.to_owned()
+        }
+    }
     pub fn label(self) -> &'static str {
         match self {
             Self::Preparing => "Checking speech engine",
             Self::Cloud => "Deepgram",
             Self::Retrying => "Retrying Deepgram",
             Self::Local => "Local Whisper",
+            Self::LocalWithoutHints => "Local Whisper · recognition hints unavailable",
         }
     }
 }
@@ -78,23 +90,42 @@ pub async fn transcribe(
 
 pub async fn transcribe_observed(
     key: String,
-    mut audio: mpsc::Receiver<Vec<i16>>,
+    audio: mpsc::Receiver<Vec<i16>>,
     cloud: fotw_stt::DeepgramEndpoint,
     local: crate::local_stt::LocalEndpoint,
     control: Arc<AtomicU8>,
     deadlines: Deadlines,
     progress: Progress,
 ) -> Result<String, String> {
+    transcribe_with_vocabulary(key, audio, cloud, local, control, deadlines, progress, &[]).await
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "preserve the injected transport/deadline seam while sharing immutable utterance hints"
+)]
+pub async fn transcribe_with_vocabulary(
+    key: String,
+    mut audio: mpsc::Receiver<Vec<i16>>,
+    cloud: fotw_stt::DeepgramEndpoint,
+    local: crate::local_stt::LocalEndpoint,
+    control: Arc<AtomicU8>,
+    deadlines: Deadlines,
+    progress: Progress,
+    hints: &[String],
+) -> Result<String, String> {
+    crate::vocabulary::validate_hints(hints)?;
     progress.set(Stage::Cloud);
     use std::sync::atomic::Ordering;
     let (tx, rx) = mpsc::channel(1024);
     let mut sender = Some(tx);
-    let mut remote = Some(Box::pin(crate::streaming::transcribe_typed(
+    let mut remote = Some(Box::pin(crate::streaming::transcribe_with_vocabulary(
         key.clone(),
         rx,
         cloud.clone(),
         deadlines.connect,
         deadlines.cloud_final,
+        hints,
     )));
     let mut pcm = Vec::new();
     let mut ended = false;
@@ -107,7 +138,11 @@ pub async fn transcribe_observed(
             return Err("Cancelled".into());
         }
         if remote.is_none() && retry_at.is_none() {
-            progress.set(Stage::Local);
+            progress.set(if hints.is_empty() {
+                Stage::Local
+            } else {
+                Stage::LocalWithoutHints
+            });
             if ended {
                 break;
             }
@@ -122,8 +157,8 @@ pub async fn transcribe_observed(
                     for chunk in pcm.chunks(16_000) {
                         tx.try_send(chunk.to_vec()).map_err(|_| "Cannot replay bounded dictation")?;
                     }
-                    remote = Some(Box::pin(crate::streaming::transcribe_typed(
-                        key.clone(), rx, cloud.clone(), deadlines.connect, deadlines.cloud_final,
+                    remote = Some(Box::pin(crate::streaming::transcribe_with_vocabulary(
+                        key.clone(), rx, cloud.clone(), deadlines.connect, deadlines.cloud_final, hints,
                     )));
                     sender = if ended { None } else { Some(tx) };
                 }

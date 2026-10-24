@@ -997,6 +997,8 @@ impl Shell {
         let speech = self.speech.clone();
         std::thread::spawn(move || {
             let result = (|| {
+                let vocabulary =
+                    crate::vocabulary::Profile::load(&crate::vocabulary::Profile::path()?)?;
                 let provider = speech.capture_provider(crate::config::load)?;
                 let platform = fotw_audio::platform::macos::MacOsPlatform::new();
                 let changes = fotw_audio::device_change::DeviceChangeSignal::new();
@@ -1006,8 +1008,8 @@ impl Shell {
                 let tap = platform
                     .open_mic(&DeviceId::new("default"), FormatRequest::any())
                     .map_err(|_| "No microphone available".to_string())?;
-                crate::capture::block_on_detached(crate::capture::run_provider_with_events(
-                    tap, provider, control, receiving, progress, startup, changes,
+                crate::capture::block_on_detached(crate::capture::run_provider_with_vocabulary(
+                    tap, provider, control, receiving, progress, startup, changes, vocabulary,
                 ))?
             })();
             let _ = completed.send(Completion { generation, result });
@@ -1400,7 +1402,12 @@ impl Shell {
                     if self.recording_remote_target.is_some() {
                         self.copy_automatic_remote(&text);
                     } else if self.recording_remote {
-                        self.show("Transcript ready · Review for RustDesk…");
+                        self.show(
+                            &self
+                                .speech_progress
+                                .stage()
+                                .completion_message("Transcript ready · Review for RustDesk…"),
+                        );
                     } else {
                         let result = self
                             .focus
@@ -1408,7 +1415,12 @@ impl Shell {
                             .ok_or(DeliveryFailure::MissingTarget)
                             .and_then(|f| f.insert(&text, &mut self.local_lease));
                         match result {
-                            Ok(outcome) => self.show(outcome.message()),
+                            Ok(outcome) => self.show(
+                                &self
+                                    .speech_progress
+                                    .stage()
+                                    .completion_message(outcome.message()),
+                            ),
                             Err(reason) => self.show(reason.message()),
                         }
                     }
@@ -1533,7 +1545,12 @@ impl Shell {
             self.clipboard_attempt = Some(attempt);
         }
         match result {
-            Ok(()) => self.show("Fresh transcript copied · paste in RustDesk"),
+            Ok(()) => self.show(
+                &self
+                    .speech_progress
+                    .stage()
+                    .completion_message("Fresh transcript copied · paste in RustDesk"),
+            ),
             Err(reason) => {
                 eprintln!("remote_copy reason={reason:?}");
                 self.show(reason.message());

@@ -101,3 +101,54 @@ async fn unencrypted_remote_provider_is_rejected_before_connecting() {
     .await;
     assert!(result.unwrap_err().contains("Unencrypted"));
 }
+
+#[tokio::test]
+#[allow(clippy::result_large_err, reason = "tungstenite callback error type")]
+async fn vocabulary_is_encoded_as_separate_nova3_keyterms() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = accept_hdr_async(socket, |req: &Request, res: Response| {
+            let url = reqwest::Url::parse(&format!("http://localhost{}", req.uri())).unwrap();
+            let pairs: Vec<_> = url
+                .query_pairs()
+                .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                .collect();
+            assert!(pairs.contains(&("model".into(), "nova-3".into())));
+            assert_eq!(
+                pairs
+                    .iter()
+                    .filter(|(k, _)| k == "keyterm")
+                    .map(|(_, v)| v.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["C++", "Zoë & Sons"]
+            );
+            assert!(!pairs.iter().any(|(k, _)| k == "keywords"));
+            Ok(res)
+        })
+        .await
+        .unwrap();
+        while let Some(Ok(message)) = ws.next().await {
+            if matches!(message, Message::Text(ref text) if text.contains("CloseStream")) {
+                ws.send(Message::text(r#"{"type":"Metadata"}"#))
+                    .await
+                    .unwrap();
+                break;
+            }
+        }
+    });
+    let (tx, rx) = mpsc::channel(1);
+    drop(tx);
+    murmur::streaming::transcribe_with_vocabulary(
+        "fixture".into(),
+        rx,
+        DeepgramEndpoint::loopback(port),
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+        &["C++".into(), "Zoë & Sons".into()],
+    )
+    .await
+    .unwrap();
+    server.await.unwrap();
+}

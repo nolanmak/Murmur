@@ -376,3 +376,112 @@ async fn fallback_retains_at_most_the_capture_limit() {
         16_000 * 120 * 2
     );
 }
+
+#[tokio::test]
+async fn local_fallback_reports_unsupported_hints_without_sending_them_to_the_local_engine() {
+    let (local, server) = local_server().await;
+    let (tx, rx) = mpsc::channel(1);
+    tx.send(vec![1000; 1600]).await.unwrap();
+    drop(tx);
+    let progress = fallback::Progress::default();
+    let text = fallback::transcribe_with_vocabulary(
+        "fixture".into(),
+        rx,
+        fotw_stt::DeepgramEndpoint::loopback(1),
+        local,
+        Arc::new(AtomicU8::new(1)),
+        deadlines(),
+        progress.clone(),
+        &["Private fixture name".into()],
+    )
+    .await
+    .unwrap();
+    assert_eq!(text, "Complete local utterance.");
+    assert!(matches!(
+        progress.stage(),
+        fallback::Stage::LocalWithoutHints
+    ));
+    assert!(
+        progress
+            .stage()
+            .completion_message("Inserted")
+            .contains("hints unavailable")
+    );
+    let request = server.await.unwrap();
+    assert!(!String::from_utf8_lossy(&request).contains("Private fixture name"));
+}
+
+#[tokio::test]
+#[allow(clippy::result_large_err, reason = "tungstenite callback error type")]
+async fn cloud_retry_reuses_the_same_recognition_hints() {
+    use tokio_tungstenite::{
+        accept_hdr_async,
+        tungstenite::handshake::server::{Request, Response},
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = fotw_stt::DeepgramEndpoint::loopback(listener.local_addr().unwrap().port());
+    let server = tokio::spawn(async move {
+        for attempt in 0..2 {
+            let (socket, _) = listener.accept().await.unwrap();
+            let websocket = accept_hdr_async(socket, |req: &Request, res: Response| {
+                let url = reqwest::Url::parse(&format!("http://localhost{}", req.uri())).unwrap();
+                assert_eq!(
+                    url.query_pairs()
+                        .filter(|(k, _)| k == "keyterm")
+                        .map(|(_, v)| v.into_owned())
+                        .collect::<Vec<_>>(),
+                    vec!["C++", "Project Acorn"]
+                );
+                if attempt == 0 {
+                    let mut denied = tokio_tungstenite::tungstenite::http::Response::new(Some(
+                        "fixture outage".to_owned(),
+                    ));
+                    *denied.status_mut() =
+                        tokio_tungstenite::tungstenite::http::StatusCode::SERVICE_UNAVAILABLE;
+                    return Err(denied);
+                }
+                Ok(res)
+            })
+            .await;
+            if attempt == 0 {
+                assert!(websocket.is_err());
+                continue;
+            }
+            let mut websocket = websocket.unwrap();
+            while let Some(Ok(message)) = websocket.next().await {
+                if matches!(message,Message::Text(ref text) if text.contains("CloseStream")) {
+                    websocket.send(Message::text(r#"{"type":"Results","is_final":true,"speech_final":true,"channel":{"alternatives":[{"transcript":"Cloud fixture."}]}}"#)).await.unwrap();
+                    websocket
+                        .send(Message::text(r#"{"type":"Metadata"}"#))
+                        .await
+                        .unwrap();
+                    break;
+                }
+            }
+        }
+    });
+    let (tx, rx) = mpsc::channel(1);
+    tx.send(vec![1000; 1600]).await.unwrap();
+    drop(tx);
+    let result = fallback::transcribe_with_vocabulary(
+        "fixture".into(),
+        rx,
+        endpoint,
+        LocalEndpoint::new("http://127.0.0.1:1").unwrap(),
+        Arc::new(AtomicU8::new(1)),
+        Deadlines {
+            connect: Duration::from_millis(500),
+            cloud_final: Duration::from_secs(2),
+            local: Duration::from_secs(1),
+        },
+        fallback::Progress::default(),
+        &["C++".into(), "Project Acorn".into()],
+    )
+    .await
+    .unwrap();
+    assert_eq!(result, "Cloud fixture.");
+    tokio::time::timeout(Duration::from_secs(3), server)
+        .await
+        .unwrap()
+        .unwrap();
+}
