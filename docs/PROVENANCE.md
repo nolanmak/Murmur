@@ -1,7 +1,7 @@
 # Shared FlyOnTheWall components
 
 Source: https://github.com/nolanmak/FlyOnTheWall
-Pinned revision: `3acfb22b5aec7673c9169e66523b61e7391508d9`
+Pinned revision: `ba0ba109a2628dd8b70dfe6f26430f4e9909eee6`
 License: Apache-2.0; root LICENSE and NOTICE retained.
 
 Murmur resolves four crates from that immutable Git revision, with matching
@@ -76,3 +76,13 @@ its per-attempt default-input notifications. It still owns its dictation policy
 and does not automatically adopt the meeting supervisor. Native input/format/
 sleep notification coverage and bounded native preparation/teardown remain #61
 work; changing the shared clock alone does not complete those policies.
+
+
+## Explicit native registration cleanup upgrade (2026-10-24)
+
+The pinned producer includes FlyOnTheWall #146: callback unregistration, ordered
+native cleanup, positive Stop observation, and typed release evidence. Murmur
+uses this evidence to keep a known-stopped microphone distinct from unresolved
+capture, hold ownership through cleanup, and allow a new attempt only after
+resource release. Neither an error nor a cleanup timeout permits partial insertion.
+The native/device acceptance gates in `docs/microphone-startup.md` remain open.

@@ -1562,3 +1562,129 @@ async fn failed_watcher_cleanup_keeps_positive_stop_evidence_and_blocks_new_inpu
     assert!(next.unwrap_err().contains("still pending"));
     server.abort();
 }
+
+struct NativeEvidenceTap {
+    tap: Box<dyn AudioTap>,
+    state: fotw_audio::CleanupState,
+    gate: Option<CleanupGate>,
+}
+impl AudioTap for NativeEvidenceTap {
+    fn id(&self) -> &TapId {
+        self.tap.id()
+    }
+    fn format(&self) -> StreamFormat {
+        self.tap.format()
+    }
+    fn format_is_authoritative(&self) -> bool {
+        self.tap.format_is_authoritative()
+    }
+    fn start(&mut self, sink: Box<dyn FrameSink>) -> Result<StreamFormat, TapError> {
+        self.tap.start(sink)
+    }
+    fn stop(&mut self) -> Result<(), TapError> {
+        self.stop_observed(&mut || {})
+    }
+    fn stop_observed(&mut self, stopped: &mut dyn FnMut()) -> Result<(), TapError> {
+        self.tap.stop()?;
+        if self.state.capture_stopped() {
+            stopped();
+        }
+        if let Some(gate) = &mut self.gate {
+            gate.wait();
+        }
+        Err(TapError::Cleanup {
+            state: self.state,
+            message: "injected native cleanup error".into(),
+        })
+    }
+}
+#[tokio::test]
+async fn typed_native_cleanup_preserves_stop_evidence_and_only_releases_complete_ownership() {
+    use fotw_audio::CleanupState;
+    use murmur::capture::{MicrophoneStartup, MicrophoneState};
+    for (state, expected) in [
+        (CleanupState::Released, MicrophoneState::Idle),
+        (CleanupState::Stopped, MicrophoneState::CleanupFailed),
+        (CleanupState::Unconfirmed, MicrophoneState::Unconfirmed),
+    ] {
+        let (tap, control, _, _) = fixture(48000, 0);
+        let input = murmur::capture::InputPreparation::new(move || {
+            Ok(murmur::capture::PreparedInput::new(Box::new(
+                NativeEvidenceTap {
+                    tap,
+                    state,
+                    gate: None,
+                },
+            )))
+        });
+        let startup = MicrophoneStartup::default();
+        let error = prepared_fixture(input, control, startup.clone())
+            .await
+            .unwrap_err();
+        assert!(!error.is_empty());
+        assert_eq!(
+            startup.state(),
+            expected,
+            "native evidence {state:?} must determine ownership"
+        );
+        assert!(error.contains("no text inserted"), "{error}");
+        let preparations = Arc::new(AtomicUsize::new(0));
+        let calls = preparations.clone();
+        let next = prepared_fixture(
+            murmur::capture::InputPreparation::new(move || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err("fresh preparation reached".into())
+            }),
+            Arc::new(AtomicU8::new(0)),
+            startup.clone(),
+        )
+        .await
+        .unwrap_err();
+        if state.resources_released() {
+            assert_eq!(next, "fresh preparation reached");
+            assert_eq!(preparations.load(Ordering::SeqCst), 1);
+        } else {
+            assert!(next.contains("still pending"), "{next}");
+            assert_eq!(preparations.load(Ordering::SeqCst), 0);
+        }
+    }
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_stop_observation_is_visible_before_resource_cleanup_returns() {
+    use murmur::capture::{MicrophoneStartup, MicrophoneState};
+    let (tap, control, _, _) = fixture(48000, 0);
+    let (release, gate) = std::sync::mpsc::channel();
+    let entered = Arc::new(AtomicBool::new(false));
+    let entered_worker = entered.clone();
+    let input = murmur::capture::InputPreparation::new(move || {
+        Ok(murmur::capture::PreparedInput::new(Box::new(
+            NativeEvidenceTap {
+                tap,
+                state: fotw_audio::CleanupState::Stopped,
+                gate: Some(CleanupGate {
+                    gate: Some(gate),
+                    entered: entered_worker,
+                }),
+            },
+        )))
+    });
+    let startup = MicrophoneStartup::default();
+    let attempt = tokio::spawn(prepared_fixture(input, control, startup.clone()));
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !entered.load(Ordering::Acquire) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let observed = startup.state();
+    release.send(()).unwrap();
+    let error = attempt.await.unwrap().unwrap_err();
+    assert_eq!(
+        observed,
+        MicrophoneState::CleaningUp,
+        "positive Stop must precede slow resource release"
+    );
+    assert!(error.contains("stopped"), "{error}");
+    assert_eq!(startup.state(), MicrophoneState::CleanupFailed);
+}

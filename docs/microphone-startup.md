@@ -183,3 +183,24 @@ The stopped label reflects the backend's successful `AudioTap::stop`; physical
 microphone LED/callback quiescence, USB/Bluetooth recovery and sleep/wake behavior
 still require signed-app acceptance. These component renders do not establish
 those gates or close #61.
+
+
+### Native Stop evidence and resource release
+
+The shared capture backend reports confirmed capture cessation separately from
+complete resource release. Murmur observes Stop before waiting for callback
+unregistration and aggregate/process-tap cleanup, keeping the microphone pill
+honest throughout slow teardown. The startup lease remains held until both native
+cleanup and watcher destruction finish.
+
+A teardown error with `Released` evidence still rejects insertion for that
+utterance, but permits a fresh attempt after the owned objects drop. `Stopped`
+evidence retains the lease and shows the stopped/cleanup-failed notice;
+`Unconfirmed` retains the lease and shows that recording may still be active.
+Neither incomplete state permits microphone preparation. The backend also fences
+new native source instances in the same process after retained cleanup.
+
+The synthetic capture suite exercises all three error states, real next-attempt
+admission, and a blocked resource release after an early Stop observation. It
+does not prove physical device or permission behavior, and native calls can
+still block on their owner thread.
