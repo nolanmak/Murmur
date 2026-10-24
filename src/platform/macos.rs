@@ -3,7 +3,7 @@
 use crate::{
     core::{CompletionEffect, Dictation, Phase},
     indicator::{self, Indicator, Look},
-    insertion::{Probe, Target, allowed, same_window, settle_focus},
+    insertion::{Probe, Target, allowed, prewarm_attributes, same_window, settle_focus},
     local_clipboard::Lease as LocalLease,
     local_delivery::{Failure as DeliveryFailure, Outcome as DeliveryOutcome},
     permissions::{self, Access, Grant, Onboarding, Request, Route, Snapshot},
@@ -213,6 +213,14 @@ impl Focus {
         }
         paste_text(text, lease, self)
     }
+}
+fn focused_app_pid() -> i32 {
+    let system = Owned(unsafe { AXUIElementCreateSystemWide() });
+    let mut pid = 0;
+    if let Some(app) = attribute(system.0, "AXFocusedApplication") {
+        unsafe { AXUIElementGetPid(app.0, &mut pid) };
+    }
+    pid
 }
 fn paste_text(
     text: &str,
@@ -647,6 +655,8 @@ struct Shell {
     receiving: Arc<AtomicBool>,
     speech_progress: crate::fallback::Progress,
     microphone_startup: crate::capture::MicrophoneStartup,
+    prewarmed: (i32, Instant),
+    prewarm_checked: Instant,
     speech_stage: crate::fallback::Stage,
     remote_mode: bool,
     recording_remote: bool,
@@ -847,6 +857,8 @@ impl Shell {
             receiving: Arc::new(AtomicBool::new(false)),
             speech_progress: Default::default(),
             microphone_startup: Default::default(),
+            prewarmed: (0, Instant::now()),
+            prewarm_checked: Instant::now(),
             speech_stage: Default::default(),
             remote_mode: remote_fixture,
             recording_remote: remote_fixture,
@@ -1023,6 +1035,29 @@ impl Shell {
             _ => Ok(None),
         }
     }
+    /// Asks the frontmost app to build its accessibility tree before Control is held.
+    fn prewarm(&mut self) {
+        if self.prewarm_checked.elapsed() < Duration::from_millis(250) {
+            return;
+        }
+        self.prewarm_checked = Instant::now();
+        let pid = focused_app_pid();
+        let (last, at) = self.prewarmed;
+        // Chrome can drop the request later, so repeat it periodically.
+        if pid <= 0 || (pid == last && at.elapsed() < Duration::from_secs(3)) {
+            return;
+        }
+        let bundle = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+            .and_then(|app| app.bundleIdentifier())
+            .map(|id| id.to_string())
+            .unwrap_or_default();
+        let app = Owned(unsafe { AXUIElementCreateApplication(pid) });
+        for name in prewarm_attributes(&bundle) {
+            let key = cfstr(name);
+            unsafe { AXUIElementSetAttributeValue(app.0, key.0, kCFBooleanTrue) };
+        }
+        self.prewarmed = (pid, Instant::now());
+    }
     fn begin_attempt(&mut self, focus: Option<Focus>, status: &str) {
         self.focus = focus;
         self.control = Arc::new(AtomicU8::new(0));
@@ -1065,6 +1100,9 @@ impl Shell {
         self.status("Finishing… · Esc to cancel");
     }
     fn pump(&mut self) {
+        if self.core.phase == Phase::Idle && self.permissions.accessibility {
+            self.prewarm();
+        }
         self.observe_remote_window();
         if self.smoke && !self.smoke_started && self.launched.elapsed() > Duration::from_secs(2) {
             self.smoke_started = true;

@@ -82,3 +82,26 @@ pub fn settle_focus<T>(
         waited += FOCUS_STEP;
     }
 }
+
+// Adapted from PR #50 (1c95a7d); late-target recording is intentionally not used.
+const CHROMIUM_BROWSERS: [&str; 8] = [
+    "com.google.Chrome",
+    "com.google.Chrome.beta",
+    "com.google.Chrome.canary",
+    "org.chromium.Chromium",
+    "com.brave.Browser",
+    "com.microsoft.edgemac",
+    "company.thebrowser.Browser",
+    "com.vivaldi.Vivaldi",
+];
+/// Attributes set on the frontmost app ahead of dictation so its accessibility tree
+/// is built before Control is held. `AXManualAccessibility` is Electron's switch and
+/// is ignored elsewhere; `AXEnhancedUserInterface` can affect window animation, so it
+/// is limited to Chromium browsers that need it.
+pub fn prewarm_attributes(bundle: &str) -> &'static [&'static str] {
+    if CHROMIUM_BROWSERS.contains(&bundle) {
+        &["AXManualAccessibility", "AXEnhancedUserInterface"]
+    } else {
+        &["AXManualAccessibility"]
+    }
+}

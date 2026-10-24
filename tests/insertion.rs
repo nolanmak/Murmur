@@ -204,3 +204,34 @@ mod settle {
         assert_eq!(FOCUS_WAIT, Duration::from_millis(750));
     }
 }
+
+mod prewarming {
+    use murmur::insertion::prewarm_attributes;
+    #[test]
+    fn prewarm_turns_on_electron_accessibility_everywhere_and_browser_mode_only_for_chromium() {
+        for bundle in [
+            "com.hnc.Discord",
+            "com.tinyspeck.slackmacgap",
+            "com.apple.Notes",
+            "",
+        ] {
+            assert_eq!(
+                prewarm_attributes(bundle),
+                ["AXManualAccessibility"],
+                "{bundle}"
+            );
+        }
+        for bundle in [
+            "com.google.Chrome",
+            "com.brave.Browser",
+            "com.microsoft.edgemac",
+            "company.thebrowser.Browser",
+        ] {
+            assert_eq!(
+                prewarm_attributes(bundle),
+                ["AXManualAccessibility", "AXEnhancedUserInterface"],
+                "{bundle}"
+            );
+        }
+    }
+}
