@@ -98,3 +98,40 @@ failed with missing `Selection` (E0432), then passed with the recoverable state.
 Tests also cover invalid endpoints, unreadable settings, failed repair, preserved
 bytes before selection and a credential resolver that panics if called while
 blocked. Native menu recovery remains a manual UI acceptance check.
+
+## Explicit cloud-to-local fallback (issue #60)
+
+Use `murmur speech fallback [URL]`, or the Transcription menu's cloud-to-local
+choice. `local` remains strictly local; `deepgram` remains cloud-only. Missing
+cloud credentials in fallback mode select local immediately. The local health
+probe is bounded to two seconds and runs before microphone startup. Releasing
+or cancelling during that probe requires a new deliberate recording.
+
+The cloud connection has a two-second deadline. Eligible transient errors get
+at most one retry, replaying the retained utterance; the minimum backoff is
+100 ms, with provider Retry-After honored only when it fits the connection
+budget. Finalization has a three-second overall budget after release, including
+any retry. A controlled Tokio clock regression verifies that a late retry cannot
+restart that budget. Local inference then has its own 180-second deadline. A 120-second
+PCM bound applies regardless of connection state. Cloud partials are never
+concatenated with local text. The capture generation and original-field checks
+still own insertion; inference completion alone never authorizes a paste.
+
+Tests: `cargo test --locked --test fallback --test capture --test streaming
+--test local_stt`. Behavioral red cases demonstrated failure on cloud disconnect,
+missing readiness preflight, invalid-request fallback, transient retry, and DNS
+runtime shutdown. Focused green tests cover the corresponding corrections,
+whole-utterance audio, cancellation, rate limits, capture bounds and ordinary
+cloud success. The full workspace suite, Clippy, repository checks and managed
+runtime tests pass; the development app builds and verifies its signature.
+Native microphone/keyboard/
+insertion checks remain outstanding in #58; these tests do not establish them.
+
+Historical M4 smoke evidence recorded on the source branch (2026-10-24),
+not rerun as part of this fallback extraction: isolated whisper.cpp 1.9.1 with pinned base.en
+SHA-256 `a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002`,
+engine and benchmark both launched under `scripts/local-whisper-offline.sb`.
+The existing 20 clean synthetic 10-second fixtures measured 0.599% normalized
+WER and 0.189s warm p95 raw-engine latency (first request 2.508s). Rust build work
+was also running. This is synthetic speech and raw-engine timing, not human
+accuracy, release-to-paste latency, a Nova-3 comparison or a completed #118 gate.

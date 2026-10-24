@@ -26,7 +26,7 @@ work. No claim of full Wispr Flow parity is made.
 ## Build and run
 
 Requires macOS 14.4+, Git, Xcode command-line tools, Rust installed through rustup
-(the toolchain is pinned to 1.95.0), and your own Deepgram API key.
+(the toolchain is pinned to 1.95.0), and either a configured local Whisper engine or your own Deepgram API key.
 FlyOnTheWall does not need to be installed. This is a source-based developer preview;
 there is no signed/notarized public release yet.
 
@@ -102,7 +102,7 @@ cargo run -- doctor  # shows credential source, never the value
   Local insertion uses a native paste shortcut for recognized text inputs in any app.
   Multiline/control-character output requires manual copying; no Enter key is synthesized.
 - Changing apps or fields blocks automatic insertion. Cancelling invalidates late results.
-- No provider fallback, LLM cleanup, screen context, analytics or vendor relay.
+- Optional Deepgram-to-local fallback is explicit; Local Whisper never falls back to cloud. No LLM cleanup, screen context, analytics or vendor relay.
 - Current microphone adapter uses the default device. Unplugging a device cancels;
   automatic device recovery is not yet implemented.
 - Experimental [RustDesk review mode](docs/rustdesk.md) keeps the transcript for
@@ -151,3 +151,20 @@ Native validation and restart acceptance steps: [login startup QA](docs/login-st
 Local Whisper supports offline dictation after explicit engine/model setup. Choose
 **Transcription: Local Whisper** in the menu, or run `murmur speech local`.
 See [setup, privacy and acceptance evidence](docs/local-whisper.md).
+
+### Wi-Fi resilience
+
+`murmur speech fallback [http://127.0.0.1:17863]` selects Deepgram with local
+Whisper fallback. The Transcription menu cycles through cloud-only, local-only,
+and cloud-to-local. Existing saved choices are unchanged. Install/start the
+local engine first: both local and fallback modes check `/health` before opening
+the microphone and never download a model while recording.
+
+Fallback retains the complete utterance (at most 120 seconds) in memory. A
+transient cloud failure gets at most one bounded retry; an unavailable cloud or
+stalled finalization sends the whole utterance to the local engine after release.
+Only one final transcript is returned. Auth/quota errors demote directly; invalid
+requests are surfaced instead of hidden. Rate-limit waits beyond the retry budget
+use local rather than retrying early. Escape and original-field validation remain
+in force. This is not persistent recording/history and never switches local-only
+speech to cloud. See `docs/local-whisper.md` for deadlines and test evidence.

@@ -3,7 +3,7 @@ fn main() {
     let result = match command.as_str() {
         "--help" | "help" => {
             println!(
-                "Murmur — macOS hold-Control dictation\n\nrun     Launch the menu-bar app (use the .app bundle)\ndoctor  Report provider configuration without printing secrets\nspeech  Select local [URL] or deepgram transcription\n\nHold Control to dictate; release to insert; Esc cancels.\nRun scripts/build-app.sh and launch the resulting .app for capture."
+                "Murmur — macOS hold-Control dictation\n\nrun     Launch the menu-bar app (use the .app bundle)\ndoctor  Report provider configuration without printing secrets\nspeech  Select local [URL], deepgram or fallback [URL] transcription\n\nHold Control to dictate; release to insert; Esc cancels.\nRun scripts/build-app.sh and launch the resulting .app for capture."
             );
             Ok(())
         }
@@ -41,7 +41,11 @@ fn configure_speech() -> Result<(), String> {
             }
         }
         Some("deepgram") => settings.provider = murmur::speech::Provider::Deepgram,
-        _ => return Err("Usage: murmur speech local [http://127.0.0.1:17863] | deepgram".into()),
+        Some("fallback") => {
+            settings.provider = murmur::speech::Provider::DeepgramThenLocal;
+            if let Some(url) = args.get(3) { settings.local_endpoint = url.clone(); }
+        },
+        _ => return Err("Usage: murmur speech local [http://127.0.0.1:17863] | deepgram | fallback [http://127.0.0.1:17863]".into()),
     }
     settings.save(&path)?;
     println!("Saved transcription provider; restart running app to reload CLI changes.");
@@ -56,6 +60,13 @@ fn doctor() -> Result<(), String> {
                 c.source
             )
         }),
+        murmur::speech::Provider::DeepgramThenLocal => {
+            println!(
+                "Deepgram → local fallback at {}. Install/start the local engine before relying on offline recovery. No model downloads occur during capture.",
+                settings.local_endpoint
+            );
+            Ok(())
+        }
         murmur::speech::Provider::LocalWhisper => {
             println!(
                 "Local Whisper at {}. No cloud credentials required. Use scripts/local-whisper.py --app murmur status for engine readiness.",

@@ -7,6 +7,7 @@ pub enum Provider {
     #[default]
     Deepgram,
     LocalWhisper,
+    DeepgramThenLocal,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -34,6 +35,17 @@ impl Settings {
                     key: credentials.key.expose().into(),
                     endpoint: fotw_stt::DeepgramEndpoint::production(),
                 })
+            }
+            Provider::DeepgramThenLocal => {
+                let local = crate::local_stt::LocalEndpoint::new(&self.local_endpoint)?;
+                match credentials() {
+                    Ok(credentials) => Ok(crate::capture::CaptureProvider::DeepgramThenLocal {
+                        key: credentials.key.expose().into(),
+                        endpoint: fotw_stt::DeepgramEndpoint::production(),
+                        local,
+                    }),
+                    Err(_) => Ok(crate::capture::CaptureProvider::Local(local)),
+                }
             }
             Provider::LocalWhisper => Ok(crate::capture::CaptureProvider::Local(
                 crate::local_stt::LocalEndpoint::new(&self.local_endpoint)?,

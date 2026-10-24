@@ -275,3 +275,22 @@ fn unreadable_settings_and_failed_repair_remain_blocked() {
             .is_some()
     );
 }
+
+#[test]
+fn fallback_selection_persists_and_missing_cloud_key_uses_local() {
+    let settings: murmur::speech::Settings = serde_json::from_value(serde_json::json!({
+        "provider": "deepgram-then-local", "local_endpoint": "http://127.0.0.1:17863"
+    }))
+    .expect("explicit fallback selection must be supported");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("speech.json");
+    settings.save(&path).unwrap();
+    let restored = murmur::speech::Settings::load(&path).unwrap();
+    assert_eq!(restored, settings);
+    assert!(matches!(
+        restored
+            .capture_provider(|| Err("No configured key".into()))
+            .unwrap(),
+        murmur::capture::CaptureProvider::Local(_)
+    ));
+}

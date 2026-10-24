@@ -621,6 +621,8 @@ struct Shell {
     launched: Instant,
     receiving: Arc<AtomicBool>,
     microphone_startup: crate::capture::MicrophoneStartup,
+    speech_progress: crate::fallback::Progress,
+    speech_stage: crate::fallback::Stage,
     remote_mode: bool,
     recording_remote: bool,
     recording_remote_target: Option<RustDeskWindow>,
@@ -818,6 +820,8 @@ impl Shell {
             launched: Instant::now(),
             receiving: Arc::new(AtomicBool::new(false)),
             microphone_startup: Default::default(),
+            speech_progress: Default::default(),
+            speech_stage: Default::default(),
             remote_mode: remote_fixture,
             recording_remote: remote_fixture,
             recording_remote_target: None,
@@ -918,6 +922,7 @@ impl Shell {
         let generation = self.core.generation();
         let receiving = self.receiving.clone();
         let startup = self.microphone_startup.clone();
+        let progress = self.speech_progress.clone();
         let speech = self.speech.clone();
         std::thread::spawn(move || {
             let result = (|| {
@@ -926,9 +931,11 @@ impl Shell {
                 let tap = platform
                     .open_mic(&DeviceId::new("default"), FormatRequest::any())
                     .map_err(|_| "No microphone available".to_string())?;
-                crate::capture::block_on_detached(crate::capture::run_provider_with_startup(
-                    tap, provider, control, receiving, startup,
-                ))?
+                crate::capture::block_on_detached(
+                    crate::capture::run_provider_with_startup_and_progress(
+                        tap, provider, control, receiving, progress, startup,
+                    ),
+                )?
             })();
             let _ = completed.send(Completion { generation, result });
         });
@@ -948,6 +955,8 @@ impl Shell {
         self.focus = focus;
         self.control = Arc::new(AtomicU8::new(0));
         self.receiving = Arc::new(AtomicBool::new(false));
+        self.speech_progress = Default::default();
+        self.speech_stage = Default::default();
         self.started = Instant::now();
         self.last.begin();
         self.indicator.clear();
@@ -1049,6 +1058,9 @@ impl Shell {
                 "speech_provider" => {
                     let provider = match self.speech.provider() {
                         Some(crate::speech::Provider::LocalWhisper) => {
+                            crate::speech::Provider::DeepgramThenLocal
+                        }
+                        Some(crate::speech::Provider::DeepgramThenLocal) => {
                             crate::speech::Provider::Deepgram
                         }
                         _ => crate::speech::Provider::LocalWhisper,
@@ -1252,6 +1264,18 @@ impl Shell {
             self.pill.place();
         }
         let now = self.now();
+        let stage = self.speech_progress.stage();
+        if stage != self.speech_stage
+            && matches!(self.core.phase, Phase::Recording | Phase::Processing)
+        {
+            self.speech_stage = stage;
+            let verb = if self.core.phase == Phase::Recording {
+                "Recording"
+            } else {
+                "Transcribing"
+            };
+            self.status(&format!("{verb} · {} · Esc to cancel", stage.label()));
+        }
         let receiving = self.receiving.load(Ordering::Acquire);
         let look = self
             .indicator
@@ -1628,7 +1652,10 @@ fn speech_label(provider: Option<&crate::speech::Provider>) -> &'static str {
     match provider {
         Some(crate::speech::Provider::Deepgram) => "Transcription: Deepgram (click for local)",
         Some(crate::speech::Provider::LocalWhisper) => {
-            "Transcription: Local Whisper (click for cloud)"
+            "Transcription: Local Whisper (click for cloud → local)"
+        }
+        Some(crate::speech::Provider::DeepgramThenLocal) => {
+            "Transcription: Deepgram → local (click for cloud only)"
         }
         None => "Transcription: invalid settings — click to select Local Whisper",
     }
