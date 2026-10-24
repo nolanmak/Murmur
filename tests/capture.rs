@@ -195,3 +195,22 @@ async fn local_release_sends_wav_without_cloud_key_and_stops_microphone() {
     assert!(stopped.load(Ordering::SeqCst) > 0);
     server.await.unwrap();
 }
+
+#[test]
+fn stalled_dns_lookup_does_not_hold_back_a_failed_result() {
+    let started = std::time::Instant::now();
+    let result = murmur::capture::block_on_detached(async {
+        let lookup = tokio::task::spawn_blocking(|| std::thread::sleep(Duration::from_secs(3)));
+        tokio::time::timeout(Duration::from_millis(50), lookup)
+            .await
+            .map_err(|_| "Provider connection timed out")
+    });
+    assert_eq!(
+        result.unwrap().unwrap_err(),
+        "Provider connection timed out"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "runtime shutdown held the UI completion hostage"
+    );
+}

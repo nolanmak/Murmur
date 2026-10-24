@@ -34,6 +34,18 @@ impl Drop for Guard {
         let _ = self.0.stop();
     }
 }
+/// Run one capture attempt without waiting for abandoned blocking DNS work.
+/// Adapted from Murmur PR #52 (2e95a60). A timeout drops the lookup future,
+/// but libc's resolver may keep running; normal runtime drop waits for it.
+pub fn block_on_detached<F: std::future::Future>(attempt: F) -> Result<F::Output, String> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| "Cannot start audio runtime".to_string())?;
+    let output = runtime.block_on(attempt);
+    runtime.shutdown_background();
+    Ok(output)
+}
 /// Control: 0 recording, 1 finish, 2 cancel. No audio or transcript touches disk.
 pub async fn run(
     tap: Box<dyn AudioTap>,
