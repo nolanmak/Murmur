@@ -61,11 +61,26 @@ if [ "$identity" != - ]; then
     esac
 fi
 
+# Own a unique backup directory; never remove a pre-existing user path.
+backup=""
 if [ -e "$dest" ]; then
-    rm -rf "$dest.previous"
-    mv "$dest" "$dest.previous"
+    backup=$(mktemp -d "${dest}.previous.XXXXXX") || fail "cannot create bundle backup"
+    if ! mv "$dest" "$backup/bundle"; then
+        rmdir "$backup"
+        fail "cannot stage previous bundle for replacement"
+    fi
 fi
-mv "$stage" "$dest"
-rm -rf "$dest.previous"
+if ! mv "$stage" "$dest"; then
+    if [ -n "$backup" ]; then
+        if ! mv "$backup/bundle" "$dest"; then
+            rm -rf "$stage"
+            printf 'error: install and restore failed; previous bundle retained at %s/bundle\n' "$backup" >&2
+            exit 1
+        fi
+        rmdir "$backup"
+    fi
+    fail "cannot install verified bundle"
+fi
+[ -z "$backup" ] || rm -rf "$backup"
 printf '%s\n' "Built $dest (developer signature: $identity)"
 printf '%s\n' "$requirement" | grep 'designated =>' || true
