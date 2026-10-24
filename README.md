@@ -12,17 +12,18 @@ It is an independent, open-source Apache-2.0 project.
 
 ## Status
 
-Early developer build. The first vertical slice is implemented: native hold-Control input,
-microphone-only capture, streaming Deepgram transcription, end-of-stream draining,
-a nonactivating indicator, and insertion through macOS Accessibility. It is **not
-feature-complete or release-validated**. Native permissions and app compatibility
-still require the [manual QA checklist](docs/QA.md).
+Developer build with native hold-Control dictation, Deepgram/local Whisper and
+cloud-to-local fallback, bounded microphone ownership, a nonactivating indicator,
+and macOS text insertion. Language selection, vocabulary hints and deliberate
+spoken snippets now have native menu controls and guarded editing forms. It is
+**not feature-complete or release-validated**; permissions, IME and app/device
+compatibility still require the [manual QA checklist](docs/QA.md).
 
-The [GitHub issues](https://github.com/nolanmak/Murmur/issues) contain
-acceptance criteria, dependencies and test-first work. Vocabulary hints and spoken
-snippets are available through a versioned profile; language selection and a
-vocabulary editing UI remain open. AI cleanup, optional history, signed releases,
-RustDesk remote paste and additional platforms are follow-on work. No claim of full Wispr Flow parity is made.
+The [GitHub issues](https://github.com/nolanmak/Murmur/issues) contain acceptance
+criteria, dependencies and test-first evidence. See [vocabulary editing](docs/vocabulary.md)
+for the native forms and capability limits. AI cleanup, optional history,
+notarized distribution and additional platforms remain follow-on work. No claim
+of full Wispr Flow parity is made.
 
 ## Build and run
 

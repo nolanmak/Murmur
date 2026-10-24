@@ -79,9 +79,9 @@ All test audio/text and credentials are synthetic.
 
 This is partial delivery of #9. Explicit language selection and client-side
 preflight/binding and the managed language adapter are implemented below.
-The native language menu is implemented; vocabulary editing UI and real speech acceptance remain open.
-Real-model term-recall comparisons (#118), native dictation/insertion checks and
-full vocabulary editing UI remain unverified. Do not claim recognition-quality
+The native language menu and guarded vocabulary forms are implemented and checked
+with owned AppKit fixtures. Real-model term-recall comparisons (#118), physical
+IME interaction and full signed-app dictation/insertion acceptance remain open. Do not claim recognition-quality
 improvement from transport tests. Optional AI cleanup (#8) is separate and has
 not been enabled by this change.
 
