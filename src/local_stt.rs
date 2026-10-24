@@ -24,6 +24,44 @@ impl LocalEndpoint {
         Ok(Self(url.to_string()))
     }
 }
+/// Verify the installed runtime has a loaded model before opening the microphone.
+/// This is a loopback-only probe, never an automatic install/start/download.
+pub async fn check_ready(endpoint: &LocalEndpoint, deadline: Duration) -> Result<(), String> {
+    let unavailable =
+        "Local Whisper is not ready; install/load its model and start the engine before dictating";
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(deadline)
+        .build()
+        .map_err(|_| unavailable.to_string())?;
+    let mut response = client
+        .get(format!("{}health", endpoint.0))
+        .send()
+        .await
+        .map_err(|_| unavailable.to_string())?;
+    if !response.status().is_success() {
+        return Err(unavailable.into());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| unavailable.to_string())?
+    {
+        if body.len() + chunk.len() > 1024 {
+            return Err(unavailable.into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let health: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|_| unavailable.to_string())?;
+    if health["status"] != "ok" {
+        return Err(unavailable.into());
+    }
+    Ok(())
+}
+
 pub fn wav16k(pcm: &[i16]) -> Vec<u8> {
     let length = (pcm.len() * 2) as u32;
     let mut wav = Vec::with_capacity(44 + length as usize);

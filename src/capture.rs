@@ -157,6 +157,11 @@ pub enum CaptureProvider {
         endpoint: fotw_stt::DeepgramEndpoint,
     },
     Local(crate::local_stt::LocalEndpoint),
+    DeepgramThenLocal {
+        key: String,
+        endpoint: fotw_stt::DeepgramEndpoint,
+        local: crate::local_stt::LocalEndpoint,
+    },
 }
 pub async fn run_provider_observed(
     tap: Box<dyn AudioTap>,
@@ -164,17 +169,35 @@ pub async fn run_provider_observed(
     control: Arc<AtomicU8>,
     receiving: Arc<AtomicBool>,
 ) -> Result<String, String> {
-    run_provider_with_startup(
+    run_provider_with_progress(
         tap,
         provider,
         control,
         receiving,
+        crate::fallback::Progress::default(),
+    )
+    .await
+}
+
+pub async fn run_provider_with_progress(
+    tap: Box<dyn AudioTap>,
+    provider: CaptureProvider,
+    control: Arc<AtomicU8>,
+    receiving: Arc<AtomicBool>,
+    progress: crate::fallback::Progress,
+) -> Result<String, String> {
+    run_provider_with_startup_and_progress(
+        tap,
+        provider,
+        control,
+        receiving,
+        progress,
         MicrophoneStartup::default(),
     )
     .await
 }
 
-/// Capture with a startup coordinator retained by the caller across attempts.
+/// Capture with one startup coordinator retained across dictation attempts.
 pub async fn run_provider_with_startup(
     tap: Box<dyn AudioTap>,
     provider: CaptureProvider,
@@ -182,8 +205,40 @@ pub async fn run_provider_with_startup(
     receiving: Arc<AtomicBool>,
     startup: MicrophoneStartup,
 ) -> Result<String, String> {
+    run_provider_with_startup_and_progress(
+        tap,
+        provider,
+        control,
+        receiving,
+        crate::fallback::Progress::default(),
+        startup,
+    )
+    .await
+}
+
+/// Capture with independent provider progress and bounded microphone startup.
+pub async fn run_provider_with_startup_and_progress(
+    tap: Box<dyn AudioTap>,
+    provider: CaptureProvider,
+    control: Arc<AtomicU8>,
+    receiving: Arc<AtomicBool>,
+    progress: crate::fallback::Progress,
+    startup: MicrophoneStartup,
+) -> Result<String, String> {
     if control.load(Ordering::Acquire) != 0 {
         return Err("Cancelled before microphone startup".into());
+    }
+    match &provider {
+        CaptureProvider::Local(endpoint)
+        | CaptureProvider::DeepgramThenLocal {
+            local: endpoint, ..
+        } => {
+            crate::local_stt::check_ready(endpoint, Duration::from_secs(2)).await?;
+            if control.load(Ordering::Acquire) != 0 {
+                return Err("Dictation ended before local engine was ready; try again".into());
+            }
+        }
+        CaptureProvider::Deepgram { .. } => {}
     }
     let failed = Arc::new(AtomicBool::new(false));
     let (producer, mut consumer) = RingBuffer::new(192_000);
@@ -199,13 +254,31 @@ pub async fn run_provider_with_startup(
     // Ten seconds of 10 ms chunks covers the bounded eight-second TLS handshake.
     // The previous 320 ms queue overflowed before a live connection could open.
     let (tx, rx) = tokio::sync::mpsc::channel(1024);
-    let local = matches!(&provider, CaptureProvider::Local(_));
+    let local = !matches!(&provider, CaptureProvider::Deepgram { .. });
     let network = async {
         match provider {
             CaptureProvider::Deepgram { key, endpoint } => {
+                progress.set(crate::fallback::Stage::Cloud);
                 crate::streaming::transcribe(key, rx, endpoint, Duration::from_secs(8)).await
             }
+            CaptureProvider::DeepgramThenLocal {
+                key,
+                endpoint,
+                local,
+            } => {
+                crate::fallback::transcribe_observed(
+                    key,
+                    rx,
+                    endpoint,
+                    local,
+                    control.clone(),
+                    crate::fallback::Deadlines::default(),
+                    progress.clone(),
+                )
+                .await
+            }
             CaptureProvider::Local(endpoint) => {
+                progress.set(crate::fallback::Stage::Local);
                 let mut rx = rx;
                 let mut pcm = Vec::new();
                 while let Some(chunk) = rx.recv().await {
@@ -233,7 +306,7 @@ pub async fn run_provider_with_startup(
              result=&mut network=>return result,
              _=tick.tick()=>{
               if control.load(Ordering::Acquire)==2 {return Err("Cancelled".into());}
-        if finish_started.is_some_and(|at:std::time::Instant|at.elapsed()>Duration::from_secs(if local { 181 } else { 10 })){return Err("Finalization timed out; no text inserted".into());}
+        if finish_started.is_some_and(|at:std::time::Instant|at.elapsed()>Duration::from_secs(if local { 185 } else { 10 })){return Err("Finalization timed out; no text inserted".into());}
               if failed.load(Ordering::Acquire){return Err("Audio buffer overflow or microphone failure; no text inserted".into());}
               if !finishing {
                if control.load(Ordering::Acquire)==1 || started.elapsed()>=Duration::from_secs(120) {
@@ -259,7 +332,7 @@ pub async fn run_provider_with_startup(
 /// Retain at most 120 seconds of actual capture, including on a late stop tick.
 /// Once full, discard callback overshoot and the resampler's artificial drain tail.
 /// The transport separately rejects oversized caller-provided input.
-fn append_local_pcm(pcm: &mut Vec<i16>, chunk: Vec<i16>) {
+pub(crate) fn append_local_pcm(pcm: &mut Vec<i16>, chunk: Vec<i16>) {
     let remaining = (16000_usize * 120).saturating_sub(pcm.len());
     pcm.extend(chunk.into_iter().take(remaining));
 }

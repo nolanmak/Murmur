@@ -1,0 +1,210 @@
+{
+  "description": "Raw engine synthetic TTS fixtures, not human microphone accuracy",
+  "clean_wer": 0.005988023952095809,
+  "clean_warm_p95_seconds": 0.189,
+  "results": [
+    {
+      "fixture": "clean1",
+      "duration_seconds": 10,
+      "elapsed_seconds": 2.508,
+      "reference": "Please move the meeting to Thursday morning and send everyone an updated invitation.",
+      "text": "Please move the meeting to Thursday morning and send\n everyone an updated invitation.",
+      "word_errors": 0,
+      "reference_words": 13
+    },
+    {
+      "fixture": "clean2",
+      "duration_seconds": 10,
+      "elapsed_seconds": 0.189,
+      "reference": "The weather is clear today. I will walk to the store and buy some coffee before lunch.",
+      "text": "The weather is clear today.\n I will walk to the store and buy some coffee before lunch.",
+      "word_errors": 0,
+      "reference_words": 17
+    },
+    {
+      "fixture": "clean3",
+      "duration_seconds": 10,
+      "elapsed_seconds": 0.162,
+      "reference": "We finished the first draft yesterday. The next step is to review the changes and prepare the final report.",
+      "text": "We finished the first draft yesterday.\n The next step is to review the changes and prepare the\n final report.",
+      "word_errors": 0,
+      "reference_words": 19
+    },
+    {
+      "fixture": "clean4",
+      "duration_seconds": 10,
+      "elapsed_seconds": 0.148,
+      "reference": "Could you check the schedule and tell me whether we have enough time to finish this task today?",
+      "text": "Could you check the schedule and tell me whether we have\n enough time to finish this task today?",
+      "word_errors": 0,
+      "reference_words": 18
+    },
+    {
+      "fixture": "clean5",
+      "duration_seconds": 10,
+      "elapsed_seconds": 0.178,
+      "reference": "This recording is a test of local speech recognition. No internet connection should be needed to understand these words.",
+      "text": "This recording is a test of local speech recognition.\n No internet connection should be needed to understand these\n words.",
+      "word_errors": 0,
+      "reference_words": 19
+    },
+    {
+      "fixture": "clean6",
+      "duration_seconds": 10,
+      "elapsed_seconds": 0.157,
+      "reference": "After breakfast we will take the train into the city and meet our friends near the museum.",
+      "text": "After breakfast we will take the train into the city and\n meet our friends near the museum.",
+      "word_errors": 0,
+      "reference_words": 17
+    },
+    {
+      "fixture": "clean7",
+      "duration_seconds": 10,
+      "elapsed_seconds": 0.131,
+      "reference": "Remember to close the window before leaving the house. The forecast says it will rain later this afternoon.",
+      "text": "Remember to close the window before leaving the house.\n The forecast says it will rain later this afternoon.",
+      "word_errors": 0,
+      "reference_words": 18
+    },
+    {
+      "fixture": "clean8",
+      "duration_seconds": 10,
+      "elapsed_seconds": 0.122,
+      "reference": "Please save a copy of the document and put it in the folder for next week.",
+      "text": "Please save a copy of the document and put it in the folder\n for next week.",
+      "word_errors": 0,
+      "reference_words": 16
+    },
+    {
+      "fixture": "clean9",
+      "duration_seconds": 10,
+      "elapsed_seconds": 0.123,
+      "reference": "The package arrived this morning. Everything was packed carefully and nothing appears to be missing.",
+      "text": "The package arrived this morning, everything was packed\n carefully and nothing appears to be missing.",
+      "word_errors": 0,
+      "reference_words": 15
+    },
+    {
+      "fixture": "clean10",
+      "duration_seconds": 10,
+      "elapsed_seconds": 0.121,
+      "reference": "Let us start with the simplest example and make sure it works before adding any more features.",
+      "text": "Let us start with the simplest example, and make sure it\n works before adding any more features.",
+      "word_errors": 0,
+      "reference_words": 17
+    },
+    {
+      "fixture": "clean11",
+      "duration_seconds": 10,
+      "elapsed_seconds": 0.117,
+      "reference": "I would like a table for four people on Saturday evening, preferably beside a window.",
+      "text": "I would like a table for four people on Saturday evening,\n preferably beside a window.",
+      "word_errors": 0,
+      "reference_words": 15
+    },
+    {
+      "fixture": "clean12",
+      "duration_seconds": 10,
+      "elapsed_seconds": 0.149,
+      "reference": "Thank you for your help with the project. Your comments made the instructions much easier to follow.",
+      "text": "Thank you for your help with the project.\n Your comments made the instructions much easier to follow.",
+      "word_errors": 0,
+      "reference_words": 17
+    },
+    {
+      "fixture": "clean13",
+      "duration_seconds": 10,
+      "elapsed_seconds": 0.12,
+      "reference": "Turn left at the next street and continue for two blocks. The library is on the right.",
+      "text": "Turn left at the next street and continue for two blocks.\n The library is on the right.",
+      "word_errors": 0,
+      "reference_words": 17
+    },
+    {
+      "fixture": "clean14",
+      "duration_seconds": 10,
+      "elapsed_seconds": 0.111,
+      "reference": "We should test the new settings before the meeting starts so that everyone can hear clearly.",
+      "text": "We should test the new settings before the meeting starts\n so that everyone can hear clearly.",
+      "word_errors": 0,
+      "reference_words": 16
+    },
+    {
+      "fixture": "clean15",
+      "duration_seconds": 10,
+      "elapsed_seconds": 0.11,
+      "reference": "The team agreed to fix the current problems before beginning work on the next version.",
+      "text": "The team agreed to fix the current problems before\n beginning work on the next version.",
+      "word_errors": 0,
+      "reference_words": 15
+    },
+    {
+      "fixture": "clean16",
+      "duration_seconds": 10,
+      "elapsed_seconds": 0.121,
+      "reference": "There are several ways to solve this problem. Let us compare them carefully and choose one.",
+      "text": "There are several ways to solve this problem.\n Let us compare them carefully and choose one.",
+      "word_errors": 0,
+      "reference_words": 16
+    },
+    {
+      "fixture": "clean17",
+      "duration_seconds": 10,
+      "elapsed_seconds": 0.124,
+      "reference": "I left my notebook on the kitchen table. Please bring it with you when you come over.",
+      "text": "I left my notebook on the kitchen table.\n Please bring it with you when you come over.",
+      "word_errors": 0,
+      "reference_words": 17
+    },
+    {
+      "fixture": "clean18",
+      "duration_seconds": 10,
+      "elapsed_seconds": 0.119,
+      "reference": "The train leaves at nine tomorrow morning. We should arrive at the station at least twenty minutes early.",
+      "text": "The train leaves at 9 tomorrow morning.\n We should arrive at the station at least 20 minutes early.",
+      "word_errors": 2,
+      "reference_words": 18
+    },
+    {
+      "fixture": "clean19",
+      "duration_seconds": 10,
+      "elapsed_seconds": 0.111,
+      "reference": "Put the blue box on the shelf and leave the smaller green box beside the door.",
+      "text": "Put the blue box on the shelf, and leave the smaller green\n box beside the door.",
+      "word_errors": 0,
+      "reference_words": 16
+    },
+    {
+      "fixture": "clean20",
+      "duration_seconds": 10,
+      "elapsed_seconds": 0.155,
+      "reference": "The lights are working again. We can finish cleaning the room and move the chairs back into place.",
+      "text": "The lights are working again.\n We can finish cleaning the room and move the chairs back\n into place.",
+      "word_errors": 0,
+      "reference_words": 18
+    },
+    {
+      "fixture": "technical",
+      "duration_seconds": 10,
+      "elapsed_seconds": 0.181,
+      "reference": "Run the unit tests, review the pull request, and restart the local Whisper server. Check the TypeScript compiler and the Rust build.",
+      "text": "Run the unit tests, review the pull request, and restart\n the local whisper server.\n Check the TypeScript compiler and the Rust build.",
+      "word_errors": 0,
+      "reference_words": 22
+    }
+  ],
+  "hardware": {
+    "chip": "Apple M4",
+    "memory_gib": 16,
+    "os": "macOS 26.4"
+  },
+  "engine": "whisper.cpp 1.9.1",
+  "model": "base.en",
+  "model_sha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
+  "network": "engine and benchmark under scripts/local-whisper-offline.sb (loopback only)",
+  "load": "Rust build work running concurrently",
+  "human_speech_evaluated": false,
+  "native_capture_evaluated": false,
+  "nova3_comparison": false,
+  "memory_measurement": null
+}
