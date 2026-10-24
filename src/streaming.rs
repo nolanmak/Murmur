@@ -34,18 +34,34 @@ fn failure(class: SttErrorClass, message: &str) -> SttError {
 /// Typed failures let fallback distinguish outages from invalid requests.
 pub async fn transcribe_typed(
     key: String,
-    mut audio: mpsc::Receiver<Vec<i16>>,
+    audio: mpsc::Receiver<Vec<i16>>,
     endpoint: DeepgramEndpoint,
     connect_deadline: Duration,
     final_deadline: Duration,
 ) -> Result<String, SttError> {
+    transcribe_with_vocabulary(key, audio, endpoint, connect_deadline, final_deadline, &[]).await
+}
+
+/// Send validated recognition hints only; snippets never enter provider prompts.
+pub async fn transcribe_with_vocabulary(
+    key: String,
+    mut audio: mpsc::Receiver<Vec<i16>>,
+    endpoint: DeepgramEndpoint,
+    connect_deadline: Duration,
+    final_deadline: Duration,
+    hints: &[String],
+) -> Result<String, SttError> {
+    crate::vocabulary::validate_hints(hints)
+        .map_err(|_| failure(SttErrorClass::BadRequest, "Invalid recognition hints"))?;
     if !endpoint.is_secure() && endpoint.host != "127.0.0.1" {
         return Err(failure(
             SttErrorClass::BadRequest,
             "Unencrypted remote provider rejected",
         ));
     }
-    let params = DeepgramStreamParams::spec().with_diarize(false);
+    let params = DeepgramStreamParams::spec()
+        .with_diarize(false)
+        .with_keyterms(hints.iter().cloned());
     let mut request = endpoint
         .url_with(&params.to_query())
         .into_client_request()

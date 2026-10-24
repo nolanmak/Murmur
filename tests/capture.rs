@@ -705,3 +705,102 @@ async fn device_event_cancels_pending_start_without_waiting_for_os() {
     .await
     .unwrap();
 }
+
+#[tokio::test]
+#[allow(clippy::result_large_err, reason = "tungstenite callback error type")]
+async fn captured_utterance_uses_one_profile_and_expands_only_the_winning_final() {
+    use murmur::vocabulary::{Profile, Snippet};
+    use tokio_tungstenite::{
+        accept_hdr_async,
+        tungstenite::handshake::server::{Request, Response},
+    };
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("vocabulary.json");
+    let profile = Profile {
+        version: 1,
+        recognition_hints: vec!["Project Acorn".into()],
+        snippets: vec![Snippet {
+            name: "signature".into(),
+            text: "Private fixture body\nExample".into(),
+        }],
+    };
+    profile.save(&path).unwrap();
+    let snapshot = Profile::load(&path).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = DeepgramEndpoint::loopback(listener.local_addr().unwrap().port());
+    let changed = path.clone();
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = accept_hdr_async(socket, |req: &Request, res: Response| {
+            let uri = req.uri().to_string();
+            assert!(uri.contains("keyterm=Project%20Acorn"));
+            assert!(!uri.contains("Private"));
+            Ok(res)
+        })
+        .await
+        .unwrap();
+        let mut updated = profile;
+        updated.snippets[0].text = "New profile value".into();
+        updated.save(&changed).unwrap();
+        while let Some(Ok(message)) = ws.next().await {
+            if matches!(message,Message::Text(ref text) if text.contains("CloseStream")) {
+                ws.send(Message::text(r#"{"type":"Results","is_final":true,"speech_final":true,"channel":{"alternatives":[{"transcript":"Insert snippet signature."}]}}"#)).await.unwrap();
+                ws.send(Message::text(r#"{"type":"Metadata"}"#))
+                    .await
+                    .unwrap();
+                break;
+            }
+        }
+    });
+    let (tap, control, started, stopped) = fixture(48000, 0);
+    let output = murmur::capture::run_provider_with_vocabulary(
+        tap,
+        murmur::capture::CaptureProvider::Deepgram {
+            key: "fixture".into(),
+            endpoint,
+        },
+        control,
+        Arc::new(AtomicBool::new(false)),
+        murmur::fallback::Progress::default(),
+        murmur::capture::MicrophoneStartup::default(),
+        fotw_audio::device_change::DeviceChangeSignal::new(),
+        snapshot,
+    )
+    .await
+    .unwrap();
+    server.await.unwrap();
+    assert_eq!(output, "Private fixture body\nExample");
+    assert_eq!(
+        Profile::load(&path)
+            .unwrap()
+            .expand("insert snippet signature"),
+        "New profile value"
+    );
+    assert_eq!(started.load(Ordering::SeqCst), 1);
+    assert!(stopped.load(Ordering::SeqCst) > 0);
+}
+
+#[tokio::test]
+async fn invalid_profile_is_refused_before_microphone_start() {
+    let (tap, control, started, _) = fixture(48000, 0);
+    let profile = murmur::vocabulary::Profile {
+        version: 2,
+        ..Default::default()
+    };
+    let result = murmur::capture::run_provider_with_vocabulary(
+        tap,
+        murmur::capture::CaptureProvider::Deepgram {
+            key: "fixture".into(),
+            endpoint: DeepgramEndpoint::loopback(1),
+        },
+        control,
+        Arc::new(AtomicBool::new(false)),
+        murmur::fallback::Progress::default(),
+        murmur::capture::MicrophoneStartup::default(),
+        fotw_audio::device_change::DeviceChangeSignal::new(),
+        profile,
+    )
+    .await;
+    assert!(result.unwrap_err().contains("schema version"));
+    assert_eq!(started.load(Ordering::SeqCst), 0);
+}

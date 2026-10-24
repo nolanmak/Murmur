@@ -289,6 +289,35 @@ pub async fn run_provider_with_events(
     startup: MicrophoneStartup,
     changes: Arc<fotw_audio::device_change::DeviceChangeSignal>,
 ) -> Result<String, String> {
+    run_provider_with_vocabulary(
+        tap,
+        provider,
+        control,
+        receiving,
+        progress,
+        startup,
+        changes,
+        crate::vocabulary::Profile::default(),
+    )
+    .await
+}
+
+/// One immutable profile for preflight, cloud retries, local fallback and final expansion.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "attempt-owned audio, cancellation and notification seams remain explicit"
+)]
+pub async fn run_provider_with_vocabulary(
+    tap: Box<dyn AudioTap>,
+    provider: CaptureProvider,
+    control: Arc<AtomicU8>,
+    receiving: Arc<AtomicBool>,
+    progress: crate::fallback::Progress,
+    startup: MicrophoneStartup,
+    changes: Arc<fotw_audio::device_change::DeviceChangeSignal>,
+    profile: crate::vocabulary::Profile,
+) -> Result<String, String> {
+    profile.validate()?;
     if control.load(Ordering::Acquire) != 0 {
         return Err("Cancelled before microphone startup".into());
     }
@@ -335,14 +364,23 @@ pub async fn run_provider_with_events(
         match provider {
             CaptureProvider::Deepgram { key, endpoint } => {
                 progress.set(crate::fallback::Stage::Cloud);
-                crate::streaming::transcribe(key, rx, endpoint, Duration::from_secs(8)).await
+                crate::streaming::transcribe_with_vocabulary(
+                    key,
+                    rx,
+                    endpoint,
+                    Duration::from_secs(8),
+                    Duration::from_secs(8),
+                    &profile.recognition_hints,
+                )
+                .await
+                .map_err(|e| e.message)
             }
             CaptureProvider::DeepgramThenLocal {
                 key,
                 endpoint,
                 local,
             } => {
-                crate::fallback::transcribe_observed(
+                crate::fallback::transcribe_with_vocabulary(
                     key,
                     rx,
                     endpoint,
@@ -350,11 +388,16 @@ pub async fn run_provider_with_events(
                     control.clone(),
                     crate::fallback::Deadlines::default(),
                     progress.clone(),
+                    &profile.recognition_hints,
                 )
                 .await
             }
             CaptureProvider::Local(endpoint) => {
-                progress.set(crate::fallback::Stage::Local);
+                progress.set(if profile.recognition_hints.is_empty() {
+                    crate::fallback::Stage::Local
+                } else {
+                    crate::fallback::Stage::LocalWithoutHints
+                });
                 let mut rx = rx;
                 let mut pcm = Vec::new();
                 while let Some(chunk) = rx.recv().await {
@@ -384,7 +427,7 @@ pub async fn run_provider_with_events(
                  if !finishing && let Some(error)=device_failure(&changes) {return Err(error.into());}
                  if let Some(error)=audio_failure(&failed) {return Err(error.into());}
                  if result.is_ok() && !finishing {return Err("Transcription ended before microphone stopped; no text inserted".into());}
-                 return result;
+                 return result.map(|text| profile.expand(&text));
              },
              _=tick.tick()=>{
               if control.load(Ordering::Acquire)==2 {return Err("Cancelled".into());}
