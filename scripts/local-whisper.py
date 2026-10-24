@@ -13,6 +13,7 @@ import secrets
 import select
 import shutil
 import socket
+import socketserver
 import subprocess
 import sys
 import tempfile
@@ -131,6 +132,14 @@ def read_supervisor_token(fd, timeout=5):
     return frame[:-1].decode("ascii")
 
 
+class LoopbackHTTPServer(http.server.HTTPServer):
+    """Bind the literal loopback address without HTTPServer's reverse DNS lookup."""
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
 def supervise(state, binary, port, token, timeout):
     child = None
     stopping = False
@@ -162,7 +171,7 @@ def supervise(state, binary, port, token, timeout):
         def log_message(self, *args):
             pass
 
-    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    server = LoopbackHTTPServer(("127.0.0.1", 0), Handler)
     server.timeout = 0.2
     record = {"control_port": server.server_port, "token": token, "port": port}
     try:
