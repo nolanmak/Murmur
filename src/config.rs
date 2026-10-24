@@ -52,16 +52,9 @@ pub fn resolve(
     }
 }
 pub fn bundle_env(executable: &Path) -> Option<PathBuf> {
-    let macos = executable.parent()?;
-    let contents = macos.parent()?;
-    let bundle = contents.parent()?;
-    if macos.file_name()? != "MacOS"
-        || contents.file_name()? != "Contents"
-        || bundle.extension()? != "app"
-    {
-        return None;
-    }
-    let path = bundle.parent()?.join(".env");
+    let path = crate::login_item::app_bundle(executable)?
+        .parent()?
+        .join(".env");
     path.is_file().then_some(path)
 }
 pub fn load() -> Result<Credentials, String> {

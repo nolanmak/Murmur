@@ -1,0 +1,292 @@
+{
+  "date": "2026-10-15",
+  "engine": "whisper.cpp 1.9.1",
+  "model": "base.en",
+  "model_sha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
+  "hardware": "Apple M3, 24 GiB unified memory",
+  "isolation": "macOS sandbox-exec denied external network for both server and clients; loopback allowed. External hostname and 1.1.1.1 curl probes failed.",
+  "benchmark": {
+    "description": "Raw engine synthetic TTS fixtures, not human microphone accuracy",
+    "clean_wer": 0.005988023952095809,
+    "clean_warm_p95_seconds": 0.138,
+    "results": [
+      {
+        "fixture": "clean1",
+        "duration_seconds": 10,
+        "elapsed_seconds": 0.116,
+        "reference": "Please move the meeting to Thursday morning and send everyone an updated invitation.",
+        "text": "Please move the meeting to Thursday morning and send everyone an updated invitation.",
+        "word_errors": 0,
+        "reference_words": 13
+      },
+      {
+        "fixture": "clean2",
+        "duration_seconds": 10,
+        "elapsed_seconds": 0.12,
+        "reference": "The weather is clear today. I will walk to the store and buy some coffee before lunch.",
+        "text": "The weather is clear today. I will walk to the store and buy some coffee before lunch.",
+        "word_errors": 0,
+        "reference_words": 17
+      },
+      {
+        "fixture": "clean3",
+        "duration_seconds": 10,
+        "elapsed_seconds": 0.13,
+        "reference": "We finished the first draft yesterday. The next step is to review the changes and prepare the final report.",
+        "text": "We finished the first draft yesterday. The next step is to review the changes and prepare the final report.",
+        "word_errors": 0,
+        "reference_words": 19
+      },
+      {
+        "fixture": "clean4",
+        "duration_seconds": 10,
+        "elapsed_seconds": 0.132,
+        "reference": "Could you check the schedule and tell me whether we have enough time to finish this task today?",
+        "text": "Could you check the schedule and tell me whether we have enough time to finish this task today?",
+        "word_errors": 0,
+        "reference_words": 18
+      },
+      {
+        "fixture": "clean5",
+        "duration_seconds": 10,
+        "elapsed_seconds": 0.128,
+        "reference": "This recording is a test of local speech recognition. No internet connection should be needed to understand these words.",
+        "text": "This recording is a test of local speech recognition. No internet connection should be needed to understand these words.",
+        "word_errors": 0,
+        "reference_words": 19
+      },
+      {
+        "fixture": "clean6",
+        "duration_seconds": 10,
+        "elapsed_seconds": 0.135,
+        "reference": "After breakfast we will take the train into the city and meet our friends near the museum.",
+        "text": "After breakfast we will take the train into the city and meet our friends near the museum.",
+        "word_errors": 0,
+        "reference_words": 17
+      },
+      {
+        "fixture": "clean7",
+        "duration_seconds": 10,
+        "elapsed_seconds": 0.125,
+        "reference": "Remember to close the window before leaving the house. The forecast says it will rain later this afternoon.",
+        "text": "Remember to close the window before leaving the house. The forecast says it will rain later this afternoon.",
+        "word_errors": 0,
+        "reference_words": 18
+      },
+      {
+        "fixture": "clean8",
+        "duration_seconds": 10,
+        "elapsed_seconds": 0.128,
+        "reference": "Please save a copy of the document and put it in the folder for next week.",
+        "text": "Please save a copy of the document and put it in the folder for next week.",
+        "word_errors": 0,
+        "reference_words": 16
+      },
+      {
+        "fixture": "clean9",
+        "duration_seconds": 10,
+        "elapsed_seconds": 0.126,
+        "reference": "The package arrived this morning. Everything was packed carefully and nothing appears to be missing.",
+        "text": "The package arrived this morning, everything was packed carefully, and nothing appears to be missing.",
+        "word_errors": 0,
+        "reference_words": 15
+      },
+      {
+        "fixture": "clean10",
+        "duration_seconds": 10,
+        "elapsed_seconds": 0.12,
+        "reference": "Let us start with the simplest example and make sure it works before adding any more features.",
+        "text": "Let us start with the simplest example and make sure it works before adding any more features.",
+        "word_errors": 0,
+        "reference_words": 17
+      },
+      {
+        "fixture": "clean11",
+        "duration_seconds": 10,
+        "elapsed_seconds": 0.13,
+        "reference": "I would like a table for four people on Saturday evening, preferably beside a window.",
+        "text": "I would like a table for four people on Saturday evening, preferably beside a window.",
+        "word_errors": 0,
+        "reference_words": 15
+      },
+      {
+        "fixture": "clean12",
+        "duration_seconds": 10,
+        "elapsed_seconds": 0.123,
+        "reference": "Thank you for your help with the project. Your comments made the instructions much easier to follow.",
+        "text": "Thank you for your help with the project. Your comments made the instructions much easier to follow.",
+        "word_errors": 0,
+        "reference_words": 17
+      },
+      {
+        "fixture": "clean13",
+        "duration_seconds": 10,
+        "elapsed_seconds": 0.131,
+        "reference": "Turn left at the next street and continue for two blocks. The library is on the right.",
+        "text": "Turn left at the next street and continue for two blocks. The library is on the right.",
+        "word_errors": 0,
+        "reference_words": 17
+      },
+      {
+        "fixture": "clean14",
+        "duration_seconds": 10,
+        "elapsed_seconds": 0.112,
+        "reference": "We should test the new settings before the meeting starts so that everyone can hear clearly.",
+        "text": "We should test the new settings before the meeting starts so that everyone can hear clearly.",
+        "word_errors": 0,
+        "reference_words": 16
+      },
+      {
+        "fixture": "clean15",
+        "duration_seconds": 10,
+        "elapsed_seconds": 0.12,
+        "reference": "The team agreed to fix the current problems before beginning work on the next version.",
+        "text": "The team agreed to fix the current problems before beginning work on the next version.",
+        "word_errors": 0,
+        "reference_words": 15
+      },
+      {
+        "fixture": "clean16",
+        "duration_seconds": 10,
+        "elapsed_seconds": 0.12,
+        "reference": "There are several ways to solve this problem. Let us compare them carefully and choose one.",
+        "text": "There are several ways to solve this problem. Let us compare them carefully and choose one.",
+        "word_errors": 0,
+        "reference_words": 16
+      },
+      {
+        "fixture": "clean17",
+        "duration_seconds": 10,
+        "elapsed_seconds": 0.132,
+        "reference": "I left my notebook on the kitchen table. Please bring it with you when you come over.",
+        "text": "I left my notebook on the kitchen table. Please bring it with you when you come over.",
+        "word_errors": 0,
+        "reference_words": 17
+      },
+      {
+        "fixture": "clean18",
+        "duration_seconds": 10,
+        "elapsed_seconds": 0.138,
+        "reference": "The train leaves at nine tomorrow morning. We should arrive at the station at least twenty minutes early.",
+        "text": "The train leaves at 9 tomorrow morning. We should arrive at the station at least 20 minutes early.",
+        "word_errors": 2,
+        "reference_words": 18
+      },
+      {
+        "fixture": "clean19",
+        "duration_seconds": 10,
+        "elapsed_seconds": 0.128,
+        "reference": "Put the blue box on the shelf and leave the smaller green box beside the door.",
+        "text": "Put the blue box on the shelf and leave the smaller green box beside the door.",
+        "word_errors": 0,
+        "reference_words": 16
+      },
+      {
+        "fixture": "clean20",
+        "duration_seconds": 10,
+        "elapsed_seconds": 0.136,
+        "reference": "The lights are working again. We can finish cleaning the room and move the chairs back into place.",
+        "text": "The lights are working again. We can finish cleaning the room and move the chairs back into place.",
+        "word_errors": 0,
+        "reference_words": 18
+      },
+      {
+        "fixture": "technical",
+        "duration_seconds": 10,
+        "elapsed_seconds": 0.15,
+        "reference": "Run the unit tests, review the pull request, and restart the local Whisper server. Check the TypeScript compiler and the Rust build.",
+        "text": "Run the unit tests, review the pull request, and restart the local whisper server. Check the TypeScript compiler and the REST build.",
+        "word_errors": 1,
+        "reference_words": 22
+      }
+    ]
+  },
+  "agentflow_adapter": [
+    {
+      "name": "clean1.wav",
+      "text": "Please move the meeting to Thursday morning and send everyone an updated invitation.",
+      "elapsed_seconds": 0.407278791
+    },
+    {
+      "name": "clean1.webm",
+      "text": "Please move the meeting to Thursday morning and send everyone an updated invitation.",
+      "elapsed_seconds": 0.13789725
+    },
+    {
+      "name": "clean1.mp4",
+      "text": "Please move the meeting to Thursday morning and send everyone an updated invitation.",
+      "elapsed_seconds": 0.12846329200000003
+    },
+    {
+      "name": "noise.wav",
+      "text": "Please move the meeting to Thursday morning and send everyone an updated invitation.",
+      "elapsed_seconds": 0.12652508299999998
+    },
+    {
+      "name": "silence.wav",
+      "text": "",
+      "elapsed_seconds": 0.02996124999999995
+    }
+  ],
+  "managed_runtime": {
+    "two_engines_simultaneously": true,
+    "idempotent_start": true,
+    "stop_isolated_in_both_directions": true,
+    "restart_without_external_network": true,
+    "state_paths_with_spaces": true,
+    "observed_start_seconds": [
+      0.441,
+      7.837,
+      0.335
+    ]
+  },
+  "murmur_adapter": {
+    "clean_wav_expected_transcript": true,
+    "digital_silence_empty": true,
+    "varied_120_second_audio_transcribed": true
+  },
+  "agentflow_limits": {
+    "varied_90_second_audio_transcribed": true,
+    "seconds": 1.099,
+    "120_second_audio_rejected": true
+  },
+  "memory": {
+    "server_rss_kib_snapshot": 311136,
+    "note": "Single ps RSS snapshot after workload; not peak usage and does not fully account for Metal/unified GPU allocations."
+  },
+  "limitations": [
+    "Synthetic macOS say voice only, not a representative human/accent/microphone corpus.",
+    "Raw engine hallucinated you on digital silence; app guards returned empty. Noisy silence may still hallucinate.",
+    "Technical fixture misrecognized Rust as REST.",
+    "Aborting HTTP discards output but may not immediately stop engine CPU/GPU work.",
+    "Native microphone, actual hotkeys/focus/paste, sleep/wake and real browser device acceptance remain manual gates.",
+    "Native-agent reasoning and TTS are independent; this validates offline STT, not fully offline Codex/Claude conversations."
+  ],
+  "agentflow_adapter_final_transport": [
+    {
+      "name": "clean1.wav",
+      "text": "Please move the meeting to Thursday morning and send everyone an updated invitation.",
+      "elapsed_seconds": 0.161127833
+    },
+    {
+      "name": "clean1.webm",
+      "text": "Please move the meeting to Thursday morning and send everyone an updated invitation.",
+      "elapsed_seconds": 0.127854666
+    },
+    {
+      "name": "clean1.mp4",
+      "text": "Please move the meeting to Thursday morning and send everyone an updated invitation.",
+      "elapsed_seconds": 0.125231583
+    },
+    {
+      "name": "noise.wav",
+      "text": "Please move the meeting to Thursday morning and send everyone an updated invitation.",
+      "elapsed_seconds": 0.12394433300000003
+    },
+    {
+      "name": "silence.wav",
+      "text": "",
+      "elapsed_seconds": 0.026634292000000073
+    }
+  ]
+}

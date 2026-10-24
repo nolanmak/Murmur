@@ -1,5 +1,10 @@
 # Murmur
 
+[![CI](https://github.com/nolanmak/Murmur/actions/workflows/ci.yml/badge.svg)](https://github.com/nolanmak/Murmur/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
+**Voice dictation for your Mac. Built at Ship Systems, shared as open source.**
+
 A macOS voice dictation app built from FlyOnTheWall's Rust audio and transcription stack.
 **Hold Control, speak, release to insert. Esc cancels.** Murmur turns your speech
 into text, inspired by the dictation workflow of [Wispr Flow](https://wisprflow.ai/features).
@@ -20,17 +25,29 @@ work. No claim of full Wispr Flow parity is made.
 
 ## Build and run
 
-Requires macOS 14.4+, Xcode command-line tools and Rust 1.95.0 (pinned).
+Requires macOS 14.4+, Git, Xcode command-line tools, Rust installed through rustup
+(the toolchain is pinned to 1.95.0), and your own Deepgram API key.
+FlyOnTheWall does not need to be installed. This is a source-based developer preview;
+there is no signed/notarized public release yet.
 
 ```sh
+git clone https://github.com/nolanmak/Murmur.git
+cd Murmur
+cp .env.example .env
+# Edit .env and set DEEPGRAM_API_KEY before starting the app.
+
 cargo test --locked --workspace
 cargo clippy --locked --all-targets -- -D warnings
 ./scripts/build-app.sh
 open Murmur.app
 ```
 
-The script uses an ad-hoc developer signature by default. Set MURMUR_SIGN_IDENTITY
-to an existing development certificate for stable signing across rebuilds.
+The script signs with MURMUR_SIGN_IDENTITY when set, otherwise the local
+`FlyOnTheWall Dev` identity when present (unlocking its dev keychain), so macOS
+permissions survive rebuilds. Without either it signs ad-hoc and warns: macOS then
+drops Accessibility and Input Monitoring on every rebuild. Set
+MURMUR_REQUIRE_IDENTITY=1 to fail instead. The bundle is signed and verified in
+`target/stage` first; a failed signature leaves the installed app unchanged.
 It does not install a trust certificate or require a signing account. Start capture from the app bundle,
 not a shell process, so macOS assigns permissions to this app.
 
@@ -96,3 +113,41 @@ See [architecture](docs/ARCHITECTURE.md), [provenance](docs/PROVENANCE.md),
 [QA](docs/QA.md) and [contributing](CONTRIBUTING.md).
 
 Local macOS paste behavior and recovery are documented in [local paste](docs/local-paste.md).
+
+## Contributing and support
+
+Bug reports, documentation improvements, and pull requests are welcome. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, or
+[open an issue](https://github.com/nolanmak/Murmur/issues) with your macOS version,
+reproduction steps, and expected behavior. Use synthetic text and remove private
+data from logs and screenshots. See [SECURITY.md](SECURITY.md) for sensitive reports.
+
+## License and credits
+
+Murmur is licensed under [Apache 2.0](LICENSE). Reused FlyOnTheWall components
+are credited in [NOTICE](NOTICE) and [the provenance record](docs/PROVENANCE.md).
+Murmur is an independent project inspired by Wispr Flow, with no affiliation or
+claim of feature parity.
+
+### Start automatically after restart
+
+Launch the packaged `Murmur.app` once. It enables **Open at login** by default,
+so Murmur opens when you sign in after restarting macOS. The menu's **Open at
+login: On/Off** item controls this setting; Off persists across manual launches.
+Launching an unpackaged development executable does not register a login item.
+
+The app maintains `~/Library/LaunchAgents/com.shipsystems.texttospeech.login.plist`
+and updates its target when launched from a new location. Keep the installed app
+at a permanent path, not in a temporary build/worktree directory. If setup fails,
+the menu offers a retry; check write access to `~/Library/LaunchAgents` and
+`~/Library/Application Support/Murmur`. Registration does not bypass macOS login
+or system background-item restrictions. Quitting Murmur intentionally stops it
+for the current session; the next login starts it again if the setting is On.
+
+Native validation and restart acceptance steps: [login startup QA](docs/login-startup.md).
+
+## Local transcription
+
+Local Whisper supports offline dictation after explicit engine/model setup. Choose
+**Transcription: Local Whisper** in the menu, or run `murmur speech local`.
+See [setup, privacy and acceptance evidence](docs/local-whisper.md).
