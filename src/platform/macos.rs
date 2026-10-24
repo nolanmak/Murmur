@@ -890,7 +890,7 @@ impl Shell {
         }
         self.permissions = snapshot;
         if self.onboarding.waiting() && self.prompted_at.elapsed() >= PROMPT_WAIT {
-            self.onboarding.answered();
+            self.onboarding.expire_wait(&snapshot);
         }
         if self.core.phase == Phase::Idle
             && let Some(grant) = self.onboarding.next(&snapshot)
@@ -943,7 +943,7 @@ impl Shell {
     fn start(&mut self) {
         if self.speech.error().is_some() {
             self.cancel();
-            self.show(self.ready());
+            self.show(&self.ready());
             return;
         }
         self.recording_remote_target = RustDeskWindow::selected();

@@ -172,6 +172,14 @@ impl Onboarding {
     pub fn answered(&mut self) {
         self.pending = None;
     }
+    /// AX/Input Monitoring do not expose dismissal callbacks. Their wait can
+    /// expire, but an undetermined microphone grant still has a live prompt.
+    pub fn expire_wait(&mut self, snapshot: &Snapshot) {
+        if self.pending == Some(Grant::Microphone) && snapshot.microphone == Access::Undetermined {
+            return;
+        }
+        self.answered();
+    }
     pub fn waiting(&self) -> bool {
         self.pending.is_some()
     }

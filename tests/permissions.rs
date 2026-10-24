@@ -212,6 +212,26 @@ fn undetermined_microphone_asks_the_system_prompt_and_denied_opens_settings() {
 }
 
 #[test]
+fn a_slow_microphone_prompt_does_not_expire_into_another_prompt() {
+    let mut onboarding = Onboarding::default();
+    let mut snapshot = Snapshot {
+        microphone: Access::Undetermined,
+        accessibility: false,
+        input_monitoring: false,
+        ad_hoc: false,
+    };
+    assert_eq!(onboarding.next(&snapshot), Some(Grant::Microphone));
+    // The shell's wait can elapse repeatedly while the user is still deciding.
+    for _ in 0..3 {
+        onboarding.expire_wait(&snapshot);
+        assert_eq!(onboarding.next(&snapshot), None);
+    }
+    snapshot.microphone = Access::Denied;
+    onboarding.expire_wait(&snapshot);
+    assert_eq!(onboarding.next(&snapshot), Some(Grant::Accessibility));
+}
+
+#[test]
 fn onboarding_asks_one_grant_at_a_time_and_never_repeats_itself() {
     let mut onboarding = Onboarding::default();
     let mut snapshot = Snapshot {
