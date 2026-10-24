@@ -556,9 +556,14 @@ async fn event_capture(
     .await;
     server.abort();
     let _ = server.await;
-    assert!(
-        stopped.load(Ordering::SeqCst) > 0,
-        "failed capture must close its tap"
+    // Rejection may return before the dedicated native owner receives Stop.
+    // Require its acknowledgment within a bound, rather than assuming that
+    // scheduling the owner and returning the async error happen in one order.
+    wait_for_counter(&stopped).await;
+    assert_eq!(
+        stopped.load(Ordering::SeqCst),
+        1,
+        "failed capture must close its tap exactly once"
     );
     result.expect("capture failure must not hang")
 }
