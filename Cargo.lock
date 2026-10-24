@@ -738,16 +738,25 @@ dependencies = [
 [[package]]
 name = "fotw-audio"
 version = "0.1.0"
-source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=e846e56f2ce961400c366410586141a6d04689cf#e846e56f2ce961400c366410586141a6d04689cf"
+source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=3781146810541f49f44a7f86ae79cea4b2514e5e#3781146810541f49f44a7f86ae79cea4b2514e5e"
 dependencies = [
  "cidre",
  "thiserror",
 ]
 
 [[package]]
+name = "fotw-dsp"
+version = "0.1.0"
+source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=3781146810541f49f44a7f86ae79cea4b2514e5e#3781146810541f49f44a7f86ae79cea4b2514e5e"
+dependencies = [
+ "rubato",
+ "thiserror",
+]
+
+[[package]]
 name = "fotw-secrets"
 version = "0.1.0"
-source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=e846e56f2ce961400c366410586141a6d04689cf#e846e56f2ce961400c366410586141a6d04689cf"
+source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=3781146810541f49f44a7f86ae79cea4b2514e5e#3781146810541f49f44a7f86ae79cea4b2514e5e"
 dependencies = [
  "argon2",
  "bech32",
@@ -761,7 +770,7 @@ dependencies = [
 [[package]]
 name = "fotw-stt"
 version = "0.1.0"
-source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=e846e56f2ce961400c366410586141a6d04689cf#e846e56f2ce961400c366410586141a6d04689cf"
+source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=3781146810541f49f44a7f86ae79cea4b2514e5e#3781146810541f49f44a7f86ae79cea4b2514e5e"
 dependencies = [
  "futures-util",
  "serde",
@@ -1316,6 +1325,7 @@ dependencies = [
  "block2",
  "dotenvy",
  "fotw-audio",
+ "fotw-dsp",
  "fotw-secrets",
  "fotw-stt",
  "futures-util",
@@ -1325,7 +1335,6 @@ dependencies = [
  "objc2-foundation",
  "reqwest",
  "rtrb",
- "rubato",
  "serde",
  "serde_json",
  "tempfile",

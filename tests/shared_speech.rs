@@ -9,3 +9,8 @@ fn shared_capture_formats_and_normalization() {
 async fn shared_local_lifecycle() {
     fotw_stt::conformance::local_lifecycle().await;
 }
+
+#[test]
+fn shared_streaming_pcm_conversion() {
+    fotw_dsp::conformance::streaming();
+}
