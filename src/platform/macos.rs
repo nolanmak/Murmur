@@ -621,6 +621,7 @@ struct Shell {
     launched: Instant,
     receiving: Arc<AtomicBool>,
     speech_progress: crate::fallback::Progress,
+    microphone_startup: crate::capture::MicrophoneStartup,
     speech_stage: crate::fallback::Stage,
     remote_mode: bool,
     recording_remote: bool,
@@ -819,6 +820,7 @@ impl Shell {
             launched: Instant::now(),
             receiving: Arc::new(AtomicBool::new(false)),
             speech_progress: Default::default(),
+            microphone_startup: Default::default(),
             speech_stage: Default::default(),
             remote_mode: remote_fixture,
             recording_remote: remote_fixture,
@@ -920,6 +922,7 @@ impl Shell {
         let generation = self.core.generation();
         let receiving = self.receiving.clone();
         let progress = self.speech_progress.clone();
+        let startup = self.microphone_startup.clone();
         let speech = self.speech.clone();
         std::thread::spawn(move || {
             let result = (|| {
@@ -928,8 +931,8 @@ impl Shell {
                 let tap = platform
                     .open_mic(&DeviceId::new("default"), FormatRequest::any())
                     .map_err(|_| "No microphone available".to_string())?;
-                crate::capture::block_on_detached(crate::capture::run_provider_with_progress(
-                    tap, provider, control, receiving, progress,
+                crate::capture::block_on_detached(crate::capture::run_provider_with_startup(
+                    tap, provider, control, receiving, progress, startup,
                 ))?
             })();
             let _ = completed.send(Completion { generation, result });

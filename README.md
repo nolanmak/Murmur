@@ -164,3 +164,7 @@ requests are surfaced instead of hidden. Rate-limit waits beyond the retry budge
 use local rather than retrying early. Escape and original-field validation remain
 in force. This is not persistent recording/history and never switches local-only
 speech to cloud. See `docs/local-whisper.md` for deadlines and test evidence.
+
+Microphone startup has a four-second deadline and remains cancellable. A late
+startup is stopped, and a pending OS start blocks additional starter threads.
+See [startup behavior and test limits](docs/microphone-startup.md).
