@@ -431,6 +431,7 @@ enum CaptureFault {
     NonFinite,
     FormatChanged,
     DuringStop,
+    RouteAfterStop,
 }
 struct FaultTap {
     id: TapId,
@@ -438,6 +439,8 @@ struct FaultTap {
     control: Arc<AtomicU8>,
     stopped: Arc<AtomicUsize>,
     sink: Option<Box<dyn FrameSink>>,
+    changes: Arc<fotw_audio::device_change::DeviceChangeSignal>,
+    event: Option<fotw_audio::device_change::DeviceChangeKind>,
 }
 impl AudioTap for FaultTap {
     fn id(&self) -> &TapId {
@@ -469,6 +472,9 @@ impl AudioTap for FaultTap {
         };
         sink.on_frames(&pcm, CaptureTimestamp::new(0, 0), flags);
         self.sink = Some(sink);
+        if let Some(event) = self.event {
+            self.changes.raise(event);
+        }
         self.control.store(1, Ordering::Release);
         Ok(self.format())
     }
@@ -483,8 +489,21 @@ impl AudioTap for FaultTap {
     }
 }
 async fn fault_capture(fault: CaptureFault) -> Result<String, String> {
+    event_capture(
+        fault,
+        None,
+        fotw_audio::device_change::DeviceChangeSignal::new(),
+    )
+    .await
+}
+async fn event_capture(
+    fault: CaptureFault,
+    event: Option<fotw_audio::device_change::DeviceChangeKind>,
+    changes: Arc<fotw_audio::device_change::DeviceChangeSignal>,
+) -> Result<String, String> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
+    let server_changes = changes.clone();
     let server = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.unwrap();
         let mut ws = accept_async(socket).await.unwrap();
@@ -493,6 +512,9 @@ async fn fault_capture(fault: CaptureFault) -> Result<String, String> {
                 && t.contains("CloseStream")
             {
                 let _=ws.send(Message::text(r#"{"type":"Results","is_final":true,"speech_final":true,"channel":{"alternatives":[{"transcript":"Fixture speech."}]}}"#)).await;
+                if matches!(fault, CaptureFault::RouteAfterStop) {
+                    server_changes.raise(fotw_audio::device_change::DeviceChangeKind::DefaultInput);
+                }
                 let _ = ws
                     .send(Message::text(r#"{"type":"Metadata","duration":0.3}"#))
                     .await;
@@ -508,14 +530,22 @@ async fn fault_capture(fault: CaptureFault) -> Result<String, String> {
         control: control.clone(),
         stopped: stopped.clone(),
         sink: None,
+        changes: changes.clone(),
+        event,
     };
     let result = tokio::time::timeout(
         Duration::from_secs(3),
-        murmur::capture::run_with_endpoint(
+        murmur::capture::run_provider_with_events(
             Box::new(tap),
-            "fixture".into(),
+            murmur::capture::CaptureProvider::Deepgram {
+                key: "fixture".into(),
+                endpoint: DeepgramEndpoint::loopback(port),
+            },
             control,
-            DeepgramEndpoint::loopback(port),
+            Arc::new(AtomicBool::new(false)),
+            Default::default(),
+            Default::default(),
+            changes,
         ),
     )
     .await;
@@ -578,4 +608,85 @@ async fn capture_silent_buffers_are_valid_delivery_not_device_loss() {
         fault_capture(CaptureFault::Silent).await.unwrap(),
         "Fixture speech."
     );
+}
+
+#[tokio::test]
+async fn device_event_input_switch_cancels_only_its_attempt() {
+    use fotw_audio::device_change::{DeviceChangeKind, DeviceChangeSignal};
+    let old = DeviceChangeSignal::new();
+    let result = event_capture(
+        CaptureFault::None,
+        Some(DeviceChangeKind::DefaultInput),
+        old.clone(),
+    )
+    .await;
+    assert!(result.unwrap_err().contains("Microphone route changed"));
+    // A delayed notification still belongs to the old capture, never the next one.
+    old.raise(DeviceChangeKind::DefaultInput);
+    assert_eq!(
+        event_capture(CaptureFault::None, None, DeviceChangeSignal::new())
+            .await
+            .unwrap(),
+        "Fixture speech."
+    );
+}
+#[tokio::test]
+async fn device_event_output_switch_does_not_cancel_microphone_dictation() {
+    use fotw_audio::device_change::{DeviceChangeKind, DeviceChangeSignal};
+    assert_eq!(
+        event_capture(
+            CaptureFault::None,
+            Some(DeviceChangeKind::DefaultOutput),
+            DeviceChangeSignal::new()
+        )
+        .await
+        .unwrap(),
+        "Fixture speech."
+    );
+}
+
+#[tokio::test]
+async fn device_event_after_capture_stop_does_not_discard_complete_speech() {
+    assert_eq!(
+        fault_capture(CaptureFault::RouteAfterStop).await.unwrap(),
+        "Fixture speech."
+    );
+}
+
+#[tokio::test]
+async fn device_event_cancels_pending_start_without_waiting_for_os() {
+    use fotw_audio::device_change::{DeviceChangeKind, DeviceChangeSignal};
+    let (tap, open, stopped) = wedged();
+    let changes = DeviceChangeSignal::new();
+    let notify = changes.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        notify.raise(DeviceChangeKind::DefaultInput);
+    });
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        murmur::capture::run_provider_with_events(
+            tap,
+            murmur::capture::CaptureProvider::Deepgram {
+                key: "fixture".into(),
+                endpoint: DeepgramEndpoint::loopback(1),
+            },
+            Arc::new(AtomicU8::new(0)),
+            Arc::new(AtomicBool::new(false)),
+            Default::default(),
+            Default::default(),
+            changes,
+        ),
+    )
+    .await
+    .expect("route change must not wait for OS startup");
+    assert!(result.unwrap_err().contains("Microphone route changed"));
+    open.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while stopped.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
 }
