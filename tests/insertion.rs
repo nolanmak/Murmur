@@ -136,3 +136,178 @@ fn a_new_or_missing_window_observation_blocks_delivery() {
     assert!(!same_window(Some(&7), None, equal));
     assert!(!same_window(None, Some(&7), equal));
 }
+
+mod settle {
+    use murmur::insertion::{FOCUS_STEP, FOCUS_WAIT, Probe, settle_focus_with_clock};
+    use std::cell::Cell;
+    use std::time::Duration;
+
+    /// Runs `settle_focus` over scripted probes with a fake sleep; returns (result, probes, slept).
+    fn run(script: &[Option<Probe>]) -> (Option<Probe>, usize, Duration) {
+        let calls = Cell::new(0);
+        let slept = Cell::new(Duration::ZERO);
+        let result = settle_focus_with_clock(
+            || {
+                let i = calls.get();
+                calls.set(i + 1);
+                script[i.min(script.len() - 1)]
+            },
+            |probe| *probe,
+            |step| slept.set(slept.get() + step),
+            || slept.get(),
+        );
+        (result, calls.get(), slept.get())
+    }
+
+    #[test]
+    fn editable_focus_is_used_without_waiting() {
+        assert_eq!(
+            run(&[Some(Probe::Editable)]),
+            (Some(Probe::Editable), 1, Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn browser_tree_that_appears_later_is_found() {
+        // Chrome reports nothing, then its web area, then the composer.
+        let (result, probes, slept) =
+            run(&[None, None, Some(Probe::NotEditable), Some(Probe::Editable)]);
+        assert_eq!(result, Some(Probe::Editable));
+        assert_eq!(probes, 4);
+        assert_eq!(slept, FOCUS_STEP * 3);
+    }
+
+    #[test]
+    fn secure_fields_stop_immediately() {
+        assert_eq!(
+            run(&[Some(Probe::Secure)]),
+            (Some(Probe::Secure), 1, Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn gives_up_at_the_budget_with_the_last_observation() {
+        let (result, probes, slept) = run(&[None]);
+        assert_eq!(result, None);
+        assert_eq!(slept, FOCUS_WAIT);
+        assert_eq!(
+            probes as u32,
+            FOCUS_WAIT.as_millis() as u32 / FOCUS_STEP.as_millis() as u32 + 1
+        );
+        let (result, _, slept) = run(&[Some(Probe::NotEditable)]);
+        assert_eq!(result, Some(Probe::NotEditable));
+        assert_eq!(slept, FOCUS_WAIT);
+    }
+
+    #[test]
+    fn budget_matches_the_issue() {
+        assert_eq!(FOCUS_STEP, Duration::from_millis(50));
+        assert_eq!(FOCUS_WAIT, Duration::from_millis(750));
+    }
+}
+
+mod start {
+    use murmur::insertion::{Preflight, Probe, preflight, prewarm_attributes};
+    use murmur::local_delivery::Failure;
+
+    #[test]
+    fn remote_review_does_not_require_a_local_target() {
+        assert_eq!(preflight(None, true), Preflight::ReviewOnly);
+    }
+
+    #[test]
+    fn known_targets_keep_their_existing_decisions() {
+        assert_eq!(preflight(Some(Probe::Editable), false), Preflight::Use);
+        assert_eq!(
+            preflight(Some(Probe::Editable), true),
+            Preflight::ReviewOnly
+        );
+        for remote in [false, true] {
+            assert_eq!(
+                preflight(Some(Probe::Secure), remote),
+                Preflight::Refuse(Failure::SecureTarget)
+            );
+        }
+        assert_eq!(
+            preflight(Some(Probe::NotEditable), false),
+            Preflight::Refuse(Failure::NoFocusedField)
+        );
+        assert_eq!(
+            preflight(Some(Probe::NotEditable), true),
+            Preflight::ReviewOnly
+        );
+    }
+
+    #[test]
+    fn prewarm_turns_on_electron_accessibility_everywhere_and_browser_mode_only_for_chromium() {
+        for bundle in [
+            "com.hnc.Discord",
+            "com.tinyspeck.slackmacgap",
+            "com.apple.Notes",
+            "",
+        ] {
+            assert_eq!(
+                prewarm_attributes(bundle),
+                ["AXManualAccessibility"],
+                "{bundle}"
+            );
+        }
+        for bundle in [
+            "com.google.Chrome",
+            "com.brave.Browser",
+            "com.microsoft.edgemac",
+            "company.thebrowser.Browser",
+        ] {
+            assert_eq!(
+                prewarm_attributes(bundle),
+                ["AXManualAccessibility", "AXEnhancedUserInterface"],
+                "{bundle}"
+            );
+        }
+    }
+}
+#[test]
+fn missing_local_target_is_refused_before_recording() {
+    use murmur::{
+        insertion::{Preflight, preflight},
+        local_delivery::Failure,
+    };
+    assert_eq!(
+        preflight(None, false),
+        Preflight::Refuse(Failure::NoFocusedField)
+    );
+    assert!(
+        !Failure::NoFocusedField
+            .message()
+            .contains("Transcript ready")
+    );
+}
+
+#[test]
+fn slow_accessibility_probes_consume_the_focus_budget() {
+    use murmur::insertion::{Probe, settle_focus_with_clock};
+    use std::{cell::Cell, time::Duration};
+    let elapsed = Cell::new(Duration::ZERO);
+    let calls = Cell::new(0);
+    let slept = Cell::new(Duration::ZERO);
+    let result = settle_focus_with_clock(
+        || {
+            let call = calls.get();
+            calls.set(call + 1);
+            elapsed.set(elapsed.get() + Duration::from_millis(if call == 0 { 600 } else { 200 }));
+            (call > 0).then_some(Probe::Editable)
+        },
+        |probe| *probe,
+        |step| {
+            slept.set(slept.get() + step);
+            elapsed.set(elapsed.get() + step);
+        },
+        || elapsed.get(),
+    );
+    assert_eq!(
+        result, None,
+        "a field first exposed after the deadline cannot authorize capture"
+    );
+    assert_eq!(calls.get(), 2);
+    assert_eq!(slept.get(), Duration::from_millis(50));
+}

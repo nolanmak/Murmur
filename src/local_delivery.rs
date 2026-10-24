@@ -12,6 +12,7 @@ impl Outcome {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Failure {
+    NoFocusedField,
     MissingTarget,
     TargetChanged,
     SecureTarget,
@@ -25,6 +26,7 @@ pub enum Failure {
 impl Failure {
     pub fn message(self) -> &'static str {
         match self {
+            Self::NoFocusedField => "No text field found · click into a text field and try again",
             Self::MissingTarget => "Transcript ready · choose Copy Last Transcript",
             Self::TargetChanged => "Transcript ready · focus changed. Use Copy Last Transcript",
             Self::SecureTarget => "Choose a supported text field. Password fields are blocked",
