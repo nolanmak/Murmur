@@ -64,14 +64,44 @@ fn audio_failure(failed: &AtomicU8) -> Option<&'static str> {
         _ => Some("Microphone failure; no text inserted"),
     }
 }
-struct Guard(Box<dyn AudioTap>);
-impl Drop for Guard {
-    fn drop(&mut self) {
-        let _ = self.0.stop();
+/// Owned result of preparing one microphone and its device watcher.
+pub struct PreparedInput {
+    tap: Box<dyn AudioTap>,
+    watcher: Option<Box<dyn fotw_audio::DeviceWatch>>,
+}
+impl PreparedInput {
+    pub fn new(tap: Box<dyn AudioTap>) -> Self {
+        Self { tap, watcher: None }
+    }
+    pub fn watched(tap: Box<dyn AudioTap>, watcher: Box<dyn fotw_audio::DeviceWatch>) -> Self {
+        Self {
+            tap,
+            watcher: Some(watcher),
+        }
     }
 }
-/// Shared by the native shell across attempts. A blocked OS start retains its
-/// lease until it returns and any abandoned microphone has been stopped.
+/// Deferred input setup, created without touching a native device.
+pub struct InputPreparation(Box<dyn FnOnce() -> Result<PreparedInput, String> + Send>);
+impl InputPreparation {
+    pub fn new(prepare: impl FnOnce() -> Result<PreparedInput, String> + Send + 'static) -> Self {
+        Self(Box::new(prepare))
+    }
+}
+
+struct Guard {
+    tap: Box<dyn AudioTap>,
+    _watcher: Option<Box<dyn fotw_audio::DeviceWatch>>,
+    // Release only after tap and watcher cleanup, including on a late result.
+    _lease: StartupLease,
+}
+impl Drop for Guard {
+    fn drop(&mut self) {
+        let _ = self.tap.stop();
+    }
+}
+/// Shared by the native shell across attempts. One lease covers native
+/// preparation, capture and cleanup; repeated attempts cannot multiply a late
+/// native operation.
 #[derive(Clone, Default)]
 pub struct MicrophoneStartup(Arc<AtomicBool>);
 struct StartupLease(Arc<AtomicBool>);
@@ -83,7 +113,7 @@ impl Drop for StartupLease {
 impl MicrophoneStartup {
     fn acquire(&self) -> Result<StartupLease, String> {
         self.0.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| "Previous microphone startup is still pending; reconnect the input device or reopen Murmur".to_string())?;
+            .map_err(|_| "Previous microphone operation is still pending; reconnect the input device or reopen Murmur".to_string())?;
         Ok(StartupLease(self.0.clone()))
     }
 }
@@ -91,26 +121,49 @@ impl MicrophoneStartup {
 // Adapted from Murmur PR #53 (97fe25c). Carry the RAII Guard through the
 // channel too: receiver cancellation after send must still close the tap.
 async fn start_within_deadline(
-    tap: Box<dyn AudioTap>,
+    input: InputPreparation,
     sink: Box<dyn FrameSink>,
-    control: &AtomicU8,
+    control: &Arc<AtomicU8>,
     startup: &MicrophoneStartup,
     receiving: &AtomicBool,
-    changes: &fotw_audio::device_change::DeviceChangeSignal,
+    changes: &Arc<fotw_audio::device_change::DeviceChangeSignal>,
 ) -> Result<(Guard, StreamFormat), String> {
     if let Some(error) = device_failure(changes) {
         return Err(error.into());
     }
     let lease = startup.acquire()?;
     let (tx, mut rx) = tokio::sync::oneshot::channel();
+    let worker_control = control.clone();
+    let worker_changes = changes.clone();
     std::thread::Builder::new()
         .name("murmur-mic-start".into())
         .spawn(move || {
-            let _lease = lease;
-            let mut guard = Guard(tap);
-            let started = guard.0.start(sink);
-            // Failed delivery drops Guard on this worker, stopping a late mic.
-            let _ = tx.send((guard, started));
+            let result = (|| {
+                let PreparedInput { tap, watcher } = (input.0)()?;
+                let mut guard = Guard {
+                    tap,
+                    _watcher: watcher,
+                    _lease: lease,
+                };
+                // Preparation can return after Escape/release or the deadline.
+                // Close the prepared resources without starting late capture.
+                if tx.is_closed() || worker_control.load(Ordering::Acquire) != 0 {
+                    return Err(
+                        "Dictation ended before microphone was ready; try again".to_string()
+                    );
+                }
+                // Watch/open can report a route change before the async
+                // observer gets another poll. Never start that stale device.
+                if let Some(error) = device_failure(&worker_changes) {
+                    return Err(error.to_string());
+                }
+                let format = guard.tap.start(sink).map_err(|_| {
+                    "Cannot start microphone; check permission and input device".to_string()
+                })?;
+                Ok((guard, format))
+            })();
+            // Receiver cancellation drops the owned guard on this worker.
+            let _ = tx.send(result);
         })
         .map_err(|_| "Cannot start microphone worker".to_string())?;
     let deadline = tokio::time::sleep(MIC_START_DEADLINE);
@@ -129,9 +182,8 @@ async fn start_within_deadline(
         }
         tokio::select! {
             started = &mut rx => {
-                let (guard, format) = started.map_err(|_| "Microphone startup failed")?;
+                let (guard, format) = started.map_err(|_| "Microphone startup failed")??;
                 if control.load(Ordering::Acquire) == 2 { return Err("Cancelled".into()); }
-                let format = format.map_err(|_| "Cannot start microphone; check permission and input device")?;
                 return Ok((guard, format));
             }
             _ = &mut deadline => return Err("Microphone did not start; check the input device and try again".into()),
@@ -302,13 +354,39 @@ pub async fn run_provider_with_events(
     .await
 }
 
+/// Existing callers can supply an already-created tap; the native shell uses
+/// deferred preparation so watching/opening also run inside the startup lease.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_provider_with_vocabulary(
+    tap: Box<dyn AudioTap>,
+    provider: CaptureProvider,
+    control: Arc<AtomicU8>,
+    receiving: Arc<AtomicBool>,
+    progress: crate::fallback::Progress,
+    startup: MicrophoneStartup,
+    changes: Arc<fotw_audio::device_change::DeviceChangeSignal>,
+    profile: crate::vocabulary::Profile,
+) -> Result<String, String> {
+    run_provider_with_preparation(
+        InputPreparation::new(move || Ok(PreparedInput::new(tap))),
+        provider,
+        control,
+        receiving,
+        progress,
+        startup,
+        changes,
+        profile,
+    )
+    .await
+}
+
 /// One immutable profile for preflight, cloud retries, local fallback and final expansion.
 #[allow(
     clippy::too_many_arguments,
     reason = "attempt-owned audio, cancellation and notification seams remain explicit"
 )]
-pub async fn run_provider_with_vocabulary(
-    tap: Box<dyn AudioTap>,
+pub async fn run_provider_with_preparation(
+    input: InputPreparation,
     provider: CaptureProvider,
     control: Arc<AtomicU8>,
     receiving: Arc<AtomicBool>,
@@ -344,7 +422,7 @@ pub async fn run_provider_with_vocabulary(
         receiving: receiving.clone(),
     });
     let started_capture =
-        start_within_deadline(tap, sink, &control, &startup, &receiving, &changes).await;
+        start_within_deadline(input, sink, &control, &startup, &receiving, &changes).await;
     if control.load(Ordering::Acquire) == 2 {
         return Err("Cancelled".into());
     }
@@ -436,7 +514,7 @@ pub async fn run_provider_with_vocabulary(
                  if let Some(error)=audio_failure(&failed){return Err(error.into());}
               if !finishing {
                if control.load(Ordering::Acquire)==1 || started.elapsed()>=Duration::from_secs(120) {
-                guard.0.stop().map_err(|_|"Microphone stop failed")?;
+                guard.tap.stop().map_err(|_|"Microphone stop failed")?;
                 // Successful stop closes the capture epoch. Later route notifications
                 // cannot invalidate audio already collected, but a callback fault
                 // reported during stop must still reject this utterance.

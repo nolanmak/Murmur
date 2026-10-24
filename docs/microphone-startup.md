@@ -1,21 +1,31 @@
 # Bounded microphone startup
 
 The capture coordinator adapts PR #53 (97fe25cf43cc94734d45a4b33e879e259c97e10f)
-to the current local/cloud pipeline. It runs `AudioTap::start` on an
-owned worker instead of the current-thread async runtime. Startup has a
-four-second deadline; Escape and release before any samples arrive stop waiting.
+to the current local/cloud pipeline. The native shell defers device-watcher
+registration, default-device selection/open and `AudioTap::start` to one owned
+worker, after profile/provider preflight. All these native preparation calls
+share a four-second deadline; Escape and release before samples arrive stop waiting.
 A release after samples arrive still drains captured audio normally.
 
 The native shell retains one `MicrophoneStartup` across attempts. If CoreAudio
 stays blocked after timeout/cancellation, subsequent attempts refuse to spawn
-another starter until the old one returns and its abandoned tap is stopped.
-This bounds the outstanding startup worker; it cannot forcibly interrupt an OS
-call. A permanently blocked OS call may require reconnecting the device or
+another preparer until the old one returns and its abandoned tap and watcher
+are cleaned up. The lease stays with the owned capture guard through Stop and
+watcher destruction, so slow cleanup cannot multiply native operations either.
+A preparation that returns after cancellation/release/timeout is closed without
+starting late capture. This cannot forcibly interrupt an OS call. A permanently blocked OS call may require reconnecting the device or
 reopening Murmur. A returned tap travels inside an RAII guard, so abandoning
 the handoff also closes it. No late transcript is inserted by startup recovery.
 
-Startup regressions cover the deadline, Escape, late cleanup,
-release-before-ready and repeated attempts through a shared coordinator.
+A fresh preparation regression observed Escape waiting 2.01 seconds for an
+injected blocked open before the coordinator was reached. It now returns promptly.
+All 29 capture tests pass, covering preparation timeout, Escape/release, no late
+start, repeated-attempt backpressure, lease retention through blocked Stop or
+watcher destruction, preflight rejection before preparation, and fresh reuse.
+A second fresh RED started a device once after preparation had already reported
+an input-route change; the worker now checks that signal before native start,
+without waiting for an async observer tick. Existing capture faults, stereo
+conversion, route/stop boundaries, vocabulary snapshots and fallback remain covered.
 The fixture has no physical microphone or cloud access. Native unplug/replug,
 Bluetooth and sleep/wake acceptance for #61 remain required; this change does
 not implement the whole device-recovery state machine or claim that OS stop
@@ -88,6 +98,9 @@ background readiness recovery and physical device QA remain unfinished under
 
 The route change extraction retains the five-argument startup API, independent
 progress/startup state, panic containment and stereo frame preservation already
-on main. Device-watcher creation and default-device selection are synchronous
-and precede the tap-start deadline; bounding the entire native preparation and
-teardown path remains required before closing #61.
+on main. Device-watcher creation, default-device selection/open and tap start
+now run inside the bounded preparation worker. OS calls remain synchronous on
+that worker. Native teardown still needs a separate deadline/cancellable handoff;
+this change retains the lease through cleanup but does not make Stop interruptible.
+Native sleep/format event publication, readiness recovery and physical acceptance
+remain required before closing #61.
