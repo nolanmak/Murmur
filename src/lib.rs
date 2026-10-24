@@ -5,6 +5,7 @@ pub mod indicator;
 pub mod insertion;
 pub mod local_clipboard;
 pub mod local_delivery;
+pub mod login_item;
 pub mod permissions;
 pub mod platform;
 pub mod remote;
@@ -14,3 +15,7 @@ pub mod resample;
 pub mod space_hotkey;
 pub mod streaming;
 pub mod transcript;
+
+pub mod fallback;
+pub mod local_stt;
+pub mod speech;

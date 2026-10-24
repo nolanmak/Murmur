@@ -3,6 +3,14 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
+  advisories:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories
+
   test:
     strategy:
       matrix:
@@ -23,6 +31,8 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked --workspace
       - run: python3 scripts/check-repo.py
+      - name: Test managed local Whisper lifecycle
+        run: python3 -m unittest discover -s scripts -p 'test_local_whisper.py'
       - if: runner.os == 'macOS'
         name: Build installable Mac preview
         run: |

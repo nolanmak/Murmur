@@ -138,3 +138,287 @@ async fn release_drains_microphone_through_resampler_and_closes_capture() {
     assert!(stopped.load(Ordering::SeqCst) > 0);
     server.await.unwrap();
 }
+#[test]
+fn stalled_dns_lookup_does_not_hold_back_a_failed_result() {
+    // Offline, getaddrinfo can block for tens of seconds after the connect
+    // deadline has already failed the attempt.
+    let started = std::time::Instant::now();
+    let result = murmur::capture::block_on_detached(async {
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let lookup = tokio::task::spawn_blocking(move || {
+            let _ = started_tx.send(());
+            std::thread::sleep(Duration::from_secs(5));
+        });
+        started_rx.await.expect("blocking lookup did not start");
+        tokio::time::timeout(Duration::from_millis(50), lookup)
+            .await
+            .map_err(|_| "Provider connection timed out")
+    });
+    assert_eq!(
+        result.unwrap().unwrap_err(),
+        "Provider connection timed out"
+    );
+    assert!(started.elapsed() < Duration::from_secs(2));
+}
+
+#[tokio::test]
+async fn local_release_sends_wav_without_cloud_key_and_stops_microphone() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = murmur::local_stt::LocalEndpoint::new(&format!(
+        "http://{}",
+        listener.local_addr().unwrap()
+    ))
+    .unwrap();
+    let server = tokio::spawn(async move {
+        let (mut probe, _) = listener.accept().await.unwrap();
+        let mut request = [0; 4096];
+        let n = probe.read(&mut request).await.unwrap();
+        assert!(request[..n].starts_with(b"GET /health "));
+        let health = r#"{"status":"ok"}"#;
+        probe
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{health}",
+                    health.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        drop(probe);
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut bytes = Vec::new();
+        loop {
+            let mut buf = [0; 8192];
+            let n = socket.read(&mut buf).await.unwrap();
+            assert!(n > 0);
+            bytes.extend_from_slice(&buf[..n]);
+            if let Some(end) = bytes.windows(4).position(|v| v == b"\r\n\r\n") {
+                let header = String::from_utf8_lossy(&bytes[..end]).to_lowercase();
+                let length: usize = header
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length: "))
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                if bytes.len() >= end + 4 + length {
+                    break;
+                }
+            }
+        }
+        assert!(bytes.windows(4).any(|v| v == b"RIFF"));
+        let body = r#"{"text":"Local fixture."}"#;
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+    });
+    let (tap, control, started, stopped) = fixture(48000, 0);
+    let result = murmur::capture::run_provider_observed(
+        tap,
+        murmur::capture::CaptureProvider::Local(endpoint),
+        control,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result, "Local fixture.");
+    assert_eq!(started.load(Ordering::SeqCst), 1);
+    assert!(stopped.load(Ordering::SeqCst) > 0);
+    server.await.unwrap();
+}
+
+/// A microphone whose `AudioDeviceStart` never returns until the gate opens,
+/// the way CoreAudio wedges when its IO thread never reaches the run state.
+struct WedgedTap {
+    id: TapId,
+    gate: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+    stopped: Arc<AtomicUsize>,
+}
+impl AudioTap for WedgedTap {
+    fn id(&self) -> &TapId {
+        &self.id
+    }
+    fn format(&self) -> StreamFormat {
+        StreamFormat::new(48000, 1, SampleFormat::F32)
+    }
+    fn format_is_authoritative(&self) -> bool {
+        true
+    }
+    fn start(&mut self, _: Box<dyn FrameSink>) -> Result<StreamFormat, TapError> {
+        let _ = self
+            .gate
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(30));
+        Ok(self.format())
+    }
+    fn stop(&mut self) -> Result<(), TapError> {
+        self.stopped.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+fn wedged() -> (
+    Box<dyn AudioTap>,
+    std::sync::mpsc::Sender<()>,
+    Arc<AtomicUsize>,
+) {
+    let (open, gate) = std::sync::mpsc::channel();
+    let stopped = Arc::new(AtomicUsize::new(0));
+    let tap = WedgedTap {
+        id: TapId::mic("wedged"),
+        gate: std::sync::Mutex::new(gate),
+        stopped: stopped.clone(),
+    };
+    (Box::new(tap), open, stopped)
+}
+#[tokio::test]
+async fn wedged_microphone_start_fails_instead_of_loading_forever() {
+    let (tap, _open, _) = wedged();
+    let control = Arc::new(AtomicU8::new(0));
+    let started = std::time::Instant::now();
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        murmur::capture::run(tap, "test-key".into(), control),
+    )
+    .await
+    .expect("a wedged microphone start must not hang the attempt");
+    assert!(result.unwrap_err().contains("Microphone did not start"));
+    assert!(started.elapsed() <= murmur::capture::MIC_START_DEADLINE + Duration::from_secs(1));
+}
+#[tokio::test]
+async fn escape_cancels_while_microphone_is_starting() {
+    let (tap, _open, _) = wedged();
+    let control = Arc::new(AtomicU8::new(0));
+    let cancel = control.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        cancel.store(2, Ordering::Release);
+    });
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        murmur::capture::run(tap, "test-key".into(), control),
+    )
+    .await
+    .expect("Esc must not wait for the microphone to start");
+    assert_eq!(result.unwrap_err(), "Cancelled");
+}
+#[tokio::test]
+async fn microphone_that_starts_after_giving_up_is_stopped() {
+    let (tap, open, stopped) = wedged();
+    let control = Arc::new(AtomicU8::new(0));
+    let cancel = control.clone();
+    let attempt = tokio::spawn(murmur::capture::run(tap, "test-key".into(), control));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    cancel.store(2, Ordering::Release);
+    assert!(attempt.await.unwrap().is_err());
+    open.send(()).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while stopped.load(Ordering::SeqCst) == 0 && std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        stopped.load(Ordering::SeqCst),
+        1,
+        "a late start must not leave the mic open"
+    );
+}
+
+#[tokio::test]
+async fn repeated_attempts_do_not_start_more_workers_until_abandoned_start_is_cleaned_up() {
+    use murmur::capture::{CaptureProvider, MicrophoneStartup, run_provider_with_startup};
+    let startup = MicrophoneStartup::default();
+    let provider = || CaptureProvider::Deepgram {
+        key: "fixture".into(),
+        endpoint: DeepgramEndpoint::loopback(1),
+    };
+    let (tap, open, stopped) = wedged();
+    let control = Arc::new(AtomicU8::new(0));
+    let first = tokio::spawn(run_provider_with_startup(
+        tap,
+        provider(),
+        control.clone(),
+        Arc::new(AtomicBool::new(false)),
+        startup.clone(),
+    ));
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    control.store(2, Ordering::Release);
+    assert_eq!(first.await.unwrap().unwrap_err(), "Cancelled");
+    for _ in 0..3 {
+        let (tap, control, started, _) = fixture(0, 0);
+        let result = run_provider_with_startup(
+            tap,
+            provider(),
+            control,
+            Arc::new(AtomicBool::new(false)),
+            startup.clone(),
+        )
+        .await;
+        assert!(result.unwrap_err().contains("still pending"));
+        assert_eq!(started.load(Ordering::SeqCst), 0);
+    }
+    open.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while stopped.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let (tap, control, started, _) = fixture(0, 0);
+    let result = run_provider_with_startup(
+        tap,
+        provider(),
+        control,
+        Arc::new(AtomicBool::new(false)),
+        startup,
+    )
+    .await;
+    assert!(result.unwrap_err().contains("format"));
+    assert_eq!(started.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn release_while_microphone_is_starting_does_not_wait_for_the_device() {
+    let (tap, _open, _) = wedged();
+    let control = Arc::new(AtomicU8::new(0));
+    let released = control.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        released.store(1, Ordering::Release);
+    });
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        murmur::capture::run(tap, "fixture".into(), control),
+    )
+    .await
+    .unwrap();
+    assert!(result.unwrap_err().contains("ended before microphone"));
+}
+
+#[tokio::test]
+async fn unavailable_local_engine_is_reported_before_microphone_capture() {
+    let (tap, control, started, _) = fixture(48000, 0);
+    let result = murmur::capture::run_provider_observed(
+        tap,
+        murmur::capture::CaptureProvider::Local(
+            murmur::local_stt::LocalEndpoint::new("http://127.0.0.1:1").unwrap(),
+        ),
+        control,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .await;
+    assert!(result.is_err());
+    assert_eq!(
+        started.load(Ordering::SeqCst),
+        0,
+        "readiness failure must precede capture, not waste the utterance"
+    );
+}
