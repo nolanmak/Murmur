@@ -11,23 +11,61 @@ use std::time::Duration;
 pub const MIC_START_DEADLINE: Duration = Duration::from_secs(4);
 struct Sink {
     producer: Producer<f32>,
-    failed: Arc<AtomicBool>,
+    failed: Arc<AtomicU8>,
     receiving: Arc<AtomicBool>,
 }
 impl FrameSink for Sink {
-    fn on_frames(&mut self, pcm: &[f32], _: CaptureTimestamp, _: FrameFlags) {
+    fn on_frames(&mut self, pcm: &[f32], _: CaptureTimestamp, flags: FrameFlags) {
+        if self.failed.load(Ordering::Acquire) != 0 {
+            return;
+        }
+        if flags.contains(FrameFlags::DISCONTINUITY) {
+            self.fail(3);
+            return;
+        }
+        if pcm.iter().any(|sample| !sample.is_finite()) {
+            self.fail(4);
+            return;
+        }
         if !pcm.is_empty() {
             self.receiving.store(true, Ordering::Release);
         }
         for sample in pcm {
             if self.producer.push(*sample).is_err() {
-                self.failed.store(true, Ordering::Release);
+                self.fail(1);
                 break;
             }
         }
     }
-    fn on_error(&mut self, _: TapError) {
-        self.failed.store(true, Ordering::Release);
+    fn on_error(&mut self, error: TapError) {
+        self.fail(
+            if matches!(
+                error,
+                TapError::DeviceInvalidated(_) | TapError::DeviceNotFound(_)
+            ) {
+                2
+            } else {
+                5
+            },
+        );
+    }
+}
+impl Sink {
+    fn fail(&self, reason: u8) {
+        // Preserve the first fault; subsequent or stale callbacks cannot heal it.
+        let _ = self
+            .failed
+            .compare_exchange(0, reason, Ordering::AcqRel, Ordering::Acquire);
+    }
+}
+fn audio_failure(failed: &AtomicU8) -> Option<&'static str> {
+    match failed.load(Ordering::Acquire) {
+        0 => None,
+        1 => Some("Audio buffer overflow; no text inserted"),
+        2 => Some("Microphone disconnected; no text inserted"),
+        3 => Some("Microphone audio was interrupted; no text inserted"),
+        4 => Some("Microphone delivered invalid samples; no text inserted"),
+        _ => Some("Microphone failure; no text inserted"),
     }
 }
 struct Guard(Box<dyn AudioTap>);
@@ -240,15 +278,21 @@ pub async fn run_provider_with_startup_and_progress(
         }
         CaptureProvider::Deepgram { .. } => {}
     }
-    let failed = Arc::new(AtomicBool::new(false));
+    let failed = Arc::new(AtomicU8::new(0));
     let (producer, mut consumer) = RingBuffer::new(192_000);
     let sink = Box::new(Sink {
         producer,
         failed: failed.clone(),
         receiving: receiving.clone(),
     });
-    let (mut guard, format) =
-        start_within_deadline(tap, sink, &control, &startup, &receiving).await?;
+    let started_capture = start_within_deadline(tap, sink, &control, &startup, &receiving).await;
+    if control.load(Ordering::Acquire) == 2 {
+        return Err("Cancelled".into());
+    }
+    if let Some(error) = audio_failure(&failed) {
+        return Err(error.into());
+    }
+    let (mut guard, format) = started_capture?;
     let mut converter = CaptureConverter::new(format)?;
     // Ten seconds of 10 ms chunks covers the bounded eight-second TLS handshake.
     // The previous 320 ms queue overflowed before a live connection could open.
@@ -302,14 +346,21 @@ pub async fn run_provider_with_startup_and_progress(
     let mut tick = tokio::time::interval(Duration::from_millis(10));
     loop {
         tokio::select! {
-             result=&mut network=>return result,
+             result=&mut network=>{
+                 if control.load(Ordering::Acquire)==2 {return Err("Cancelled".into());}
+                 if let Some(error)=audio_failure(&failed) {return Err(error.into());}
+                 if result.is_ok() && !finishing {return Err("Transcription ended before microphone stopped; no text inserted".into());}
+                 return result;
+             },
              _=tick.tick()=>{
               if control.load(Ordering::Acquire)==2 {return Err("Cancelled".into());}
         if finish_started.is_some_and(|at:std::time::Instant|at.elapsed()>Duration::from_secs(if local { 185 } else { 10 })){return Err("Finalization timed out; no text inserted".into());}
-              if failed.load(Ordering::Acquire){return Err("Audio buffer overflow or microphone failure; no text inserted".into());}
+              if let Some(error)=audio_failure(&failed){return Err(error.into());}
               if !finishing {
                if control.load(Ordering::Acquire)==1 || started.elapsed()>=Duration::from_secs(120) {
-                guard.0.stop().map_err(|_|"Microphone stop failed")?;finishing=true;finish_started=Some(std::time::Instant::now());
+                guard.0.stop().map_err(|_|"Microphone stop failed")?;
+                if let Some(error)=audio_failure(&failed){return Err(error.into());}
+                finishing=true;finish_started=Some(std::time::Instant::now());
                }
                let mut captured=Vec::with_capacity(consumer.slots());
                while let Ok(sample)=consumer.pop(){captured.push(sample);}
