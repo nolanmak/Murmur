@@ -429,6 +429,7 @@ enum CaptureFault {
     Silent,
     Discontinuity,
     NonFinite,
+    FormatChanged,
     DuringStop,
 }
 struct FaultTap {
@@ -449,6 +450,9 @@ impl AudioTap for FaultTap {
         true
     }
     fn start(&mut self, mut sink: Box<dyn FrameSink>) -> Result<StreamFormat, TapError> {
+        if matches!(self.fault, CaptureFault::FormatChanged) {
+            sink.on_error(TapError::StreamFormatChanged);
+        }
         let mut pcm = vec![0.25; 4800];
         if matches!(self.fault, CaptureFault::Silent) {
             pcm.fill(0.0);
@@ -546,6 +550,16 @@ async fn capture_fault_nonfinite_samples_rejects_partial_speech() {
             .contains("invalid samples"),
         "invalid samples must not become a successful transcript"
     );
+}
+
+#[tokio::test]
+async fn capture_format_change_requires_a_new_dictation_instead_of_partial_text() {
+    let error = fault_capture(CaptureFault::FormatChanged)
+        .await
+        .unwrap_err();
+    assert!(error.contains("format changed"), "{error}");
+    assert!(error.contains("new dictation"), "{error}");
+    assert!(error.contains("no text inserted"), "{error}");
 }
 #[tokio::test]
 async fn capture_fault_during_stop_wins_over_fast_provider_completion() {

@@ -38,16 +38,11 @@ impl FrameSink for Sink {
         }
     }
     fn on_error(&mut self, error: TapError) {
-        self.fail(
-            if matches!(
-                error,
-                TapError::DeviceInvalidated(_) | TapError::DeviceNotFound(_)
-            ) {
-                2
-            } else {
-                5
-            },
-        );
+        self.fail(match error {
+            TapError::DeviceInvalidated(_) | TapError::DeviceNotFound(_) => 2,
+            TapError::StreamFormatChanged => 6,
+            _ => 5,
+        });
     }
 }
 impl Sink {
@@ -65,6 +60,7 @@ fn audio_failure(failed: &AtomicU8) -> Option<&'static str> {
         2 => Some("Microphone disconnected; no text inserted"),
         3 => Some("Microphone audio was interrupted; no text inserted"),
         4 => Some("Microphone delivered invalid samples; no text inserted"),
+        6 => Some("Microphone format changed; start a new dictation; no text inserted"),
         _ => Some("Microphone failure; no text inserted"),
     }
 }
