@@ -571,7 +571,7 @@ pub async fn run_provider_with_vocabulary(
 )]
 pub async fn run_provider_with_preparation(
     input: InputPreparation,
-    provider: CaptureProvider,
+    mut provider: CaptureProvider,
     control: Arc<AtomicU8>,
     receiving: Arc<AtomicBool>,
     progress: crate::fallback::Progress,
@@ -586,15 +586,39 @@ pub async fn run_provider_with_preparation(
     if let Some(error) = device_failure(&changes) {
         return Err(error.into());
     }
-    match &provider {
+    if !matches!(&provider, CaptureProvider::Local(_)) {
+        crate::language::validate_deepgram(&profile.language)?;
+    }
+    match &mut provider {
         CaptureProvider::Local(endpoint)
         | CaptureProvider::DeepgramThenLocal {
             local: endpoint, ..
         } => {
-            crate::local_stt::check_ready(endpoint, Duration::from_secs(2)).await?;
-            if control.load(Ordering::Acquire) != 0 {
-                return Err("Dictation ended before local engine was ready; try again".into());
-            }
+            let prepared = {
+                let readiness =
+                    crate::local_stt::prepare(endpoint, &profile.language, Duration::from_secs(2));
+                tokio::pin!(readiness);
+                let mut tick = tokio::time::interval(Duration::from_millis(5));
+                loop {
+                    if control.load(Ordering::Acquire) == 2 {
+                        return Err("Cancelled".into());
+                    }
+                    if control.load(Ordering::Acquire) != 0 {
+                        return Err(
+                            "Dictation ended before local engine was ready; try again".into()
+                        );
+                    }
+                    if let Some(error) = device_failure(&changes) {
+                        return Err(error.into());
+                    }
+                    tokio::select! {
+                        biased;
+                        _ = tick.tick() => {}
+                        result = &mut readiness => break result?,
+                    }
+                }
+            };
+            *endpoint = prepared;
         }
         CaptureProvider::Deepgram { .. } => {}
     }
@@ -635,13 +659,13 @@ pub async fn run_provider_with_preparation(
         match provider {
             CaptureProvider::Deepgram { key, endpoint } => {
                 progress.set(crate::fallback::Stage::Cloud);
-                crate::streaming::transcribe_with_vocabulary(
+                crate::streaming::transcribe_with_profile(
                     key,
                     rx,
                     endpoint,
                     Duration::from_secs(8),
                     Duration::from_secs(8),
-                    &profile.recognition_hints,
+                    &profile,
                 )
                 .await
                 .map_err(|e| e.message)
@@ -651,7 +675,7 @@ pub async fn run_provider_with_preparation(
                 endpoint,
                 local,
             } => {
-                crate::fallback::transcribe_with_vocabulary(
+                crate::fallback::transcribe_with_profile(
                     key,
                     rx,
                     endpoint,
@@ -659,7 +683,7 @@ pub async fn run_provider_with_preparation(
                     control.clone(),
                     crate::fallback::Deadlines::default(),
                     progress.clone(),
-                    &profile.recognition_hints,
+                    &profile,
                 )
                 .await
             }

@@ -1,7 +1,7 @@
 # Shared FlyOnTheWall components
 
 Source: https://github.com/nolanmak/FlyOnTheWall
-Pinned revision: `08040781443f491b48a8804a8a8e3f4177848d35`
+Pinned revision: `3aa2efa790b7970e3c3ae4cb61cfd9305a8f6fb5`
 License: Apache-2.0; root LICENSE and NOTICE retained.
 
 Murmur resolves four crates from that immutable Git revision, with matching
@@ -86,3 +86,12 @@ uses this evidence to keep a known-stopped microphone distinct from unresolved
 capture, hold ownership through cleanup, and allow a new attempt only after
 resource release. Neither an error nor a cleanup timeout permits partial insertion.
 The native/device acceptance gates in `docs/microphone-startup.md` remain open.
+
+
+## Partial native setup ownership upgrade (2026-10-24)
+
+The pinned producer revision also includes FlyOnTheWall #147: process-tap and
+aggregate acquisition enter the explicit owner before property/callback setup,
+and failed release propagates typed cleanup evidence. The public shared seam is
+unchanged; consumer conformance and bounded microphone ownership remain covered
+by this repository's tests.

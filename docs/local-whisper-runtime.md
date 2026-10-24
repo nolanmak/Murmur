@@ -27,7 +27,7 @@ Setup requires internet. Start, status, stop and transcription can run offline a
 
 Pinned model source: [ggerganov/whisper.cpp revision 5359861c739e955e79d9a303bcbc70fb988958b1](https://huggingface.co/ggerganov/whisper.cpp/tree/5359861c739e955e79d9a303bcbc70fb988958b1), file `ggml-base.en.bin`. SHA and size (147,964,211 bytes) verified from the [Hugging Face model API](https://huggingface.co/api/models/ggerganov/whisper.cpp/revision/5359861c739e955e79d9a303bcbc70fb988958b1?blobs=true). Runtime source: [whisper.cpp v1.9.1](https://github.com/ggml-org/whisper.cpp/tree/v1.9.1).
 
-Tests: `python3 -m unittest discover -s scripts -p 'test_local_whisper.py'` (13 passed locally). Initial four acceptance tests failed before implementation; the current suite passes. Coverage includes verified imports, corrupt/interrupted replacement preservation, corrupted model startup, missing model, authenticated idempotent lifecycle, paths with spaces, external port collision, stale records, exit-zero/unready engines, readiness timeout cleanup, rejected redirects, and bounded secret handoff. The lifecycle test reads the actual process list and verifies that the secret is absent while authenticated status and stop still work. Real installed 1.9.1/base.en import → start → ready → stop was also exercised. Audio accuracy and end-to-end app insertion/submission require separate app QA.
+Tests: `python3 -m unittest discover -s scripts -p 'test_local_whisper.py'` (19 passed locally). Initial four acceptance tests failed before implementation; the current suite passes. Coverage includes verified imports, corrupt/interrupted replacement preservation, corrupted model startup, missing model, authenticated idempotent lifecycle, paths with spaces, external port collision, stale records, exit-zero/unready engines, readiness timeout cleanup, rejected redirects, and bounded secret handoff. The lifecycle test reads the actual process list and verifies that the secret is absent while authenticated status and stop still work. Real installed 1.9.1/base.en import → start → ready → stop was also exercised. Audio accuracy and end-to-end app insertion/submission require separate app QA.
 
 CI timing: the successful-engine fixture allows a 30-second readiness deadline and 60 seconds for each CLI subprocess, accommodating cold macOS runner startup. The deliberate unready-engine case retains its 0.5-second readiness deadline; readiness, process ownership, port collision, and timeout cleanup assertions are unchanged. The process-list token assertion failed before the private-pipe fix and passed afterward.
 
@@ -47,8 +47,10 @@ following [whisper.cpp v1.9.1 model loading and vocabulary metadata](https://git
 This is file metadata, **not an attestation of the model loaded by the HTTP
 server**. It must not authorize a language choice for an arbitrary endpoint.
 The upstream server health response has no language capabilities and its load
-route can replace the running model. A runtime-bound capability contract and
-pre-capture language selection remain open; do not infer either from filenames.
+route can replace the running model. The managed gateway now enforces a [language capability contract](local-language-contract.md)
+against the owned, loaded model and advertises that separate live binding through
+health/status. The client refuses unverifiable non-English selections from plain
+external servers. Selected-file metadata must not be substituted for live health.
 
 Behavioral RED: the checksum-valid non-model import test returned success and
 replaced the selection; status lacked model metadata. GREEN: 13 lifecycle tests
@@ -59,3 +61,31 @@ secret-handoff, redirect and integrity tests remain passing. The parser also
 read the installed small.en header as English-only; no inference or microphone
 was used for that check. Synthetic headers in lifecycle fixtures do not prove
 that real model tensors load.
+
+## Managed inference gateway
+
+The selected public port now serves the capability-aware gateway; whisper.cpp
+runs behind it on an internal loopback port/path. Keep both `local-whisper.py`
+and `whisper_gateway.py` together. Requests must preflight `/health` and send the
+returned instance/model headers; current Murmur does this automatically. The
+synthetic `local_transcribe` example also preflights and accepts an optional
+language argument. Direct curl/older clients must follow the documented contract.
+The managed port rejects model loading and unsupported parameters. Restarting
+creates a new instance binding, so an utterance checked against an older runtime
+cannot be silently submitted to its replacement.
+
+The pinned base.en setup remains English-only. To use another language, stop,
+explicitly import a compatible multilingual model with its known checksum,
+restart, and run `murmur language fr` (or another advertised code). Inference
+stays local. The language table is tied to the tested whisper.cpp 1.9.1 runtime;
+compatibility with unrelated/custom runtime implementations is not guaranteed.
+
+Behavioral RED: the managed-runtime HTTP fixture returned readiness but no
+capabilities. GREEN: 19 lifecycle tests pass, including successful bound French
+inference, 99-language metadata, English-only rejection, stale instance/model
+refusal, restart changes, public `/load` refusal, invalid/duplicate fields,
+oversized requests, concurrent inference refusal, Stop during blocked inference,
+and retirement after timed-out/oversized/malformed backend responses. Existing
+checksum/import, ownership, private-token, redirect and startup cleanup tests
+remain passing. Real-engine English/French smoke evidence and remaining native
+acceptance are recorded in the capability contract document.

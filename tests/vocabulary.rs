@@ -2,6 +2,7 @@ use murmur::vocabulary::{Profile, Snippet};
 fn profile() -> Profile {
     Profile {
         version: 1,
+        language: "en".into(),
         recognition_hints: vec!["C++".into(), "Zoë & Sons".into()],
         snippets: vec![
             Snippet {
@@ -152,4 +153,38 @@ fn cli_example_and_validation_use_only_the_requested_fixture_file() {
         .unwrap();
     assert!(!refused.status.success());
     assert!(!String::from_utf8_lossy(&refused.stderr).contains("private-fixture-value"));
+}
+
+#[test]
+fn language_roundtrips_with_profile_and_legacy_profiles_default_to_english() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("vocabulary.json");
+    std::fs::write(
+        &path,
+        r#"{"version":1,"recognition_hints":[],"snippets":[]}"#,
+    )
+    .unwrap();
+    let mut selected = Profile::load(&path).unwrap();
+    assert_eq!(selected.language, "en");
+    selected.language = "fr-CA".into();
+    selected.save(&path).unwrap();
+    assert_eq!(Profile::load(&path).unwrap(), selected);
+    let bytes = std::fs::read(&path).unwrap();
+    for invalid in [
+        "",
+        "auto",
+        "multi",
+        "fr&translate=true",
+        "en\n",
+        "EN",
+        "en-",
+        "en-🐦",
+    ] {
+        selected.language = invalid.into();
+        assert!(selected.save(&path).is_err(), "{invalid}");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+    assert!(murmur::language::validate_deepgram("es").is_ok());
+    assert!(murmur::language::validate_deepgram("fr-CA").is_ok());
+    assert!(murmur::language::validate_deepgram("zz").is_err());
 }

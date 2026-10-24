@@ -45,14 +45,40 @@ pub async fn transcribe_typed(
 /// Send validated recognition hints only; snippets never enter provider prompts.
 pub async fn transcribe_with_vocabulary(
     key: String,
-    mut audio: mpsc::Receiver<Vec<i16>>,
+    audio: mpsc::Receiver<Vec<i16>>,
     endpoint: DeepgramEndpoint,
     connect_deadline: Duration,
     final_deadline: Duration,
     hints: &[String],
 ) -> Result<String, SttError> {
-    crate::vocabulary::validate_hints(hints)
-        .map_err(|_| failure(SttErrorClass::BadRequest, "Invalid recognition hints"))?;
+    let profile = crate::vocabulary::Profile {
+        recognition_hints: hints.to_vec(),
+        ..Default::default()
+    };
+    transcribe_with_profile(
+        key,
+        audio,
+        endpoint,
+        connect_deadline,
+        final_deadline,
+        &profile,
+    )
+    .await
+}
+
+pub async fn transcribe_with_profile(
+    key: String,
+    mut audio: mpsc::Receiver<Vec<i16>>,
+    endpoint: DeepgramEndpoint,
+    connect_deadline: Duration,
+    final_deadline: Duration,
+    profile: &crate::vocabulary::Profile,
+) -> Result<String, SttError> {
+    profile
+        .validate()
+        .map_err(|e| failure(SttErrorClass::BadRequest, &e))?;
+    crate::language::validate_deepgram(&profile.language)
+        .map_err(|e| failure(SttErrorClass::BadRequest, &e))?;
     if !endpoint.is_secure() && endpoint.host != "127.0.0.1" {
         return Err(failure(
             SttErrorClass::BadRequest,
@@ -61,7 +87,8 @@ pub async fn transcribe_with_vocabulary(
     }
     let params = DeepgramStreamParams::spec()
         .with_diarize(false)
-        .with_keyterms(hints.iter().cloned());
+        .with_keyterms(profile.recognition_hints.iter().cloned())
+        .with_language(&profile.language);
     let mut request = endpoint
         .url_with(&params.to_query())
         .into_client_request()

@@ -1,8 +1,8 @@
-# Personal vocabulary and snippets (#9)
+# Personal vocabulary, language and snippets (#9)
 
 Murmur reads `~/Library/Application Support/Murmur/vocabulary.json` once before
 each utterance, before credentials or microphone startup. Changes apply to the
-next utterance. Missing files mean an empty profile; malformed files refuse the
+next utterance. Missing files mean an empty English profile; malformed files refuse the
 attempt instead of silently losing settings. The native completion/generation,
 focus and cancellation checks still control insertion.
 
@@ -19,11 +19,12 @@ These commands do not capture audio. Example/export write the named file; import
 replaces the app's profile atomically only after complete validation. The schema
 has no credential/provider-endpoint fields. It can contain personal vocabulary
 and snippet text, so handle exported profiles accordingly. `doctor` reports
-counts and capability limitations without printing profile contents.
+counts, the selected language and capability limitations without printing hints or snippets.
 
 ```json
 {
   "version": 1,
+  "language": "en",
   "recognition_hints": ["Project Acorn", "C++", "Zoë & Sons"],
   "snippets": [
     {"name": "sign off", "text": "Thanks,\nExample team"}
@@ -76,10 +77,51 @@ cargo test --locked --test vocabulary --test streaming --test fallback --test ca
 
 All test audio/text and credentials are synthetic.
 
-This is partial delivery of #9. Explicit persisted language selection and
-runtime/model language validation remain open. Existing provider defaults are
-unchanged; the profile deliberately has no language setting to silently ignore.
+This is partial delivery of #9. Explicit language selection and client-side
+preflight/binding and the managed language adapter are implemented below.
+Language/vocabulary editing UI and real speech acceptance remain open.
 Real-model term-recall comparisons (#118), native dictation/insertion checks and
 full vocabulary editing UI remain unverified. Do not claim recognition-quality
 improvement from transport tests. Optional AI cleanup (#8) is separate and has
 not been enabled by this change.
+
+## Explicit language selection
+
+`murmur language es` persists Spanish in the same version-1 profile. It applies
+to the next utterance without restarting the app. Language also survives profile
+import/export. Older profiles without the field default to `en`. Use canonical
+codes such as `en`, `es`, `fr-CA`; malformed tags fail without replacing settings.
+Automatic detection and code-switching are not implied by this setting.
+
+Before starting the microphone, cloud modes check the selected code against the
+[Nova-3 monolingual language table](https://developers.deepgram.com/docs/models-languages-overview#nova-3)
+(verified 2026-10-24). Both cloud attempts receive the same explicit `language`
+parameter and recognition hints from the utterance snapshot. No alternate cloud
+model or language is silently substituted.
+
+Local modes check the engine's language/model capabilities before recording.
+The managed helper reports the loaded model's languages and enforces the
+[capability contract](local-language-contract.md). Its default base.en model
+supports English only; explicitly import a multilingual GGML model while stopped
+and restart the helper before selecting another supported language. No model is
+downloaded during capture. Plain external whisper.cpp servers report readiness
+only, so non-English requests to those endpoints are refused before capture,
+even if the filename suggests a multilingual model.
+
+For a capability-aware adapter, the prepared endpoint carries the selected
+language, model SHA and serving instance ID through capture and fallback.
+Inference sends explicit language, translation=false and detection=false.
+Missing/different response identities refuse insertion. Local recognition hints
+remain unsupported; they are omitted with the existing visible notice.
+
+Language RED/GREEN: the capture fixture selected Spanish but the actual cloud
+handshake omitted language; it now sends Spanish while an on-disk edit to French
+only affects the next utterance. Tests cover language/profile roundtrip, legacy
+English defaults, invalid-write preservation, identical French on both cloud
+attempts and local fallback, and refusal before microphone start for unknown
+cloud codes and unverifiable local/fallback language. Loopback fixtures verify
+bounded capability parsing, unsupported/malformed capabilities, explicit local
+wire settings, and rejection of changed/missing runtime/model identities. These
+are transport/lifecycle tests. The managed adapter additionally passed real-engine
+synthetic English/French smoke checks; human multilingual accuracy remains a
+separate evaluation.

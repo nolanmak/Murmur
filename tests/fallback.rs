@@ -504,11 +504,12 @@ async fn local_fallback_reports_unsupported_hints_without_sending_them_to_the_lo
 
 #[tokio::test]
 #[allow(clippy::result_large_err, reason = "tungstenite callback error type")]
-async fn cloud_retry_reuses_the_same_recognition_hints() {
+async fn cloud_retry_reuses_the_same_language_and_recognition_hints() {
     use tokio_tungstenite::{
         accept_hdr_async,
         tungstenite::handshake::server::{Request, Response},
     };
+    let (local, local_server) = prepared_french_server(false).await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = fotw_stt::DeepgramEndpoint::loopback(listener.local_addr().unwrap().port());
     let server = tokio::spawn(async move {
@@ -516,6 +517,10 @@ async fn cloud_retry_reuses_the_same_recognition_hints() {
             let (socket, _) = listener.accept().await.unwrap();
             let websocket = accept_hdr_async(socket, |req: &Request, res: Response| {
                 let url = reqwest::Url::parse(&format!("http://localhost{}", req.uri())).unwrap();
+                assert!(
+                    url.query_pairs()
+                        .any(|(key, value)| key == "language" && value == "fr")
+                );
                 assert_eq!(
                     url.query_pairs()
                         .filter(|(k, _)| k == "keyterm")
@@ -554,11 +559,11 @@ async fn cloud_retry_reuses_the_same_recognition_hints() {
     let (tx, rx) = mpsc::channel(1);
     tx.send(vec![1000; 1600]).await.unwrap();
     drop(tx);
-    let result = fallback::transcribe_with_vocabulary(
+    let result = fallback::transcribe_with_profile(
         "fixture".into(),
         rx,
         endpoint,
-        LocalEndpoint::new("http://127.0.0.1:1").unwrap(),
+        local,
         Arc::new(AtomicU8::new(1)),
         Deadlines {
             connect: Duration::from_millis(500),
@@ -566,13 +571,110 @@ async fn cloud_retry_reuses_the_same_recognition_hints() {
             local: Duration::from_secs(1),
         },
         fallback::Progress::default(),
-        &["C++".into(), "Project Acorn".into()],
+        &murmur::vocabulary::Profile {
+            language: "fr".into(),
+            recognition_hints: vec!["C++".into(), "Project Acorn".into()],
+            ..Default::default()
+        },
     )
     .await
     .unwrap();
     assert_eq!(result, "Cloud fixture.");
+    assert!(local_server.await.unwrap().is_empty());
     tokio::time::timeout(Duration::from_secs(3), server)
         .await
         .unwrap()
         .unwrap();
+}
+
+async fn prepared_french_server(
+    inference: bool,
+) -> (LocalEndpoint, tokio::task::JoinHandle<Vec<u8>>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint =
+        LocalEndpoint::new(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0; 4096];
+        let n = socket.read(&mut request).await.unwrap();
+        assert!(request[..n].starts_with(b"GET /health "));
+        let body = serde_json::json!({"status":"ok", "murmur_capabilities": {
+            "protocol_version":1, "instance_id":"a".repeat(64), "model_sha256":"b".repeat(64), "languages":["fr"]
+        }}).to_string();
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        drop(socket);
+        if !inference {
+            return Vec::new();
+        }
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut bytes = Vec::new();
+        loop {
+            let mut chunk = [0; 8192];
+            let n = socket.read(&mut chunk).await.unwrap();
+            assert!(n > 0);
+            bytes.extend_from_slice(&chunk[..n]);
+            if let Some(end) = bytes.windows(4).position(|s| s == b"\r\n\r\n") {
+                let header = String::from_utf8_lossy(&bytes[..end]).to_lowercase();
+                let len = header
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length: ")?.parse::<usize>().ok())
+                    .unwrap();
+                if bytes.len() >= end + 4 + len {
+                    break;
+                }
+            }
+        }
+        let body = r#"{"text":"Bonjour fixture."}"#;
+        socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\nX-Murmur-Instance: {}\r\nX-Murmur-Model: {}\r\n\r\n{body}", body.len(), "a".repeat(64), "b".repeat(64)).as_bytes()).await.unwrap();
+        bytes
+    });
+    let endpoint = murmur::local_stt::prepare(&endpoint, "fr", Duration::from_secs(1))
+        .await
+        .unwrap();
+    (endpoint, server)
+}
+
+#[tokio::test]
+async fn local_fallback_keeps_selected_language_and_runtime_binding_without_cloud_hints() {
+    let (local, server) = prepared_french_server(true).await;
+    let (tx, rx) = mpsc::channel(1);
+    tx.send(vec![1234; 1600]).await.unwrap();
+    drop(tx);
+    let profile = murmur::vocabulary::Profile {
+        language: "fr".into(),
+        recognition_hints: vec!["Private fixture hint".into()],
+        ..Default::default()
+    };
+    let output = fallback::transcribe_with_profile(
+        "fixture".into(),
+        rx,
+        fotw_stt::DeepgramEndpoint::loopback(1),
+        local,
+        Arc::new(AtomicU8::new(1)),
+        deadlines(),
+        fallback::Progress::default(),
+        &profile,
+    )
+    .await
+    .unwrap();
+    assert_eq!(output, "Bonjour fixture.");
+    let bytes = server.await.unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("name=\"language\"\r\n\r\nfr\r\n"));
+    assert!(text.contains(&format!("x-murmur-instance: {}", "a".repeat(64))));
+    assert!(!text.contains("Private fixture hint"));
+    assert!(
+        bytes
+            .windows(4)
+            .any(|value| value == [0xd2, 0x04, 0xd2, 0x04])
+    );
 }

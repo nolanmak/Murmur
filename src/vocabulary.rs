@@ -16,15 +16,21 @@ pub struct Snippet {
 #[serde(deny_unknown_fields)]
 pub struct Profile {
     pub version: u32,
+    #[serde(default = "default_language")]
+    pub language: String,
     #[serde(default)]
     pub recognition_hints: Vec<String>,
     #[serde(default)]
     pub snippets: Vec<Snippet>,
 }
+fn default_language() -> String {
+    "en".into()
+}
 impl Default for Profile {
     fn default() -> Self {
         Self {
             version: 1,
+            language: default_language(),
             recognition_hints: Vec::new(),
             snippets: Vec::new(),
         }
@@ -35,6 +41,7 @@ impl Profile {
         if self.version != 1 {
             return Err("Unsupported vocabulary schema version".into());
         }
+        crate::language::validate_tag(&self.language)?;
         validate_hints(&self.recognition_hints)?;
         if self.snippets.len() > 128 {
             return Err("At most 128 snippets are supported".into());
