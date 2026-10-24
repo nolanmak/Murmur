@@ -1,7 +1,7 @@
 # Shared FlyOnTheWall components
 
 Source: https://github.com/nolanmak/FlyOnTheWall
-Pinned revision: `ba0ba109a2628dd8b70dfe6f26430f4e9909eee6`
+Pinned revision: `08040781443f491b48a8804a8a8e3f4177848d35`
 License: Apache-2.0; root LICENSE and NOTICE retained.
 
 Murmur resolves four crates from that immutable Git revision, with matching
