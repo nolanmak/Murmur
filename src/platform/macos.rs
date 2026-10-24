@@ -657,6 +657,7 @@ struct Shell {
     prompted_at: Instant,
     last: crate::transcript::Latest,
     started: Instant,
+    released: Instant,
     retry_at: Instant,
     smoke: bool,
     smoke_started: bool,
@@ -860,6 +861,7 @@ impl Shell {
                 crate::transcript::Latest::default()
             },
             started: Instant::now(),
+            released: Instant::now(),
             retry_at: Instant::now(),
             smoke: std::env::args().any(|a| a == "--smoke"),
             smoke_started: false,
@@ -1004,7 +1006,7 @@ impl Shell {
         let progress = self.speech_progress.clone();
         let speech = self.speech.clone();
         std::thread::spawn(move || {
-            let result = (|| {
+            let result = crate::core::contain_worker(|| {
                 let provider = speech.capture_provider(crate::config::load)?;
                 let platform = fotw_audio::platform::macos::MacOsPlatform::new();
                 let tap = platform
@@ -1015,7 +1017,7 @@ impl Shell {
                         tap, provider, control, receiving, progress, startup,
                     ),
                 )?
-            })();
+            });
             let _ = completed.send(Completion { generation, result });
         });
     }
@@ -1095,6 +1097,7 @@ impl Shell {
         }
     }
     fn finish(&mut self) {
+        self.released = Instant::now();
         self.control.store(1, Ordering::Release);
         self.status("Finishing… · Esc to cancel");
     }
@@ -1353,6 +1356,12 @@ impl Shell {
         {
             self.core.stop();
             self.finish();
+        }
+        if self.core.phase == Phase::Processing
+            && crate::core::processing_overdue(self.released.elapsed())
+        {
+            self.cancel();
+            self.show("Transcription did not finish; no text inserted");
         }
         while let Ok(done) = self.result.try_recv() {
             let Some(effect) = self.core.complete(done.generation, done.result) else {

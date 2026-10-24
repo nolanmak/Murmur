@@ -69,6 +69,16 @@ impl Dictation {
         id: u64,
         result: Result<String, String>,
     ) -> Option<CompletionEffect> {
+        // A worker can end before release (mic stall, connection failure). It
+        // will never report again, so ending the attempt here is the only way
+        // out; dropping it left Processing waiting forever after release.
+        if self.generation == id && self.phase == Phase::Recording {
+            self.finish();
+            return Some(CompletionEffect::Error(match result {
+                Err(error) => error,
+                Ok(_) => "Dictation ended before release; no text inserted".into(),
+            }));
+        }
         if !self.accepts(id) {
             return None;
         }
@@ -88,4 +98,16 @@ impl Dictation {
             false
         }
     }
+}
+/// UI-side limit on Processing after release. Every worker path has its own
+/// deadline (longest: 3 s cloud final + 180 s local inference); this only
+/// catches a worker that never reports back, so the pill cannot spin forever.
+pub const PROCESSING_BACKSTOP: std::time::Duration = std::time::Duration::from_secs(200);
+pub fn processing_overdue(since_release: std::time::Duration) -> bool {
+    since_release >= PROCESSING_BACKSTOP
+}
+/// Runs a dictation worker so a panic still yields a completion for the UI.
+pub fn contain_worker(worker: impl FnOnce() -> Result<String, String>) -> Result<String, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(worker))
+        .unwrap_or_else(|_| Err("Transcription crashed; no text inserted".into()))
 }
