@@ -15,6 +15,7 @@ import shutil
 import socket
 import socketserver
 import subprocess
+import struct
 import sys
 import tempfile
 import time
@@ -54,6 +55,38 @@ def digest(path):
     return h.hexdigest()
 
 
+def model_metadata(path):
+    """Inspect selected-file metadata, not a claim about an HTTP server's model.
+
+    whisper.cpp v1.9.1 src/whisper.cpp: whisper_model_load and whisper_vocab.
+    Only the fixed-size GGML header is read; the engine still validates weights.
+    Unknown vocabulary layouts fail closed rather than inventing capabilities.
+    """
+    with path.open("rb") as source:
+        header = source.read(48)
+    if len(header) != 48:
+        raise ValueError("truncated Whisper GGML model header")
+    (magic, vocab, audio_ctx, audio_state, audio_head, audio_layer, text_ctx,
+     text_state, text_head, text_layer, mels, ftype) = struct.unpack("<12i", header)
+    if magic != 0x67676D6C:
+        raise ValueError("unsupported model format; expected Whisper GGML")
+    if vocab not in (51864, 51865, 51866):
+        raise ValueError("unsupported Whisper vocabulary layout")
+    if (min(audio_ctx, audio_state, audio_head, audio_layer, text_ctx,
+            text_state, text_head, text_layer, mels) <= 0
+            or audio_state != text_state
+            or audio_state % audio_head != 0
+            or text_state % text_head != 0
+            or ftype < 0):
+        raise ValueError("invalid Whisper model dimensions")
+    return {
+        "format": "whisper-ggml",
+        "vocabulary_size": vocab,
+        "multilingual": vocab >= 51865,
+        "language_count": vocab - 51766 if vocab >= 51865 else 1,
+    }
+
+
 def install(state, source, expected):
     if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
         raise ValueError("sha256 must be 64 lowercase hexadecimal characters")
@@ -65,6 +98,7 @@ def install(state, source, expected):
             os.fsync(target.fileno())
         if digest(Path(name)) != expected:
             raise ValueError("model checksum mismatch; existing model preserved")
+        model_metadata(Path(name))
         models = state / "models"
         models.mkdir(exist_ok=True, mode=0o700)
         os.replace(name, models / (expected + ".bin"))
@@ -261,13 +295,21 @@ def main():
         if args.command == "status":
             result = control(record, "status")
             model = state / "model.bin"
+            metadata = None
             reason = read_json(state / "lifecycle.json").get("reason", "stopped")
             if not model.is_file():
                 reason = "missing_model"
             elif digest(model) != model.resolve().stem:
                 reason = "corrupt_model"
-            elif not shutil.which("whisper-server"):
-                reason = "missing_binary"
+            else:
+                try:
+                    metadata = model_metadata(model)
+                    metadata["sha256"] = model.resolve().stem
+                except ValueError:
+                    reason = "unsupported_model"
+                else:
+                    if not shutil.which("whisper-server"):
+                        reason = "missing_binary"
             public = {k: v for k, v in (result or {}).items() if k != "token"}
             public.update(
                 {
@@ -278,6 +320,7 @@ def main():
                     else reason,
                     "tested_runtime": "whisper.cpp 1.9.1",
                     "model": str(model),
+                    "selected_model_metadata": metadata,
                 }
             )
             emit(public)
@@ -319,6 +362,7 @@ def main():
                 raise ValueError(
                     "missing or corrupt model; run setup or import-model explicitly"
                 )
+            model_metadata(model)
             binary = shutil.which(args.binary)
             if not binary:
                 raise ValueError(
