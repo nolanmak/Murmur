@@ -34,6 +34,21 @@ jobs:
       - name: Test managed local Whisper lifecycle
         run: python3 -m unittest discover -s scripts -p 'test_local_whisper.py'
       - if: runner.os == 'macOS'
+        name: Test owned native vocabulary dialogs
+        run: |
+          cargo build --locked --example vocabulary_native_qa
+          python3 - <<'PY'
+          import os, subprocess
+          output = os.path.join(os.environ["RUNNER_TEMP"], "native-vocabulary-fixture")
+          subprocess.run(["target/debug/examples/vocabulary_native_qa", output], check=True, timeout=40)
+          PY
+      - if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-vocabulary-fixtures
+          path: ${{ runner.temp }}/native-vocabulary-fixture
+          retention-days: 14
+      - if: runner.os == 'macOS'
         name: Build installable Mac preview
         run: |
           ./scripts/build-app.sh

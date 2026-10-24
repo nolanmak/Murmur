@@ -5,3 +5,9 @@ pub mod macos_clipboard;
 
 #[cfg(target_os = "macos")]
 pub mod macos_local_clipboard;
+
+#[cfg(target_os = "macos")]
+pub mod macos_language;
+
+#[cfg(target_os = "macos")]
+pub mod macos_vocabulary;

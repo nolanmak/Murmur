@@ -23,3 +23,7 @@ pub mod speech;
 pub mod vocabulary;
 
 pub mod language;
+
+pub mod language_catalog;
+
+pub mod vocabulary_editor;

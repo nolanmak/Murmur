@@ -180,11 +180,11 @@ then `murmur vocabulary import vocabulary.json` to apply it to the next utteranc
 Recognition hints are sent to Deepgram; local Whisper explicitly reports that
 those hints are unavailable. Exact whole-utterance cues such as “insert snippet
 sign off” expand locally with either provider. See [the versioned schema,
-limits and import/export commands](docs/vocabulary.md). Editing UI and
+limits and import/export commands](docs/vocabulary.md). Vocabulary editing UI and
 real-model accuracy evaluation remain in progress.
 
-Explicit dictation language can be saved with `murmur language es` (English is
-`en`). It shares the per-utterance vocabulary snapshot and profile import/export.
+Choose **Language** in the menu bar, or save it with `murmur language es`
+(English is `en`). It shares the per-utterance vocabulary snapshot and profile import/export.
 Cloud support and local model capabilities are checked before recording. The
 managed runtime supports languages advertised by its loaded model. Default
 base.en is English-only; other languages require an explicitly imported

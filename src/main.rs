@@ -59,9 +59,7 @@ fn configure_language() -> Result<(), String> {
         return Err("Usage: murmur language CODE (for example en, es, fr-CA)".into());
     }
     let path = murmur::vocabulary::Profile::path()?;
-    let mut profile = murmur::vocabulary::Profile::load(&path)?;
-    profile.language = args[2].clone();
-    profile.save(&path)?;
+    murmur::language::save_choice(&path, &args[2])?;
     println!(
         "Saved language for the next utterance. Provider/model support is checked before capture."
     );
