@@ -394,9 +394,11 @@ pub async fn run_provider_with_events(
               if !finishing {
                if control.load(Ordering::Acquire)==1 || started.elapsed()>=Duration::from_secs(120) {
                 guard.0.stop().map_err(|_|"Microphone stop failed")?;
-                if !finishing && let Some(error)=device_failure(&changes) {return Err(error.into());}
-                 if let Some(error)=audio_failure(&failed){return Err(error.into());}
+                // Successful stop closes the capture epoch. Later route notifications
+                // cannot invalidate audio already collected, but a callback fault
+                // reported during stop must still reject this utterance.
                 finishing=true;finish_started=Some(std::time::Instant::now());
+                 if let Some(error)=audio_failure(&failed){return Err(error.into());}
                }
                let mut captured=Vec::with_capacity(consumer.slots());
                while let Ok(sample)=consumer.pop(){captured.push(sample);}

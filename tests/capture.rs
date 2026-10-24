@@ -432,6 +432,7 @@ enum CaptureFault {
     FormatChanged,
     DuringStop,
     RouteAfterStop,
+    RouteAtSuccessfulStop,
 }
 struct FaultTap {
     id: TapId,
@@ -484,6 +485,10 @@ impl AudioTap for FaultTap {
             && matches!(self.fault, CaptureFault::DuringStop)
         {
             sink.on_error(TapError::DeviceInvalidated(self.id.clone()));
+        }
+        if matches!(self.fault, CaptureFault::RouteAtSuccessfulStop) {
+            self.changes
+                .raise(fotw_audio::device_change::DeviceChangeKind::DefaultInput);
         }
         Ok(())
     }
@@ -641,6 +646,16 @@ async fn device_event_output_switch_does_not_cancel_microphone_dictation() {
         )
         .await
         .unwrap(),
+        "Fixture speech."
+    );
+}
+
+#[tokio::test]
+async fn device_event_at_successful_stop_does_not_discard_complete_speech() {
+    assert_eq!(
+        fault_capture(CaptureFault::RouteAtSuccessfulStop)
+            .await
+            .unwrap(),
         "Fixture speech."
     );
 }
