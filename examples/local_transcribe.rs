@@ -1,9 +1,9 @@
-//! Synthetic fixture QA: cargo run --example local_transcribe -- URL mono16k.wav
+//! Synthetic fixture QA: cargo run --example local_transcribe -- URL mono16k.wav [LANGUAGE]
 #[tokio::main]
 async fn main() -> Result<(), String> {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() != 3 {
-        return Err("Usage: local_transcribe http://127.0.0.1:17863 mono16k.wav".into());
+    if !(3..=4).contains(&args.len()) {
+        return Err("Usage: local_transcribe http://127.0.0.1:17863 mono16k.wav [LANGUAGE]".into());
     }
     let wav = std::fs::read(&args[2]).map_err(|e| e.to_string())?;
     if wav.len() < 44 || &wav[..4] != b"RIFF" || &wav[8..12] != b"WAVE" {
@@ -40,8 +40,14 @@ async fn main() -> Result<(), String> {
     if !format {
         return Err("Expected mono 16kHz signed PCM16".into());
     }
-    let text = murmur::local_stt::transcribe(
+    let endpoint = murmur::local_stt::prepare(
         &murmur::local_stt::LocalEndpoint::new(&args[1])?,
+        args.get(3).map(String::as_str).unwrap_or("en"),
+        std::time::Duration::from_secs(2),
+    )
+    .await?;
+    let text = murmur::local_stt::transcribe(
+        &endpoint,
         &pcm.ok_or("Missing audio data")?,
         std::sync::Arc::new(std::sync::atomic::AtomicU8::new(1)),
         std::time::Duration::from_secs(180),

@@ -3,12 +3,13 @@ fn main() {
     let result = match command.as_str() {
         "--help" | "help" => {
             println!(
-                "Murmur — macOS hold-Control dictation\n\nrun     Launch the menu-bar app (use the .app bundle)\ndoctor  Report provider configuration without printing secrets\nspeech  Select local [URL], deepgram or fallback [URL] transcription\nvocabulary  Import/export/validate a versioned vocabulary profile\n\nHold Control to dictate; release to insert; Esc cancels.\nRun scripts/build-app.sh and launch the resulting .app for capture."
+                "Murmur — macOS hold-Control dictation\n\nrun     Launch the menu-bar app (use the .app bundle)\ndoctor  Report provider configuration without printing secrets\nspeech  Select local [URL], deepgram or fallback [URL] transcription\nlanguage CODE  Select an explicit transcription language (default en)\nvocabulary  Import/export/validate a versioned vocabulary profile\n\nHold Control to dictate; release to insert; Esc cancels.\nRun scripts/build-app.sh and launch the resulting .app for capture."
             );
             Ok(())
         }
         "speech" => configure_speech(),
         "vocabulary" => configure_vocabulary(),
+        "language" => configure_language(),
         "doctor" => doctor(),
         #[cfg(target_os = "macos")]
         "review-preview" => murmur::platform::macos::preview_remote_review(),
@@ -52,6 +53,21 @@ fn configure_speech() -> Result<(), String> {
     println!("Saved transcription provider; restart running app to reload CLI changes.");
     Ok(())
 }
+fn configure_language() -> Result<(), String> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() != 3 {
+        return Err("Usage: murmur language CODE (for example en, es, fr-CA)".into());
+    }
+    let path = murmur::vocabulary::Profile::path()?;
+    let mut profile = murmur::vocabulary::Profile::load(&path)?;
+    profile.language = args[2].clone();
+    profile.save(&path)?;
+    println!(
+        "Saved language for the next utterance. Provider/model support is checked before capture."
+    );
+    Ok(())
+}
+
 fn configure_vocabulary() -> Result<(), String> {
     use murmur::vocabulary::{Profile, Snippet};
     let args: Vec<String> = std::env::args().collect();
@@ -67,6 +83,7 @@ fn configure_vocabulary() -> Result<(), String> {
         }
         "example" => Profile {
             version: 1,
+            language: "en".into(),
             recognition_hints: vec!["Project Acorn".into()],
             snippets: vec![Snippet {
                 name: "sign off".into(),
@@ -90,6 +107,10 @@ fn doctor() -> Result<(), String> {
         vocabulary.snippets.len()
     );
     let settings = murmur::speech::Settings::load(&murmur::speech::Settings::path()?)?;
+    println!(
+        "Selected language: {} (checked against provider/model before capture).",
+        vocabulary.language
+    );
     match settings.provider {
         murmur::speech::Provider::Deepgram => murmur::config::load().map(|c| {
             println!(
