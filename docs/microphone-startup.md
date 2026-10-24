@@ -14,8 +14,10 @@ are cleaned up. The lease stays with the owned capture guard through Stop and
 watcher destruction, so slow cleanup cannot multiply native operations either.
 A preparation that returns after cancellation/release/timeout is closed without
 starting late capture. This cannot forcibly interrupt an OS call. A permanently blocked OS call may require reconnecting the device or
-reopening Murmur. A returned tap travels inside an RAII guard, so abandoning
-the handoff also closes it. No late transcript is inserted by startup recovery.
+reopening Murmur. The native owner retains the tap and watcher throughout
+capture and teardown. The async handle contains only channels: abandoning it
+requests cleanup without running native destructors on its executor. No late
+transcript is inserted by startup recovery.
 
 A fresh preparation regression observed Escape waiting 2.01 seconds for an
 injected blocked open before the coordinator was reached. It now returns promptly.
@@ -98,9 +100,86 @@ background readiness recovery and physical device QA remain unfinished under
 
 The route change extraction retains the five-argument startup API, independent
 progress/startup state, panic containment and stereo frame preservation already
-on main. Device-watcher creation, default-device selection/open and tap start
-now run inside the bounded preparation worker. OS calls remain synchronous on
-that worker. Native teardown still needs a separate deadline/cancellable handoff;
-this change retains the lease through cleanup but does not make Stop interruptible.
+on main. Device-watcher creation, default-device selection/open, tap start,
+Stop and resource destruction all run on the same native owner. Native calls
+remain synchronous there; the async handoff has deadlines and cancellation.
 Native sleep/format event publication, readiness recovery and physical acceptance
 remain required before closing #61.
+
+
+## Bounded teardown and persistent ownership state
+
+Key release requests cleanup from the existing native owner and waits at most
+four seconds for Stop, tap destruction and watcher removal. Escape waits only a
+20 ms grace period for quick cleanup, then returns Cancelled while the owner
+keeps its resources and lease. Aborting the async task also disconnects that
+handle and requests cleanup. The active handle itself performs no native
+destruction on the async executor. The native shell uses deferred preparation,
+so it creates no native objects before ownership moves to that worker. Existing
+prebuilt-tap entry points remain compatible; work a caller performs before
+invoking those APIs cannot be bounded by the coordinator.
+A blocked native call is not forcibly interrupted and cannot multiply into new
+microphone workers through repeated activations.
+
+Only successful Stop followed by resource destruction releases the lease and
+returns the operation to Idle. Stop failure leaves capture ownership unconfirmed,
+refuses another input and asks the user to reopen Murmur. If Stop succeeded but
+watcher cleanup failed, that positive Stop evidence remains distinct: audio is
+stopped, cleanup is failed, and another input is still refused until reopening.
+This is deliberate: an unconfirmed stop is not permission to claim recording
+ended. A timeout whose native cleanup later succeeds clears automatically, but
+recording resumes only on a new deliberate activation. A fresh fixture dictation
+succeeds after both Stop and watcher-cleanup timeouts resolve.
+
+The native menu and persistent pill distinguish:
+
+| State | Pill / behavior |
+| --- | --- |
+| Cancelled/timed-out Stop remains pending | Microphone may still be recording; further input preparation is blocked |
+| Stop succeeded, watcher removal remains pending | Microphone stopped — finishing cleanup |
+| Stop could not be confirmed | Mic may still be recording · reopen Murmur |
+| Stop confirmed, cleanup failed | Mic stopped — cleanup failed; reopen Murmur |
+| Cleanup confirmed | Normal ready/processing indicator resumes |
+
+These messages outlive normal notice expiry and take priority over transient
+results and permission messages. New input, prewarming and permission onboarding
+do not bypass unresolved native ownership. A successful Stop is recorded before
+watcher destruction, so a subsequent input-route event cannot discard audio that
+was already stopped. Callback faults during Stop still reject the result.
+A successful provider result cannot be inserted after a cleanup timeout/error.
+
+Fresh behavioral REDs observed Escape waiting 2.02 seconds for injected native
+Stop, pending ownership looking Idle after cancellation, and the shortened pill
+losing its reopen action. Another RED showed a watcher-cleanup failure discarding
+positive Stop evidence. GREEN evidence: 35 capture tests and 14 indicator tests
+cover Stop/watcher deadlines, Escape and async task abort, bounded ownership,
+no insertion on unconfirmed cleanup, post-Stop route changes, fresh speech after
+cleanup, and persistent/clearable honest UI states. Workspace, strict Clippy,
+repository, managed-model lifecycle and signed-app build checks pass locally.
+All audio/providers/devices here are synthetic fixtures.
+
+### Owned AppKit rendering evidence
+
+The opt-in `microphone_cleanup_preview` example renders the production Pill's
+own AppKit views without constructing Shell, registering input hooks, opening a
+microphone, checking permissions or reading another app/window. Its temporary
+window is nonactivating and invisible to the desktop while its content view is
+cached. The process exits after rendering. These images are native view output,
+not an image edit or a physical-device recording test:
+
+![Stop remains pending](microphone-cleanup/pending.png)
+
+![Audio stopped, resource cleanup remains pending](microphone-cleanup/stopped.png)
+
+![Unconfirmed Stop retains its recovery action](microphone-cleanup/unconfirmed.png)
+
+![Positive Stop evidence survives cleanup failure](microphone-cleanup/cleanup-failed.png)
+
+```sh
+cargo run --example microphone_cleanup_preview -- /tmp/murmur-cleanup-preview
+```
+
+The stopped label reflects the backend's successful `AudioTap::stop`; physical
+microphone LED/callback quiescence, USB/Bluetooth recovery and sleep/wake behavior
+still require signed-app acceptance. These component renders do not establish
+those gates or close #61.

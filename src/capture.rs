@@ -88,33 +88,160 @@ impl InputPreparation {
     }
 }
 
-struct Guard {
-    tap: Box<dyn AudioTap>,
-    _watcher: Option<Box<dyn fotw_audio::DeviceWatch>>,
-    // Release only after tap and watcher cleanup, including on a late result.
-    _lease: StartupLease,
+/// Maximum wait for native Stop and resource destruction after key release.
+pub const MIC_STOP_DEADLINE: Duration = Duration::from_secs(4);
+const CANCEL_CLEANUP_GRACE: Duration = Duration::from_millis(20);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum MicrophoneState {
+    Idle = 0,
+    Preparing = 1,
+    Starting = 2,
+    Capturing = 3,
+    Stopping = 4,
+    CleaningUp = 5,
+    Unconfirmed = 6,
+    CleanupFailed = 7,
 }
-impl Drop for Guard {
-    fn drop(&mut self) {
-        let _ = self.tap.stop();
+/// One native owner across attempts. Only confirmed resource cleanup releases it.
+#[derive(Clone, Default)]
+pub struct MicrophoneStartup(Arc<AtomicU8>);
+struct StartupLease {
+    state: Arc<AtomicU8>,
+    cleaned: bool,
+}
+impl StartupLease {
+    fn phase(&self, state: MicrophoneState) {
+        self.state.store(state as u8, Ordering::Release);
     }
 }
-/// Shared by the native shell across attempts. One lease covers native
-/// preparation, capture and cleanup; repeated attempts cannot multiply a late
-/// native operation.
-#[derive(Clone, Default)]
-pub struct MicrophoneStartup(Arc<AtomicBool>);
-struct StartupLease(Arc<AtomicBool>);
 impl Drop for StartupLease {
     fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
+        let state = if self.cleaned
+            || self.state.load(Ordering::Acquire) == MicrophoneState::Preparing as u8
+        {
+            MicrophoneState::Idle
+        } else if self.state.load(Ordering::Acquire) == MicrophoneState::CleaningUp as u8 {
+            MicrophoneState::CleanupFailed
+        } else {
+            MicrophoneState::Unconfirmed
+        };
+        self.state.store(state as u8, Ordering::Release);
     }
 }
 impl MicrophoneStartup {
+    pub fn state(&self) -> MicrophoneState {
+        match self.0.load(Ordering::Acquire) {
+            0 => MicrophoneState::Idle,
+            1 => MicrophoneState::Preparing,
+            2 => MicrophoneState::Starting,
+            3 => MicrophoneState::Capturing,
+            4 => MicrophoneState::Stopping,
+            5 => MicrophoneState::CleaningUp,
+            7 => MicrophoneState::CleanupFailed,
+            _ => MicrophoneState::Unconfirmed,
+        }
+    }
     fn acquire(&self) -> Result<StartupLease, String> {
-        self.0.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        self.0.compare_exchange(0, MicrophoneState::Preparing as u8, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| "Previous microphone operation is still pending; reconnect the input device or reopen Murmur".to_string())?;
-        Ok(StartupLease(self.0.clone()))
+        Ok(StartupLease {
+            state: self.0.clone(),
+            cleaned: false,
+        })
+    }
+}
+
+/// Lives only on the native owner thread. Drop cannot block the async caller.
+struct NativeInput {
+    tap: Option<Box<dyn AudioTap>>,
+    watcher: Option<Box<dyn fotw_audio::DeviceWatch>>,
+    stopped: Arc<AtomicBool>,
+    lease: StartupLease,
+}
+impl NativeInput {
+    fn close(&mut self) -> Result<(), String> {
+        let Some(mut tap) = self.tap.take() else {
+            return Ok(());
+        };
+        self.lease.phase(MicrophoneState::Stopping);
+        let result = tap.stop().map_err(|_| {
+            "Microphone stop unconfirmed; no text inserted; reopen Murmur".to_string()
+        });
+        if result.is_ok() {
+            // This boundary must precede watcher destruction: later route
+            // notifications cannot invalidate audio from a stopped tap.
+            self.stopped.store(true, Ordering::Release);
+            self.lease.phase(MicrophoneState::CleaningUp);
+        } else {
+            self.lease.phase(MicrophoneState::Unconfirmed);
+        }
+        drop(tap);
+        drop(self.watcher.take());
+        self.lease.cleaned = result.is_ok();
+        result
+    }
+}
+impl Drop for NativeInput {
+    fn drop(&mut self) {
+        if self.tap.is_some() {
+            let _ = self.close();
+        }
+    }
+}
+/// Async-side ownership is just a command channel and completion receiver.
+/// Dropping it requests cleanup; all native destruction stays on the owner.
+struct Guard {
+    stop: Option<std::sync::mpsc::SyncSender<()>>,
+    closed: tokio::sync::oneshot::Receiver<Result<(), String>>,
+    stopped: Arc<AtomicBool>,
+    result: Option<Result<(), String>>,
+}
+impl Guard {
+    async fn close(
+        &mut self,
+        control: &AtomicU8,
+        changes: &fotw_audio::device_change::DeviceChangeSignal,
+    ) -> Result<(), String> {
+        self.stop.take();
+        if let Some(result) = &self.result {
+            return result.clone();
+        }
+        let deadline = tokio::time::sleep(MIC_STOP_DEADLINE);
+        tokio::pin!(deadline);
+        let mut cancelled_at = None;
+        let mut tick = tokio::time::interval(Duration::from_millis(5));
+        let result = loop {
+            if control.load(Ordering::Acquire) == 2 {
+                let began = cancelled_at.get_or_insert_with(std::time::Instant::now);
+                if began.elapsed() >= CANCEL_CLEANUP_GRACE {
+                    break Err("Cancelled".into());
+                }
+            }
+            if !self.stopped.load(Ordering::Acquire)
+                && let Some(error) = device_failure(changes)
+            {
+                break Err(error.to_string());
+            }
+            tokio::select! {
+                biased;
+                closed = &mut self.closed => break closed.unwrap_or_else(|_| Err(if self.stopped.load(Ordering::Acquire) {
+                    "Microphone stopped but cleanup failed; no text inserted; reopen Murmur"
+                } else {
+                    "Microphone cleanup unconfirmed; no text inserted; reopen Murmur"
+                }.into())),
+                _ = &mut deadline => break Err("Microphone cleanup timed out; no text inserted; cleanup is still pending".into()),
+                _ = tick.tick() => {}
+            }
+        };
+        self.result = Some(result.clone());
+        result
+    }
+}
+impl Drop for Guard {
+    fn drop(&mut self) {
+        self.stop.take();
     }
 }
 
@@ -133,37 +260,80 @@ async fn start_within_deadline(
     }
     let lease = startup.acquire()?;
     let (tx, mut rx) = tokio::sync::oneshot::channel();
+    let (stop_tx, stop_rx) = std::sync::mpsc::sync_channel::<()>(0);
+    let (closed_tx, closed) = tokio::sync::oneshot::channel();
+    let stopped = Arc::new(AtomicBool::new(false));
+    let guard = Guard {
+        stop: Some(stop_tx),
+        closed,
+        stopped: stopped.clone(),
+        result: None,
+    };
     let worker_control = control.clone();
     let worker_changes = changes.clone();
     std::thread::Builder::new()
-        .name("murmur-mic-start".into())
+        .name("murmur-mic-owner".into())
         .spawn(move || {
-            let result = (|| {
-                let PreparedInput { tap, watcher } = (input.0)()?;
-                let mut guard = Guard {
-                    tap,
-                    _watcher: watcher,
-                    _lease: lease,
-                };
-                // Preparation can return after Escape/release or the deadline.
-                // Close the prepared resources without starting late capture.
-                if tx.is_closed() || worker_control.load(Ordering::Acquire) != 0 {
-                    return Err(
-                        "Dictation ended before microphone was ready; try again".to_string()
-                    );
+            let early_error = if tx.is_closed() || worker_control.load(Ordering::Acquire) != 0 {
+                Some("Dictation ended before microphone was ready; try again".to_string())
+            } else {
+                device_failure(&worker_changes).map(str::to_string)
+            };
+            if let Some(error) = early_error {
+                // Captured prebuilt inputs, if any, also drop on this owner
+                // before its lease is released. Deferred native setup is skipped.
+                drop(input);
+                drop(lease);
+                let _ = tx.send(Err(error));
+                let _ = closed_tx.send(Ok(()));
+                return;
+            }
+            let prepared = match (input.0)() {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    drop(lease);
+                    let _ = tx.send(Err(error));
+                    let _ = closed_tx.send(Ok(()));
+                    return;
                 }
-                // Watch/open can report a route change before the async
-                // observer gets another poll. Never start that stale device.
-                if let Some(error) = device_failure(&worker_changes) {
-                    return Err(error.to_string());
+            };
+            let mut native = NativeInput {
+                tap: Some(prepared.tap),
+                watcher: prepared.watcher,
+                stopped,
+                lease,
+            };
+            let start = if tx.is_closed() || worker_control.load(Ordering::Acquire) != 0 {
+                Err("Dictation ended before microphone was ready; try again".to_string())
+            } else if let Some(error) = device_failure(&worker_changes) {
+                Err(error.to_string())
+            } else {
+                native.lease.phase(MicrophoneState::Starting);
+                native
+                    .tap
+                    .as_mut()
+                    .expect("owned tap")
+                    .start(sink)
+                    .map_err(|_| {
+                        "Cannot start microphone; check permission and input device".to_string()
+                    })
+            };
+            match start {
+                Ok(format) => {
+                    native.lease.phase(MicrophoneState::Capturing);
+                    if tx.send(Ok(format)).is_ok() {
+                        // Disconnecting the async handle requests Stop, without
+                        // running a native destructor on its runtime thread.
+                        let _ = stop_rx.recv();
+                    }
                 }
-                let format = guard.tap.start(sink).map_err(|_| {
-                    "Cannot start microphone; check permission and input device".to_string()
-                })?;
-                Ok((guard, format))
-            })();
-            // Receiver cancellation drops the owned guard on this worker.
-            let _ = tx.send(result);
+                Err(error) => {
+                    let _ = tx.send(Err(error));
+                }
+            }
+            let result = native.close();
+            drop(native); // drop the lease before acknowledging complete cleanup
+            let _ = closed_tx.send(result);
         })
         .map_err(|_| "Cannot start microphone worker".to_string())?;
     let deadline = tokio::time::sleep(MIC_START_DEADLINE);
@@ -182,7 +352,7 @@ async fn start_within_deadline(
         }
         tokio::select! {
             started = &mut rx => {
-                let (guard, format) = started.map_err(|_| "Microphone startup failed")??;
+                let format = started.map_err(|_| "Microphone startup failed")??;
                 if control.load(Ordering::Acquire) == 2 { return Err("Cancelled".into()); }
                 return Ok((guard, format));
             }
@@ -423,16 +593,25 @@ pub async fn run_provider_with_preparation(
     });
     let started_capture =
         start_within_deadline(input, sink, &control, &startup, &receiving, &changes).await;
-    if control.load(Ordering::Acquire) == 2 {
-        return Err("Cancelled".into());
-    }
-    if let Some(error) = device_failure(&changes) {
-        return Err(error.into());
-    }
-    if let Some(error) = audio_failure(&failed) {
-        return Err(error.into());
-    }
-    let (mut guard, format) = started_capture?;
+    let (mut guard, format) = match started_capture {
+        Ok(started) => started,
+        Err(error) => {
+            if control.load(Ordering::Acquire) == 2 {
+                return Err("Cancelled".into());
+            }
+            if let Some(error) = device_failure(&changes) {
+                return Err(error.into());
+            }
+            if let Some(error) = audio_failure(&failed) {
+                return Err(error.into());
+            }
+            return Err(error);
+        }
+    };
+    let result = async {
+        if control.load(Ordering::Acquire) == 2 { return Err("Cancelled".into()); }
+        if let Some(error) = device_failure(&changes) { return Err(error.into()); }
+        if let Some(error) = audio_failure(&failed) { return Err(error.into()); }
     let mut converter = CaptureConverter::new(format)?;
     // Ten seconds of 10 ms chunks covers the bounded eight-second TLS handshake.
     // The previous 320 ms queue overflowed before a live connection could open.
@@ -514,7 +693,7 @@ pub async fn run_provider_with_preparation(
                  if let Some(error)=audio_failure(&failed){return Err(error.into());}
               if !finishing {
                if control.load(Ordering::Acquire)==1 || started.elapsed()>=Duration::from_secs(120) {
-                guard.tap.stop().map_err(|_|"Microphone stop failed")?;
+                guard.close(&control, &changes).await?;
                 // Successful stop closes the capture epoch. Later route notifications
                 // cannot invalidate audio already collected, but a callback fault
                 // reported during stop must still reject this utterance.
@@ -534,6 +713,16 @@ pub async fn run_provider_with_preparation(
              }
             }
     }
+    }.await;
+    let cleanup = guard.close(&control, &changes).await;
+    if control.load(Ordering::Acquire) == 2 {
+        return Err("Cancelled".into());
+    }
+    if let Some(error) = audio_failure(&failed) {
+        return Err(error.into());
+    }
+    cleanup?;
+    result
 }
 
 /// Retain at most 120 seconds of actual capture, including on a late stop tick.

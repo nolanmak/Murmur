@@ -664,6 +664,7 @@ struct Shell {
     launched: Instant,
     receiving: Arc<AtomicBool>,
     microphone_startup: crate::capture::MicrophoneStartup,
+    microphone_notice: Option<&'static str>,
     speech_progress: crate::fallback::Progress,
     speech_stage: crate::fallback::Stage,
     remote_mode: bool,
@@ -868,6 +869,7 @@ impl Shell {
             launched: Instant::now(),
             receiving: Arc::new(AtomicBool::new(false)),
             microphone_startup: Default::default(),
+            microphone_notice: None,
             speech_progress: Default::default(),
             speech_stage: Default::default(),
             remote_mode: remote_fixture,
@@ -895,6 +897,9 @@ impl Shell {
         self.status.set_text(message);
     }
     fn show(&mut self, message: &str) {
+        // A fresh result owns the transient notice. If native cleanup is still
+        // pending, the next pump reinstates that higher-priority explanation.
+        self.microphone_notice = None;
         self.status(message);
         if let Some(text) = self.indicator.message(message, self.now()) {
             self.pill.set_text(&text);
@@ -917,6 +922,7 @@ impl Shell {
             self.onboarding.expire_wait(&snapshot);
         }
         if self.core.phase == Phase::Idle
+            && self.microphone_startup.state() == crate::capture::MicrophoneState::Idle
             && let Some(grant) = self.onboarding.next(&snapshot)
         {
             self.prompted_at = Instant::now();
@@ -947,6 +953,11 @@ impl Shell {
         false
     }
     fn ready(&self) -> String {
+        if let Some(message) =
+            indicator::microphone_notice(self.microphone_startup.state(), self.core.phase)
+        {
+            return message.into();
+        }
         if self.speech.error().is_some() {
             return "Speech settings invalid — choose Local Whisper in the Transcription menu to repair".into();
         }
@@ -965,6 +976,12 @@ impl Shell {
         }
     }
     fn start(&mut self) {
+        if self.microphone_startup.state() != crate::capture::MicrophoneState::Idle {
+            self.last.begin();
+            self.cancel();
+            self.show(&self.ready());
+            return;
+        }
         if self.speech.error().is_some() {
             self.cancel();
             self.show(&self.ready());
@@ -1111,7 +1128,9 @@ impl Shell {
     }
     fn pump(&mut self) {
         self.observe_remote_window();
-        if self.core.phase == Phase::Idle {
+        if self.core.phase == Phase::Idle
+            && self.microphone_startup.state() == crate::capture::MicrophoneState::Idle
+        {
             self.prewarm();
         }
         if self.smoke && !self.smoke_started && self.launched.elapsed() > Duration::from_secs(2) {
@@ -1128,7 +1147,12 @@ impl Shell {
             self.finish();
         }
         if let Some(tap) = &self.tap {
-            tap._context.busy.set(self.core.phase == Phase::Processing);
+            tap._context.busy.set(
+                self.core.phase == Phase::Processing
+                    || (self.core.phase == Phase::Idle
+                        && self.microphone_startup.state()
+                            != crate::capture::MicrophoneState::Idle),
+            );
             let action = tap
                 ._context
                 .space
@@ -1435,9 +1459,32 @@ impl Shell {
             self.status(&format!("{verb} · {} · Esc to cancel", stage.label()));
         }
         let receiving = self.receiving.load(Ordering::Acquire);
-        let look = self
-            .indicator
-            .look(now, self.core.phase, receiving, self.warning.is_some());
+        let microphone = self.microphone_startup.state();
+        let notice = indicator::microphone_notice(microphone, self.core.phase);
+        if let Some(message) = notice {
+            if notice != self.microphone_notice {
+                self.indicator.clear();
+                self.pill.set_text(&indicator::shorten(message));
+            }
+            // Other completion/permission messages cannot hide unresolved input
+            // ownership. Keep the full explanation available in the menu.
+            self.status.set_text(message);
+        } else if self.microphone_notice.is_some() {
+            self.indicator.clear();
+            if self.core.phase == Phase::Idle {
+                self.status(&self.ready());
+            } else if self.core.phase == Phase::Processing {
+                self.status(&format!("Transcribing · {} · Esc to cancel", stage.label()));
+            }
+        }
+        self.microphone_notice = notice;
+        let look = self.indicator.look_with_microphone(
+            now,
+            self.core.phase,
+            receiving,
+            self.warning.is_some(),
+            microphone,
+        );
         if self.pill.look == Look::Success
             && matches!(look, Look::Idle | Look::Warning | Look::Armed)
         {
@@ -1897,4 +1944,58 @@ fn speech_label(provider: Option<&crate::speech::Provider>) -> &'static str {
         }
         None => "Transcription: invalid settings — click to select Local Whisper",
     }
+}
+
+/// Render only the owned indicator views; no Shell, capture, permissions,
+/// keyboard hook, clipboard or other application's window is accessed.
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub fn preview_microphone_cleanup(output: &std::path::Path) -> Result<(), String> {
+    use crate::capture::MicrophoneState as Mic;
+    use objc2_app_kit::NSBitmapImageFileType;
+    use objc2_foundation::NSDictionary;
+    let mtm = MainThreadMarker::new().ok_or("Preview must run on the main thread")?;
+    let app = NSApplication::sharedApplication(mtm);
+    app.setActivationPolicy(NSApplicationActivationPolicy::Prohibited);
+    std::fs::create_dir_all(output).map_err(|e| e.to_string())?;
+    for (name, state) in [
+        ("pending", Mic::Stopping),
+        ("stopped", Mic::CleaningUp),
+        ("unconfirmed", Mic::Unconfirmed),
+        ("cleanup-failed", Mic::CleanupFailed),
+    ] {
+        let mut pill = Pill::new(mtm)?;
+        // Window opacity does not affect caching its own content view. Keep
+        // this fixture invisible to the desktop while exercising native paint.
+        pill.panel.setAlphaValue(0.0);
+        let message =
+            indicator::microphone_notice(state, Phase::Idle).ok_or("Missing cleanup notice")?;
+        pill.set_text(&indicator::shorten(message));
+        for tick in 0..40 {
+            pill.render(Look::Notice, tick * 20);
+        }
+        let view = pill.panel.contentView().ok_or("Missing preview view")?;
+        view.layoutSubtreeIfNeeded();
+        view.displayIfNeeded();
+        let bounds = view.bounds();
+        let bitmap = view
+            .bitmapImageRepForCachingDisplayInRect(bounds)
+            .ok_or("Cannot cache preview")?;
+        view.cacheDisplayInRect_toBitmapImageRep(bounds, &bitmap);
+        // Empty, correctly typed properties; no arbitrary Objective-C values.
+        let data = unsafe {
+            bitmap.representationUsingType_properties(
+                NSBitmapImageFileType::PNG,
+                &NSDictionary::new(),
+            )
+        }
+        .ok_or("Cannot encode preview")?;
+        let path = output.join(format!("{name}.png"));
+        if !data.writeToFile_atomically(&NSString::from_str(&path.to_string_lossy()), true) {
+            return Err("Cannot save preview".into());
+        }
+        pill.panel.orderOut(None);
+        println!("{name}: {message}");
+    }
+    Ok(())
 }
