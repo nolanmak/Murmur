@@ -310,8 +310,7 @@ pub async fn run_provider_with_events(
         return Err(error.into());
     }
     let (mut guard, format) = started_capture?;
-    let mut resampler =
-        Resampler16k::new(format.sample_rate_hz, 1).map_err(|_| "Unsupported microphone format")?;
+    let mut converter = CaptureConverter::new(format)?;
     // Ten seconds of 10 ms chunks covers the bounded eight-second TLS handshake.
     // The previous 320 ms queue overflowed before a live connection could open.
     let (tx, rx) = tokio::sync::mpsc::channel(1024);
@@ -387,9 +386,7 @@ pub async fn run_provider_with_events(
                while let Ok(sample)=consumer.pop(){captured.push(sample);}
                if !captured.is_empty(){last_frame=std::time::Instant::now();}
                if last_frame.elapsed()>Duration::from_secs(3)&&!finishing{return Err("Microphone stopped delivering audio; no text inserted".into());}
-               let mut mono=Downmixer::to_mono(&captured,format.channels);
-               if finishing {mono.extend(std::iter::repeat_n(0.0,format.sample_rate_hz as usize/5));}
-               let samples=resampler.process_all(&mono).map_err(|_|"Audio conversion failed")?;
+               let samples=converter.process(&captured,finishing)?;
                if !samples.is_empty() && let Some(sender)=&sender {
                 sender.try_send(Downmixer::to_i16(&samples)).map_err(|_|"Transcription cannot keep up; no text inserted")?;
                }
@@ -424,8 +421,74 @@ fn device_failure(changes: &fotw_audio::device_change::DeviceChangeSignal) -> Op
     }
 }
 
+struct CaptureConverter {
+    format: StreamFormat,
+    resampler: Resampler16k,
+}
+impl CaptureConverter {
+    fn new(format: StreamFormat) -> Result<Self, String> {
+        Ok(Self {
+            format,
+            resampler: Resampler16k::new(format.sample_rate_hz, format.channels)
+                .map_err(|_| "Unsupported microphone format")?,
+        })
+    }
+    fn process(&mut self, pcm: &[f32], finishing: bool) -> Result<Vec<f32>, String> {
+        let mut samples = self
+            .resampler
+            .process_all(pcm)
+            .map_err(|_| "Audio conversion failed")?;
+        if finishing {
+            let padding = vec![
+                0.0;
+                self.format.sample_rate_hz as usize / 5
+                    * usize::from(self.format.channels)
+            ];
+            samples.extend(
+                self.resampler
+                    .process_all(&padding)
+                    .map_err(|_| "Audio conversion failed")?,
+            );
+        }
+        Ok(Downmixer::to_mono(&samples, self.format.channels))
+    }
+}
+
 #[cfg(test)]
 mod local_buffer_tests {
+    #[test]
+    fn stereo_conversion_preserves_frames_split_across_ring_drains() {
+        use super::*;
+        let format = StreamFormat::new(48000, 2, fotw_audio::SampleFormat::F32);
+        let pcm: Vec<f32> = (0..12000)
+            .flat_map(|i| {
+                let x = (i % 23) as f32 / 23.0;
+                [x, -x * 0.5]
+            })
+            .collect();
+        let mut whole = CaptureConverter::new(format).unwrap();
+        let mut expected = whole.process(&pcm, false).unwrap();
+        expected.extend(whole.process(&[], true).unwrap());
+        let mut split = CaptureConverter::new(format).unwrap();
+        let mut actual = Vec::new();
+        for chunk in pcm.chunks(319) {
+            actual.extend(split.process(chunk, false).unwrap());
+        }
+        actual.extend(split.process(&[], true).unwrap());
+        assert!(!expected.is_empty());
+        assert_eq!(
+            actual.len(),
+            expected.len(),
+            "ring boundaries must not drop sample frames"
+        );
+        assert!(
+            actual
+                .iter()
+                .zip(expected)
+                .all(|(a, b)| (a - b).abs() < 1e-6),
+            "ring boundaries changed the stereo waveform"
+        );
+    }
     #[test]
     fn maximum_capture_clips_scheduler_overshoot_and_resampler_padding() {
         let mut pcm = vec![1; 16000 * 120 - 160];

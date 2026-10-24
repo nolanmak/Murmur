@@ -6,7 +6,7 @@ License: Apache-2.0; root LICENSE and NOTICE retained.
 
 - `fotw-audio`, `fotw-stt`, `fotw-secrets` and `fotw-dsp`: maintained upstream crates
   consumed by immutable Git revision
-  `25b867f06ad7f9e0edf5ba1e233ffc6d2958940d` and Cargo.lock.
+  `32cc4590d7c19c3b39fa9e26886d1f8d906c08c0` and Cargo.lock.
   Their frozen vendor copies were removed after audio, streaming, credentials,
   config and fallback regression checks. Both apps run the shared `conformance`
   suites with synthetic audio and in-memory credentials.
@@ -36,7 +36,7 @@ Reference: https://developers.deepgram.com/docs/finalize
 
 ## Shared-core upgrade validation (2026-10-24)
 
-The pin at `25b867f06ad7f9e0edf5ba1e233ffc6d2958940d` selects explicit
+The pin at `32cc4590d7c19c3b39fa9e26886d1f8d906c08c0` selects explicit
 credential stores: the same native macOS/Windows stores and a DBus Secret
 Service backend on Linux. Existing service/account addresses remain unchanged.
 The producer's isolated Linux CI job 120845180526 verified reads, updates,
@@ -62,3 +62,12 @@ The production graph still excludes whisper-rs, opusic-sys and ogg. A strict
 `codesign --verify --deep --strict Murmur.app` passed. These checks do not
 establish native capture or insertion acceptance. Hosted checks must run on
 the new consumer revision.
+
+
+The producer pin also includes native microphone ASBD validation and actual
+channel counts. Murmur's conversion now resamples complete interleaved frames
+before downmixing, preserving partial frames across ring-drain boundaries.
+The synthetic odd-chunk regression failed at 7,040 versus 7,200 samples before
+this change and matches both length and waveform afterward. Planar multichannel
+and non-Float32 native input layouts are explicitly refused by the producer;
+live sample-rate notification/rebuild and physical device acceptance remain open.

@@ -106,3 +106,18 @@ tests use a private NSNotificationCenter; they do not post to NSWorkspace or
 put the machine to sleep. Physical sleep/wake and subsequent insertion remain
 native acceptance gates. These changes do not implement meeting gap recovery,
 input format notifications or the remaining bounded readiness policy.
+
+
+## Stereo frames across ring-buffer drains
+
+Capture conversion now feeds interleaved samples into the stateful multichannel
+resampler before downmixing its complete output frames. A drain ending after
+one stereo channel is carried into the next call, rather than dropping the
+unpaired sample in a stateless downmix. Final padding is sized in complete
+multichannel frames; the downstream local utterance limit remains unchanged.
+
+The regression splits a synthetic stereo waveform into odd 319-sample chunks.
+Before the change it produced 7,040 output samples instead of the single-buffer
+reference's 7,200. Afterward both length and waveform match. This is required
+before consuming the producer's actual microphone channel-count reporting;
+it does not establish physical stereo-device or Bluetooth route acceptance.
