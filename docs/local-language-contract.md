@@ -85,7 +85,7 @@ loaded 99-language capabilities and transcribed synthetic French with the
 explicit `fr` setting. Test runtimes, downloaded weights and audio were removed.
 No microphone or real provider credentials were used. This verifies adapter
 integration, not human speech quality, resource benchmarks or native insertion.
-Shared capability extraction, native language UI and the paired evaluation
+Shared capability extraction, full native language interaction/IME acceptance and the paired evaluation
 remain open for #9 and FlyOnTheWall #119/#118.
 
 

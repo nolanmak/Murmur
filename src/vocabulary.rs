@@ -123,8 +123,25 @@ impl Profile {
             _ => Self::read(path),
         }
     }
+    /// Replace a validated profile. Imports intentionally replace all fields.
     pub fn save(&self, path: &Path) -> Result<(), String> {
         self.validate()?;
+        let _lock = lock_profile(path)?;
+        self.persist(path)
+    }
+    /// Read, modify and atomically save while excluding cooperating writers.
+    /// Refuse contention instead of blocking the native UI on another process.
+    pub fn update(
+        path: &Path,
+        edit: impl FnOnce(&mut Self) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let _lock = lock_profile(path)?;
+        let mut profile = Self::load(path)?;
+        edit(&mut profile)?;
+        profile.validate()?;
+        profile.persist(path)
+    }
+    fn persist(&self, path: &Path) -> Result<(), String> {
         let parent = path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -162,4 +179,26 @@ pub fn validate_hints(hints: &[String]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn lock_profile(path: &Path) -> Result<std::fs::File, String> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    std::fs::create_dir_all(parent).map_err(|_| "Cannot create vocabulary directory")?;
+    let mut name = path
+        .file_name()
+        .ok_or("Invalid vocabulary path")?
+        .to_os_string();
+    name.push(".lock");
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(parent.join(name))
+        .map_err(|_| "Cannot open vocabulary lock")?;
+    lock.try_lock()
+        .map_err(|_| "Vocabulary is being updated by another process. Try Save again.")?;
+    Ok(lock)
 }

@@ -50,3 +50,29 @@ fn escape_cancels_and_release_cannot_insert() {
     assert_eq!(a.command, Some(Command::Cancel));
     assert_eq!(h.key(Key::Up, 500).command, Some(Command::Finish));
 }
+
+#[test]
+fn native_editor_discards_pending_shortcut_and_requires_a_fresh_hold_after_release() {
+    use murmur::space_hotkey::{Command, HOLD_MS, HoldSpace, Key};
+    for already_recording in [false, true] {
+        let mut hold = HoldSpace::default();
+        hold.key(Key::Down, 0);
+        if already_recording {
+            assert_eq!(hold.tick(HOLD_MS).command, Some(Command::Start));
+        }
+        hold.suspend();
+        assert_eq!(
+            hold.tick(10_000).command,
+            None,
+            "closing a modal must not start a held shortcut"
+        );
+        let release = hold.key(Key::Up, 10_001);
+        assert!(
+            !release.replay,
+            "an old quick tap must not replay after editing"
+        );
+        assert_ne!(release.command, Some(Command::Start));
+        hold.key(Key::Down, 20_000);
+        assert_eq!(hold.tick(20_000 + HOLD_MS).command, Some(Command::Start));
+    }
+}

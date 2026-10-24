@@ -649,6 +649,9 @@ struct Shell {
     status: MenuItem,
     speech: crate::speech::Selection,
     speech_toggle: MenuItem,
+    language_menu: super::macos_language::LanguageMenu,
+    vocabulary_menu: super::macos_vocabulary::VocabularyMenu,
+    _native_menu: Menu,
     pill: Pill,
     indicator: Indicator,
     warning: Option<String>,
@@ -706,6 +709,22 @@ impl Shell {
             true,
             None,
         );
+        let language_menu =
+            super::macos_language::LanguageMenu::new(crate::vocabulary::Profile::path())?;
+        let vocabulary_menu =
+            super::macos_vocabulary::VocabularyMenu::new(crate::vocabulary::Profile::path())?;
+        let native_menu = Menu::new();
+        let application_menu = muda::Submenu::new("Murmur", true);
+        application_menu
+            .append(&muda::PredefinedMenuItem::hide(None))
+            .map_err(|e| e.to_string())?;
+        native_menu
+            .append(&application_menu)
+            .map_err(|e| e.to_string())?;
+        native_menu
+            .append(&super::macos_vocabulary::edit_menu()?)
+            .map_err(|e| e.to_string())?;
+        native_menu.init_for_nsapp();
         let cancel = MenuItem::with_id("cancel", "Cancel dictation (Esc)", true, None);
         let start = MenuItem::with_id("start", "Start dictation", true, None);
         let stop = MenuItem::with_id("stop", "Stop dictation", true, None);
@@ -796,9 +815,13 @@ impl Shell {
             true,
             None,
         );
+        menu.append(&status).map_err(|e| e.to_string())?;
+        menu.append(&speech_toggle).map_err(|e| e.to_string())?;
+        menu.append(&language_menu.menu)
+            .map_err(|e| e.to_string())?;
+        menu.append(&vocabulary_menu.menu)
+            .map_err(|e| e.to_string())?;
         for item in [
-            &status,
-            &speech_toggle,
             &start,
             &stop,
             &cancel,
@@ -848,6 +871,9 @@ impl Shell {
             status,
             speech,
             speech_toggle,
+            language_menu,
+            vocabulary_menu,
+            _native_menu: native_menu,
             pill,
             indicator: Indicator::default(),
             warning: None,
@@ -1133,6 +1159,11 @@ impl Shell {
         {
             self.prewarm();
         }
+        self.language_menu.refresh_if_due();
+        self.vocabulary_menu.refresh_if_due();
+        self.vocabulary_menu
+            .menu
+            .set_enabled(self.core.phase == Phase::Idle);
         if self.smoke && !self.smoke_started && self.launched.elapsed() > Duration::from_secs(2) {
             self.smoke_started = true;
             if self.core.start_manual() {
@@ -1198,6 +1229,52 @@ impl Shell {
             }
         }
         while let Ok(event) = MenuEvent::receiver().try_recv() {
+            if super::macos_vocabulary::VocabularyMenu::handles(event.id.as_ref()) {
+                if self.core.phase != Phase::Idle {
+                    self.show("Finish dictation before editing vocabulary");
+                    continue;
+                }
+                // A modal editor must not collect shortcuts for replay when it
+                // closes. Keep ordinary editing keys available to AppKit.
+                self.core.cancel();
+                self.indicator.disarm();
+                if let Some(tap) = &self.tap {
+                    tap._context.busy.set(true);
+                    tap._context.space.borrow_mut().suspend();
+                }
+                let result = self.vocabulary_menu.handle(event.id.as_ref());
+                if let Some(tap) = &self.tap {
+                    tap._context.space.borrow_mut().suspend();
+                    tap._context.busy.set(
+                        self.core.phase != Phase::Idle
+                            || self.microphone_startup.state()
+                                != crate::capture::MicrophoneState::Idle,
+                    );
+                }
+                let mut tap_disabled = false;
+                for event in self.input.try_iter() {
+                    tap_disabled |= matches!(event, Input::TapDisabled);
+                }
+                if tap_disabled && let Some(tap) = &self.tap {
+                    // Preserve monitor recovery while discarding stale editor shortcuts.
+                    unsafe { CGEventTapEnable(tap.port.0, true) }
+                }
+                // Commands made behind a modal must not start recording after
+                // it closes; the next action must be a fresh deliberate command.
+                while MenuEvent::receiver().try_recv().is_ok() {}
+                match result {
+                    Ok(message) => self.show(&message),
+                    Err(error) => self.show(&error),
+                }
+                continue;
+            }
+            if let Some(result) = self.language_menu.handle(event.id.as_ref()) {
+                match result {
+                    Ok(message) => self.show(&message),
+                    Err(error) => self.show(&error),
+                }
+                continue;
+            }
             match event.id.as_ref() {
                 "speech_provider" => {
                     let provider = match self.speech.provider() {
