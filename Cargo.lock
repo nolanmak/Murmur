@@ -746,15 +746,14 @@ dependencies = [
 [[package]]
 name = "fotw-secrets"
 version = "0.1.0"
+source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=996fd79c39f7fe19eb14e3ace68c3a493540d12a#996fd79c39f7fe19eb14e3ace68c3a493540d12a"
 dependencies = [
  "argon2",
  "bech32",
  "chacha20poly1305",
  "keyring",
  "serde",
- "serde_json",
  "sha2 0.11.0",
- "tempfile",
  "thiserror",
 ]
 
