@@ -60,7 +60,11 @@ pub fn classify(message: &str) -> Kind {
         _ => Kind::Notice,
     }
 }
-const RECOVERY: [&str; 2] = ["Copy Last Transcript", "Restore previous clipboard"];
+const RECOVERY: [&str; 3] = [
+    "Copy Last Transcript",
+    "Restore previous clipboard",
+    "reopen Murmur",
+];
 /// Whole message when it fits; otherwise its first clause, keeping any recovery hint.
 pub fn shorten(message: &str) -> String {
     let whole = message.trim().trim_end_matches('.');
@@ -171,4 +175,40 @@ pub fn dot_alpha(index: usize, elapsed_ms: u64) -> f64 {
 /// Gentle vertical wave used while finishing.
 pub fn dot_lift(index: usize, elapsed_ms: u64) -> f64 {
     (3.0 * ((elapsed_ms as f64 / 1100.0 - index as f64 / 5.0) * TAU).sin()).round() / 2.0
+}
+
+/// Persistent input ownership warning; independent of transient notices.
+pub fn microphone_notice(
+    state: crate::capture::MicrophoneState,
+    phase: Phase,
+) -> Option<&'static str> {
+    use crate::capture::MicrophoneState as Mic;
+    match state {
+        Mic::Unconfirmed => Some("Mic may still be recording — cleanup unconfirmed; reopen Murmur"),
+        Mic::CleaningUp => Some("Microphone stopped — finishing cleanup"),
+        Mic::Stopping if phase != Phase::Idle => Some("Stopping microphone — Esc to cancel"),
+        Mic::Preparing if phase == Phase::Idle => {
+            Some("Microphone setup pending — waiting for cleanup")
+        }
+        Mic::Starting | Mic::Capturing | Mic::Stopping if phase == Phase::Idle => {
+            Some("Microphone may still be recording — waiting for cleanup")
+        }
+        _ => None,
+    }
+}
+impl Indicator {
+    pub fn look_with_microphone(
+        &self,
+        now: u64,
+        phase: Phase,
+        receiving: bool,
+        warning: bool,
+        state: crate::capture::MicrophoneState,
+    ) -> Look {
+        if microphone_notice(state, phase).is_some() {
+            Look::Notice
+        } else {
+            self.look(now, phase, receiving, warning)
+        }
+    }
 }

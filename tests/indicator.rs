@@ -238,3 +238,68 @@ fn local_delivery_notice_expires_while_permission_warning_remains_independent() 
         Look::Warning
     );
 }
+
+#[test]
+fn pending_native_cleanup_stays_visible_after_cancel_and_notice_expiry() {
+    use murmur::capture::MicrophoneState as Mic;
+    let mut indicator = Indicator::default();
+    indicator.message("Cancelled", 0);
+    for state in [
+        Mic::Preparing,
+        Mic::Starting,
+        Mic::Capturing,
+        Mic::Stopping,
+        Mic::CleaningUp,
+        Mic::Unconfirmed,
+    ] {
+        assert_eq!(
+            indicator.look_with_microphone(100_000, Phase::Idle, false, false, state),
+            Look::Notice,
+            "{state:?} cannot look idle while native ownership is unresolved"
+        );
+        assert!(microphone_notice(state, Phase::Idle).is_some());
+    }
+    assert_eq!(
+        indicator.look_with_microphone(100_001, Phase::Idle, false, false, Mic::Idle),
+        Look::Idle
+    );
+    assert_eq!(microphone_notice(Mic::Idle, Phase::Idle), None);
+}
+#[test]
+fn stopped_cleanup_and_unconfirmed_stop_have_distinct_honest_labels() {
+    use murmur::capture::MicrophoneState as Mic;
+    assert!(
+        microphone_notice(Mic::Stopping, Phase::Idle)
+            .unwrap()
+            .contains("may still be recording")
+    );
+    assert!(
+        microphone_notice(Mic::CleaningUp, Phase::Idle)
+            .unwrap()
+            .contains("stopped")
+    );
+    assert!(
+        microphone_notice(Mic::Unconfirmed, Phase::Idle)
+            .unwrap()
+            .contains("reopen Murmur")
+    );
+    assert_eq!(microphone_notice(Mic::Capturing, Phase::Recording), None);
+    assert_eq!(microphone_notice(Mic::Preparing, Phase::Recording), None);
+    assert_eq!(
+        Indicator::default().look_with_microphone(0, Phase::Recording, true, false, Mic::Capturing),
+        Look::Listening
+    );
+}
+
+#[test]
+fn unconfirmed_cleanup_pill_keeps_the_reopen_action_visible() {
+    let message =
+        microphone_notice(murmur::capture::MicrophoneState::Unconfirmed, Phase::Idle).unwrap();
+    let pill = shorten(message);
+    assert!(
+        pill.contains("reopen Murmur"),
+        "the persistent pill needs an actionable recovery: {pill}"
+    );
+    assert!(pill.contains("may still be recording"));
+    assert!(pill.chars().count() <= NOTICE_CHARS);
+}

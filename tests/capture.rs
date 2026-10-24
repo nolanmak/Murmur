@@ -1168,3 +1168,344 @@ async fn route_change_during_preparation_prevents_start_before_the_async_observe
     );
     assert_eq!(stops.load(Ordering::SeqCst), 1);
 }
+
+async fn quiet_provider() -> (DeepgramEndpoint, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let task = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = accept_async(socket).await.unwrap();
+        while let Some(Ok(message)) = ws.next().await {
+            if let Message::Text(text) = message
+                && text.contains("CloseStream")
+            {
+                let _ = ws.send(Message::text(r#"{"type":"Results","is_final":true,"speech_final":true,"channel":{"alternatives":[{"transcript":"Recovered fixture."}]}}"#)).await;
+                ws.send(Message::text(r#"{"type":"Metadata"}"#))
+                    .await
+                    .unwrap();
+                break;
+            }
+        }
+    });
+    (DeepgramEndpoint::loopback(port), task)
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn escape_during_native_stop_returns_before_cleanup_finishes() {
+    let (endpoint, server) = quiet_provider().await;
+    let (tap, control, _, _) = fixture(48000, 0);
+    let (release, gate) = std::sync::mpsc::channel();
+    let entered = Arc::new(AtomicBool::new(false));
+    let tap = Box::new(StopGateTap {
+        tap,
+        gate: CleanupGate {
+            gate: Some(gate),
+            entered: entered.clone(),
+        },
+    });
+    let attempt = tokio::spawn(murmur::capture::run_provider_with_startup(
+        tap,
+        murmur::capture::CaptureProvider::Deepgram {
+            key: "fixture".into(),
+            endpoint,
+        },
+        control.clone(),
+        Arc::new(AtomicBool::new(false)),
+        Default::default(),
+    ));
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !entered.load(Ordering::Acquire) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let began = std::time::Instant::now();
+    control.store(2, Ordering::Release);
+    let result = attempt.await.unwrap();
+    let elapsed = began.elapsed();
+    let _ = release.send(());
+    server.abort();
+    assert!(
+        elapsed < Duration::from_millis(400),
+        "Escape waited for native stop: {elapsed:?}"
+    );
+    assert!(result.unwrap_err().contains("Cancelled"));
+}
+
+struct SlowCleanup {
+    gate: std::sync::mpsc::Receiver<()>,
+    entered: Arc<AtomicBool>,
+}
+impl SlowCleanup {
+    fn wait(&self) {
+        self.entered.store(true, Ordering::Release);
+        let _ = self.gate.recv_timeout(Duration::from_secs(8));
+    }
+}
+struct SlowStopTap(Box<dyn AudioTap>, SlowCleanup);
+impl AudioTap for SlowStopTap {
+    fn id(&self) -> &TapId {
+        self.0.id()
+    }
+    fn format(&self) -> StreamFormat {
+        self.0.format()
+    }
+    fn format_is_authoritative(&self) -> bool {
+        self.0.format_is_authoritative()
+    }
+    fn start(&mut self, sink: Box<dyn FrameSink>) -> Result<StreamFormat, TapError> {
+        self.0.start(sink)
+    }
+    fn stop(&mut self) -> Result<(), TapError> {
+        self.1.wait();
+        self.0.stop()
+    }
+}
+struct SlowWatcher(SlowCleanup);
+impl fotw_audio::DeviceWatch for SlowWatcher {}
+impl Drop for SlowWatcher {
+    fn drop(&mut self) {
+        self.0.wait();
+    }
+}
+async fn wait_for_input_idle(startup: &murmur::capture::MicrophoneStartup) {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while startup.state() != murmur::capture::MicrophoneState::Idle {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+#[tokio::test]
+async fn stop_and_watcher_deadlines_preserve_pending_ownership_then_allow_fresh_speech() {
+    use murmur::capture::{InputPreparation, MicrophoneState as Mic, PreparedInput};
+    for watcher in [false, true] {
+        let (endpoint, server) = quiet_provider().await;
+        let (tap, control, _, stopped) = fixture(48000, 0);
+        let (release, gate) = std::sync::mpsc::channel();
+        let entered = Arc::new(AtomicBool::new(false));
+        let gate = SlowCleanup {
+            gate,
+            entered: entered.clone(),
+        };
+        let input = InputPreparation::new(move || {
+            Ok(if watcher {
+                PreparedInput::watched(tap, Box::new(SlowWatcher(gate)))
+            } else {
+                PreparedInput::new(Box::new(SlowStopTap(tap, gate)))
+            })
+        });
+        let startup = murmur::capture::MicrophoneStartup::default();
+        let changes = fotw_audio::device_change::DeviceChangeSignal::new();
+        let began = std::time::Instant::now();
+        let first = tokio::spawn(murmur::capture::run_provider_with_preparation(
+            input,
+            murmur::capture::CaptureProvider::Deepgram {
+                key: "fixture".into(),
+                endpoint,
+            },
+            control,
+            Arc::new(AtomicBool::new(false)),
+            Default::default(),
+            startup.clone(),
+            changes.clone(),
+            Default::default(),
+        ));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !entered.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        if watcher {
+            // Native Stop has succeeded, but its watcher destructor is wedged.
+            // A later route event must not be mistaken for capture-time loss.
+            changes.raise(fotw_audio::device_change::DeviceChangeKind::DefaultInput);
+        }
+        let error = first.await.unwrap().unwrap_err();
+        let elapsed = began.elapsed();
+        assert!(error.contains("cleanup timed out"), "{error}");
+        assert!(elapsed < murmur::capture::MIC_STOP_DEADLINE + Duration::from_secs(1));
+        assert_eq!(
+            startup.state(),
+            if watcher {
+                Mic::CleaningUp
+            } else {
+                Mic::Stopping
+            }
+        );
+        let calls = Arc::new(AtomicUsize::new(0));
+        let called = calls.clone();
+        let next = prepared_fixture(
+            InputPreparation::new(move || {
+                called.fetch_add(1, Ordering::SeqCst);
+                Err("must not open during cleanup".into())
+            }),
+            Arc::new(AtomicU8::new(0)),
+            startup.clone(),
+        )
+        .await;
+        assert!(next.unwrap_err().contains("still pending"));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        release.send(()).unwrap();
+        wait_for_input_idle(&startup).await;
+        assert_eq!(stopped.load(Ordering::SeqCst), 1);
+        server.abort();
+        let (endpoint, server) = quiet_provider().await;
+        let (tap, control, _, _) = fixture(48000, 0);
+        assert_eq!(
+            murmur::capture::run_provider_with_startup(
+                tap,
+                murmur::capture::CaptureProvider::Deepgram {
+                    key: "fixture".into(),
+                    endpoint
+                },
+                control,
+                Arc::new(AtomicBool::new(false)),
+                startup,
+            )
+            .await
+            .unwrap(),
+            "Recovered fixture."
+        );
+        server.await.unwrap();
+    }
+}
+#[tokio::test]
+async fn route_change_after_native_stop_during_watcher_cleanup_preserves_complete_speech() {
+    use murmur::capture::{InputPreparation, MicrophoneState as Mic, PreparedInput};
+    let (endpoint, server) = quiet_provider().await;
+    let (tap, control, _, _) = fixture(48000, 0);
+    let (release, gate) = std::sync::mpsc::channel();
+    let entered = Arc::new(AtomicBool::new(false));
+    let input = InputPreparation::new({
+        let entered = entered.clone();
+        move || {
+            Ok(PreparedInput::watched(
+                tap,
+                Box::new(SlowWatcher(SlowCleanup { gate, entered })),
+            ))
+        }
+    });
+    let startup = murmur::capture::MicrophoneStartup::default();
+    let changes = fotw_audio::device_change::DeviceChangeSignal::new();
+    let first = tokio::spawn(murmur::capture::run_provider_with_preparation(
+        input,
+        murmur::capture::CaptureProvider::Deepgram {
+            key: "fixture".into(),
+            endpoint,
+        },
+        control,
+        Arc::new(AtomicBool::new(false)),
+        Default::default(),
+        startup.clone(),
+        changes.clone(),
+        Default::default(),
+    ));
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !entered.load(Ordering::Acquire) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(startup.state(), Mic::CleaningUp);
+    changes.raise(fotw_audio::device_change::DeviceChangeKind::DefaultInput);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!first.is_finished(), "watcher cleanup still owns the input");
+    release.send(()).unwrap();
+    assert_eq!(first.await.unwrap().unwrap(), "Recovered fixture.");
+    assert_eq!(startup.state(), Mic::Idle);
+    server.await.unwrap();
+}
+struct StopFailureTap(Box<dyn AudioTap>);
+impl AudioTap for StopFailureTap {
+    fn id(&self) -> &TapId {
+        self.0.id()
+    }
+    fn format(&self) -> StreamFormat {
+        self.0.format()
+    }
+    fn format_is_authoritative(&self) -> bool {
+        self.0.format_is_authoritative()
+    }
+    fn start(&mut self, sink: Box<dyn FrameSink>) -> Result<StreamFormat, TapError> {
+        self.0.start(sink)
+    }
+    fn stop(&mut self) -> Result<(), TapError> {
+        Err(TapError::platform("fixture stop unconfirmed"))
+    }
+}
+#[tokio::test]
+async fn unconfirmed_stop_never_claims_idle_or_starts_another_input() {
+    let (endpoint, server) = quiet_provider().await;
+    let (tap, control, _, _) = fixture(48000, 0);
+    let startup = murmur::capture::MicrophoneStartup::default();
+    let error = murmur::capture::run_provider_with_startup(
+        Box::new(StopFailureTap(tap)),
+        murmur::capture::CaptureProvider::Deepgram {
+            key: "fixture".into(),
+            endpoint,
+        },
+        control,
+        Arc::new(AtomicBool::new(false)),
+        startup.clone(),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("stop unconfirmed"));
+    assert_eq!(
+        startup.state(),
+        murmur::capture::MicrophoneState::Unconfirmed
+    );
+    let next = prepared_fixture(
+        murmur::capture::InputPreparation::new(|| panic!("must not prepare another input")),
+        Arc::new(AtomicU8::new(0)),
+        startup,
+    )
+    .await;
+    assert!(next.unwrap_err().contains("still pending"));
+    server.abort();
+}
+#[tokio::test]
+async fn aborting_the_async_attempt_never_runs_a_native_destructor_on_its_executor() {
+    let (endpoint, server) = quiet_provider().await;
+    let (tap, control, _, stopped) = fixture(48000, 0);
+    let (release, gate) = std::sync::mpsc::channel();
+    let entered = Arc::new(AtomicBool::new(false));
+    let startup = murmur::capture::MicrophoneStartup::default();
+    let first = tokio::spawn(murmur::capture::run_provider_with_startup(
+        Box::new(StopGateTap {
+            tap,
+            gate: CleanupGate {
+                gate: Some(gate),
+                entered: entered.clone(),
+            },
+        }),
+        murmur::capture::CaptureProvider::Deepgram {
+            key: "fixture".into(),
+            endpoint,
+        },
+        control,
+        Arc::new(AtomicBool::new(false)),
+        startup.clone(),
+    ));
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !entered.load(Ordering::Acquire) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let began = std::time::Instant::now();
+    first.abort();
+    assert!(first.await.unwrap_err().is_cancelled());
+    assert!(began.elapsed() < Duration::from_millis(400));
+    assert_eq!(startup.state(), murmur::capture::MicrophoneState::Stopping);
+    release.send(()).unwrap();
+    wait_for_input_idle(&startup).await;
+    assert_eq!(stopped.load(Ordering::SeqCst), 1);
+    server.abort();
+}
