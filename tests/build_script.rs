@@ -228,3 +228,31 @@ fn first_build_installs_without_a_previous_bundle() {
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(binary(&fixture.installed()), "new build");
 }
+
+#[test]
+fn failed_install_move_restores_previous_bundle() {
+    let fixture = Fixture::new();
+    let fake_mv = fixture.path("bin/mv");
+    std::fs::write(
+        &fake_mv,
+        "#!/bin/sh\ncase \"$1\" in */stage/Murmur.app) exit 1;; esac\nexec /bin/mv \"$@\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake_mv, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let output = fixture.run(&[("MURMUR_SIGN_IDENTITY", "Team Dev")]);
+    assert_previous_bundle_kept(&fixture, &output);
+}
+
+#[test]
+fn installation_does_not_delete_an_unrelated_previous_path() {
+    let fixture = Fixture::new();
+    let unrelated = fixture.path("Murmur.app.previous");
+    std::fs::create_dir(&unrelated).unwrap();
+    std::fs::write(unrelated.join("keep"), "unrelated user file").unwrap();
+    let output = fixture.run(&[("MURMUR_SIGN_IDENTITY", "Team Dev")]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        std::fs::read_to_string(unrelated.join("keep")).unwrap(),
+        "unrelated user file"
+    );
+}
