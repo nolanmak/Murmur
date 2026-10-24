@@ -590,6 +590,13 @@ impl Pill {
         }
     }
 }
+#[derive(Clone, Copy)]
+enum LoginRetry {
+    // Re-read the saved preference; startup may not have been able to inspect it.
+    Sync,
+    SetEnabled(bool),
+}
+
 struct Shell {
     core: Dictation,
     control: Arc<AtomicU8>,
@@ -601,6 +608,8 @@ struct Shell {
     completed: mpsc::Sender<Completion>,
     _tray: TrayIcon,
     status: MenuItem,
+    speech: crate::speech::Selection,
+    speech_toggle: MenuItem,
     pill: Pill,
     indicator: Indicator,
     warning: Option<&'static str>,
@@ -611,11 +620,16 @@ struct Shell {
     smoke_started: bool,
     launched: Instant,
     receiving: Arc<AtomicBool>,
+    microphone_startup: crate::capture::MicrophoneStartup,
     remote_mode: bool,
     recording_remote: bool,
     recording_remote_target: Option<RustDeskWindow>,
     remote_toggle: MenuItem,
     remote_profile: MenuItem,
+    /// Present only when launched from an app bundle; `cargo run` never installs.
+    login: Option<(crate::login_item::LoginItem, std::path::PathBuf)>,
+    login_toggle: MenuItem,
+    login_retry: Option<LoginRetry>,
     profile: crate::remote::Profile,
     review: crate::remote_review::Review,
     clipboard_lease: crate::remote_clipboard::Lease,
@@ -633,6 +647,16 @@ impl Shell {
             cfg!(debug_assertions) && std::env::args().any(|arg| arg == "--local-fixture");
         let menu = Menu::new();
         let status = MenuItem::with_id("status", "Hold Control to dictate", false, None);
+        let speech = crate::speech::Selection::load(crate::speech::Settings::path());
+        if speech.error().is_some() {
+            status.set_text("Speech settings invalid — choose Local Whisper in the Transcription menu to repair");
+        }
+        let speech_toggle = MenuItem::with_id(
+            "speech_provider",
+            speech_label(speech.provider()),
+            true,
+            None,
+        );
         let cancel = MenuItem::with_id("cancel", "Cancel dictation (Esc)", true, None);
         let start = MenuItem::with_id("start", "Start dictation", true, None);
         let stop = MenuItem::with_id("stop", "Stop dictation", true, None);
@@ -644,6 +668,33 @@ impl Shell {
         );
         let setup = MenuItem::with_id("setup", "Set up permissions", true, None);
         let quit = MenuItem::with_id("quit", "Quit Murmur", true, None);
+        let login = std::env::current_exe()
+            .ok()
+            .and_then(|exe| crate::login_item::app_bundle(&exe))
+            .zip(crate::login_item::LoginItem::for_user())
+            .map(|(bundle, item)| (item, bundle));
+        let login_retry = login.as_ref().and_then(|(item, bundle)| {
+            if let Err(error) = item.sync(bundle) {
+                eprintln!("open at login: cannot update LaunchAgent: {error}");
+                Some(LoginRetry::Sync)
+            } else {
+                None
+            }
+        });
+        let login_toggle = MenuItem::with_id(
+            "open_at_login",
+            if login_retry.is_some() {
+                "Open at login: Setup failed — click to retry"
+            } else {
+                login_label(
+                    login
+                        .as_ref()
+                        .is_some_and(|(item, bundle)| item.is_enabled(bundle)),
+                )
+            },
+            login.is_some(),
+            None,
+        );
         let remote_toggle = MenuItem::with_id("remote_mode", "Remote review mode: Off", true, None);
         if remote_fixture {
             remote_toggle.set_text("Remote review mode: On");
@@ -697,6 +748,7 @@ impl Shell {
         );
         for item in [
             &status,
+            &speech_toggle,
             &start,
             &stop,
             &cancel,
@@ -706,6 +758,7 @@ impl Shell {
             &remote_review,
             &restore,
             &local_restore,
+            &login_toggle,
             &setup,
             &quit,
         ] {
@@ -746,6 +799,8 @@ impl Shell {
             completed,
             _tray: tray,
             status,
+            speech,
+            speech_toggle,
             pill,
             indicator: Indicator::default(),
             warning: None,
@@ -762,11 +817,15 @@ impl Shell {
             smoke_started: false,
             launched: Instant::now(),
             receiving: Arc::new(AtomicBool::new(false)),
+            microphone_startup: Default::default(),
             remote_mode: remote_fixture,
             recording_remote: remote_fixture,
             recording_remote_target: None,
             remote_toggle,
             remote_profile,
+            login,
+            login_toggle,
+            login_retry,
             profile: crate::remote::Profile::Mac,
             review: Default::default(),
             clipboard_lease: Default::default(),
@@ -806,6 +865,9 @@ impl Shell {
         }
     }
     fn ready(&self) -> &'static str {
+        if self.speech.error().is_some() {
+            return "Speech settings invalid — choose Local Whisper in the Transcription menu to repair";
+        }
         match self.warning {
             Some(warning) => warning,
             None if self.remote_mode => "Hold Control to record for remote review",
@@ -821,6 +883,11 @@ impl Shell {
         }
     }
     fn start(&mut self) {
+        if self.speech.error().is_some() {
+            self.cancel();
+            self.show(self.ready());
+            return;
+        }
         self.recording_remote_target = RustDeskWindow::selected();
         self.recording_remote = crate::remote_review::recording_destination(
             self.remote_mode,
@@ -850,25 +917,18 @@ impl Shell {
         let completed = self.completed.clone();
         let generation = self.core.generation();
         let receiving = self.receiving.clone();
+        let startup = self.microphone_startup.clone();
+        let speech = self.speech.clone();
         std::thread::spawn(move || {
             let result = (|| {
-                let credentials = crate::config::load()?;
-                eprintln!("credentials loaded via {}", credentials.source);
+                let provider = speech.capture_provider(crate::config::load)?;
                 let platform = fotw_audio::platform::macos::MacOsPlatform::new();
                 let tap = platform
                     .open_mic(&DeviceId::new("default"), FormatRequest::any())
                     .map_err(|_| "No microphone available".to_string())?;
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|_| "Cannot start audio runtime".to_string())?;
-                runtime.block_on(crate::capture::run_observed(
-                    tap,
-                    credentials.key.expose().into(),
-                    control,
-                    fotw_stt::DeepgramEndpoint::production(),
-                    receiving,
-                ))
+                crate::capture::block_on_detached(crate::capture::run_provider_with_startup(
+                    tap, provider, control, receiving, startup,
+                ))?
             })();
             let _ = completed.send(Completion { generation, result });
         });
@@ -986,6 +1046,24 @@ impl Shell {
         }
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             match event.id.as_ref() {
+                "speech_provider" => {
+                    let provider = match self.speech.provider() {
+                        Some(crate::speech::Provider::LocalWhisper) => {
+                            crate::speech::Provider::Deepgram
+                        }
+                        _ => crate::speech::Provider::LocalWhisper,
+                    };
+                    match crate::speech::Settings::path()
+                        .and_then(|path| self.speech.choose(provider, &path))
+                    {
+                        Ok(()) => {
+                            self.speech_toggle
+                                .set_text(speech_label(self.speech.provider()));
+                            self.show("Transcription provider saved for the next recording");
+                        }
+                        Err(error) => self.show(&error),
+                    }
+                }
                 "remote_mode" => {
                     if self.local_lease.pending() || self.clipboard_lease.pending() {
                         self.show("Restore previous clipboard before changing modes");
@@ -1016,6 +1094,31 @@ impl Shell {
                         "Remote paste shortcut: {}",
                         profile_name(self.profile)
                     ));
+                }
+                "open_at_login" => {
+                    if let Some((item, bundle)) = &self.login {
+                        let action = self
+                            .login_retry
+                            .unwrap_or_else(|| LoginRetry::SetEnabled(!item.is_enabled(bundle)));
+                        let result = match action {
+                            LoginRetry::Sync => item.sync(bundle).map(|_| ()),
+                            LoginRetry::SetEnabled(enabled) => item.set_enabled(enabled, bundle),
+                        };
+                        match result {
+                            Ok(()) => {
+                                self.login_retry = None;
+                                self.login_toggle
+                                    .set_text(login_label(item.is_enabled(bundle)));
+                            }
+                            Err(error) => {
+                                eprintln!("open at login: cannot update LaunchAgent: {error}");
+                                self.login_retry = Some(action);
+                                self.login_toggle
+                                    .set_text("Open at login: Setup failed — click to retry");
+                                self.show("Open at login failed — check Library/LaunchAgents and Murmur Application Support permissions, then retry");
+                            }
+                        }
+                    }
                 }
                 "remote_review" if self.core.phase == Phase::Idle && self.recording_remote => {
                     self.review_remote()
@@ -1159,6 +1262,13 @@ impl Shell {
             self.status(self.ready());
         }
         self.pill.render(look, now);
+    }
+}
+fn login_label(enabled: bool) -> &'static str {
+    if enabled {
+        "Open at login: On"
+    } else {
+        "Open at login: Off"
     }
 }
 fn profile_name(profile: crate::remote::Profile) -> &'static str {
@@ -1512,4 +1622,14 @@ pub fn run() -> Result<(), String> {
         unsafe { NSTimer::scheduledTimerWithTimeInterval_repeats_block(0.02, true, &block) };
     app.run();
     Ok(())
+}
+
+fn speech_label(provider: Option<&crate::speech::Provider>) -> &'static str {
+    match provider {
+        Some(crate::speech::Provider::Deepgram) => "Transcription: Deepgram (click for local)",
+        Some(crate::speech::Provider::LocalWhisper) => {
+            "Transcription: Local Whisper (click for cloud)"
+        }
+        None => "Transcription: invalid settings — click to select Local Whisper",
+    }
 }
