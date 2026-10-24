@@ -78,8 +78,8 @@ cargo test --locked --test vocabulary --test streaming --test fallback --test ca
 All test audio/text and credentials are synthetic.
 
 This is partial delivery of #9. Explicit language selection and client-side
-preflight/binding are implemented below. Managed multilingual runtime support
-and language/vocabulary editing UI remain open.
+preflight/binding and the managed language adapter are implemented below.
+Language/vocabulary editing UI and real speech acceptance remain open.
 Real-model term-recall comparisons (#118), native dictation/insertion checks and
 full vocabulary editing UI remain unverified. Do not claim recognition-quality
 improvement from transport tests. Optional AI cleanup (#8) is separate and has
@@ -100,12 +100,13 @@ parameter and recognition hints from the utterance snapshot. No alternate cloud
 model or language is silently substituted.
 
 Local modes check the engine's language/model capabilities before recording.
-Plain whisper.cpp 1.9.1, including the current managed helper, reports readiness
-only. It remains usable in English; other selected languages are refused with
-an explanation before capture, even if the filename suggests a multilingual
-model. Supporting managed multilingual inference still requires a runtime
-implementation of the [capability contract](local-language-contract.md).
-Installing a multilingual file alone does not enable it yet.
+The managed helper reports the loaded model's languages and enforces the
+[capability contract](local-language-contract.md). Its default base.en model
+supports English only; explicitly import a multilingual GGML model while stopped
+and restart the helper before selecting another supported language. No model is
+downloaded during capture. Plain external whisper.cpp servers report readiness
+only, so non-English requests to those endpoints are refused before capture,
+even if the filename suggests a multilingual model.
 
 For a capability-aware adapter, the prepared endpoint carries the selected
 language, model SHA and serving instance ID through capture and fallback.
@@ -121,4 +122,6 @@ attempts and local fallback, and refusal before microphone start for unknown
 cloud codes and unverifiable local/fallback language. Loopback fixtures verify
 bounded capability parsing, unsupported/malformed capabilities, explicit local
 wire settings, and rejection of changed/missing runtime/model identities. These
-are transport/lifecycle tests, not a real multilingual transcription evaluation.
+are transport/lifecycle tests. The managed adapter additionally passed real-engine
+synthetic English/French smoke checks; human multilingual accuracy remains a
+separate evaluation.

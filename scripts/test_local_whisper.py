@@ -1,5 +1,5 @@
 import hashlib, json, pathlib, socket, subprocess, sys, tempfile, unittest
-import importlib.util, io, http.server, threading, os, struct
+import importlib.util, io, http.server, threading, os, struct, http.client, wave, time
 from unittest.mock import Mock, patch
 
 spec = importlib.util.spec_from_file_location(
@@ -8,6 +8,36 @@ spec = importlib.util.spec_from_file_location(
 runtime = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runtime)
 SCRIPT = pathlib.Path(__file__).with_name("local-whisper.py")
+
+
+FIXTURE_ENGINE = r"""
+import argparse, http.server, socketserver, json, pathlib, time
+p = argparse.ArgumentParser()
+p.add_argument("--port", type=int)
+p.add_argument("-m")
+p.add_argument("--request-path", default="")
+a, _ = p.parse_known_args()
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200 if self.path == a.request_path + "/health" else 404)
+        self.end_headers()
+        self.wfile.write(b'{"status":"ok"}')
+    def do_POST(self):
+        data = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        if self.path != a.request_path + "/inference":
+            self.send_response(404); self.end_headers(); self.wfile.write(b'{}'); return
+        assert b'name="translate"\r\n\r\nfalse' in data
+        assert b'name="detect_language"\r\n\r\nfalse' in data
+        language = data.split(b'name="language"\r\n\r\n')[1].split(b'\r\n')[0].decode()
+        state = pathlib.Path(a.m).parent.parent
+        (state / "inference-entered").touch()
+        while (state / "hold-inference").exists(): time.sleep(0.01)
+        body = json.dumps({"text":"fixture " + language}).encode()
+        self.send_response(200); self.send_header("Content-Length", str(len(body)))
+        self.end_headers(); self.wfile.write(body)
+    def log_message(self, *args): pass
+socketserver.ThreadingTCPServer(("127.0.0.1", a.port), Handler).serve_forever()
+"""
 
 
 def model_fixture(n_vocab=51864):
@@ -48,14 +78,192 @@ class RuntimeTests(unittest.TestCase):
         r = self.run_cli("import-model", str(self.model), "--sha256", self.digest)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
-    def test_loopback_supervisor_startup_never_resolves_a_hostname(self):
+    def start_fixture_engine(self, multilingual=False):
+        if multilingual:
+            self.model.write_bytes(model_fixture(51865))
+            self.digest = hashlib.sha256(self.model.read_bytes()).hexdigest()
+        self.install()
+        fake = self.root / "fixture engine"
+        fake.write_text("#!" + sys.executable + "\n" + FIXTURE_ENGINE)
+        fake.chmod(0o755)
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        result = self.run_cli("start", "--binary", str(fake), "--port", str(port), "--timeout", "30")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return port
+
+    def health(self, port):
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+        try:
+            conn.request("GET", "/health")
+            response = conn.getresponse()
+            self.assertEqual(response.status, 200)
+            return json.loads(response.read())
+        finally:
+            conn.close()
+
+    def infer(self, port, caps, language="en", extra=(), path="/inference"):
+        audio = io.BytesIO()
+        with wave.open(audio, "wb") as wav:
+            wav.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+            wav.writeframes(struct.pack("<160h", *([1234] * 160)))
+        fields = [("file", audio.getvalue()), ("language", language.encode()),
+                  ("response_format", b"json"), *extra]
+        body = b""
+        for name, value in fields:
+            body += ("--fixture-boundary\r\nContent-Disposition: form-data; name=\"" + name
+                     + ("\"; filename=\"audio.wav" if name == "file" else "")
+                     + "\"\r\n\r\n").encode() + value + b"\r\n"
+        body += b"--fixture-boundary--\r\n"
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+        try:
+            conn.request("POST", path, body, {"Content-Type":"multipart/form-data; boundary=fixture-boundary",
+                "X-Murmur-Instance":caps["instance_id"], "X-Murmur-Model":caps["model_sha256"]})
+            response = conn.getresponse()
+            return response.status, dict(response.getheaders()), json.loads(response.read())
+        finally:
+            conn.close()
+
+    def test_managed_runtime_advertises_and_enforces_loaded_model_language(self):
+        port = self.start_fixture_engine(multilingual=True)
+        health = self.health(port)
+        self.assertIn("murmur_capabilities", health)
+        caps = health["murmur_capabilities"]
+        self.assertEqual(caps["model_sha256"], self.digest)
+        self.assertEqual(json.loads(self.run_cli("status").stdout)["murmur_capabilities"], caps)
+        self.assertEqual(len(caps["languages"]), 99)
+        self.assertIn("fr", caps["languages"])
+        self.assertNotIn("yue", caps["languages"])
+        status, headers, body = self.infer(port, caps, "fr")
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["text"], "fixture fr")
+        self.assertEqual(headers["X-Murmur-Instance"], caps["instance_id"])
+        self.assertEqual(headers["X-Murmur-Model"], self.digest)
+
+    def test_gateway_refuses_language_binding_and_parameter_changes_without_poisoning_engine(self):
+        port = self.start_fixture_engine()
+        caps = self.health(port)["murmur_capabilities"]
+        self.assertEqual(caps["languages"], ["en"])
+        entered = self.root / "state folder/inference-entered"
+        for key in ("instance_id", "model_sha256"):
+            changed = dict(caps, **{key: "0" * 64})
+            self.assertEqual(self.infer(port, changed)[0], 409)
+        self.assertEqual(self.infer(port, caps, "fr")[0], 422)
+        self.assertEqual(self.infer(port, caps, path="/load")[0], 404)
+        self.assertEqual(self.infer(port, caps, extra=[("language", b"fr")])[0], 400)
+        self.assertEqual(self.infer(port, caps, extra=[("translate", b"true")])[0], 422)
+        self.assertEqual(self.infer(port, caps, extra=[("detect_language", b"true")])[0], 422)
+        self.assertEqual(self.infer(port, caps, extra=[("prompt", b"private fixture")])[0], 400)
+        self.assertFalse(entered.exists(), "rejected requests must not reach inference")
+        self.assertEqual(self.infer(port, caps)[0], 200)
+        self.assertTrue(entered.exists())
+        self.assertEqual(self.health(port)["murmur_capabilities"], caps)
+
+    def test_gateway_restart_changes_instance_and_refuses_old_preflight(self):
+        port = self.start_fixture_engine()
+        old = self.health(port)["murmur_capabilities"]
+        self.assertEqual(self.run_cli("stop").returncode, 0)
+        port = self.start_fixture_engine(multilingual=True)
+        new = self.health(port)["murmur_capabilities"]
+        self.assertNotEqual(new["instance_id"], old["instance_id"])
+        self.assertNotEqual(new["model_sha256"], old["model_sha256"])
+        self.assertEqual(self.infer(port, old)[0], 409)
+        self.assertEqual(self.infer(port, new, "fr")[0], 200)
+
+    def test_gateway_busy_refuses_queue_and_stop_discards_inflight_result(self):
+        port = self.start_fixture_engine()
+        caps = self.health(port)["murmur_capabilities"]
         state = self.root / "state folder"
-        state.mkdir()
+        (state / "hold-inference").touch()
+        outcomes = []
+        def infer():
+            try:
+                outcomes.append(self.infer(port, caps)[0])
+            except (OSError, http.client.HTTPException):
+                outcomes.append("disconnected")
+        worker = threading.Thread(target=infer)
+        worker.start()
+        deadline = time.monotonic() + 3
+        while not (state / "inference-entered").exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue((state / "inference-entered").exists())
+        self.assertEqual(self.infer(port, caps)[0], 429)
+        self.assertEqual(self.health(port)["murmur_capabilities"], caps)
+        stopped_at = time.monotonic()
+        self.assertEqual(self.run_cli("stop").returncode, 0)
+        self.assertLess(time.monotonic() - stopped_at, 7)
+        worker.join(timeout=4)
+        self.assertFalse(worker.is_alive())
+        self.assertNotIn(200, outcomes)
+        self.assertFalse((state / "runtime.json").exists())
+
+    def test_gateway_rejects_oversized_request_before_receiving_audio(self):
+        port = self.start_fixture_engine()
+        caps = self.health(port)["murmur_capabilities"]
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+        try:
+            conn.putrequest("POST", "/inference")
+            conn.putheader("X-Murmur-Instance", caps["instance_id"])
+            conn.putheader("X-Murmur-Model", caps["model_sha256"])
+            conn.putheader("Content-Length", str(4 * 1024 * 1024 + 1))
+            conn.endheaders()
+            response = conn.getresponse()
+            self.assertEqual(response.status, 413)
+            response.read()
+        finally:
+            conn.close()
+        self.assertFalse((self.root / "state folder/inference-entered").exists())
+
+    def test_gateway_retires_engine_after_timeout_oversize_or_malformed_response(self):
+        for mode in ("slow", "oversize", "malformed"):
+            calls = []
+            class Backend(http.server.BaseHTTPRequestHandler):
+                def do_POST(self):
+                    calls.append(self.path)
+                    self.rfile.read(int(self.headers["Content-Length"]))
+                    body = b"x" * (1024 * 1024 + 1) if mode == "oversize" else b"not json"
+                    self.send_response(200)
+                    self.send_header("Content-Length", "100" if mode == "slow" else str(len(body)))
+                    self.end_headers()
+                    try:
+                        if mode == "slow":
+                            for _ in range(20):
+                                time.sleep(0.05)
+                                self.wfile.write(b"x")
+                                self.wfile.flush()
+                        else:
+                            self.wfile.write(body)
+                    except OSError:
+                        pass
+                def log_message(self, *args): pass
+            backend = runtime.LoopbackHTTPServer(("127.0.0.1", 0), Backend)
+            thread = threading.Thread(target=backend.serve_forever, kwargs={"poll_interval":0.01}, daemon=True)
+            thread.start()
+            gateway = runtime.Gateway(0, backend.server_port, "/private", {"language_count":1}, "b" * 64, lambda: True)
+            try:
+                with patch.dict(runtime.Gateway.transcribe.__globals__, {"INFERENCE_SECONDS":0.2}):
+                    start = time.monotonic()
+                    status, _, _ = self.infer(gateway.server.server_port, gateway.capabilities)
+                    self.assertIn(status, (502, 504))
+                    self.assertLess(time.monotonic() - start, 2)
+                self.assertTrue(gateway.failed.is_set())
+                self.assertEqual(self.infer(gateway.server.server_port, gateway.capabilities)[0], 503)
+                self.assertEqual(calls, ["/private/inference"])
+            finally:
+                gateway.close()
+                backend.shutdown()
+                backend.server_close()
+                thread.join(timeout=2)
+
+    def test_loopback_supervisor_startup_never_resolves_a_hostname(self):
+        self.install()
+        state = self.root / "state folder"
         child = Mock()
         child.poll.return_value = 0
         with patch.object(socket, "getfqdn", side_effect=AssertionError("DNS must not be needed")):
             with patch.object(runtime.subprocess, "Popen", return_value=child):
-                runtime.supervise(state, "fixture-engine", 17863, "a" * 64, 0.5)
+                runtime.supervise(state, "fixture-engine", 0, "a" * 64, 0.5)
         self.assertFalse((state / "runtime.json").exists())
 
     def test_interrupted_import_preserves_selection(self):

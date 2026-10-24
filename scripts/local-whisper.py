@@ -21,6 +21,8 @@ import tempfile
 import time
 import urllib.request
 
+from whisper_gateway import Gateway
+
 REVISION = "5359861c739e955e79d9a303bcbc70fb988958b1"
 MODEL_SHA256 = "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002"
 MODEL_URL = (
@@ -136,9 +138,9 @@ def control(record, action):
         return None
 
 
-def ready(port):
+def ready(port, prefix=""):
     try:
-        return request_local(f"http://127.0.0.1:{port}/health").get("status") == "ok"
+        return request_local(f"http://127.0.0.1:{port}{prefix}/health").get("status") == "ok"
     except (OSError, ValueError):
         return False
 
@@ -177,6 +179,26 @@ class LoopbackHTTPServer(http.server.HTTPServer):
 def supervise(state, binary, port, token, timeout):
     child = None
     stopping = False
+    model = (state / "model.bin").resolve(strict=True)
+    model_sha256 = digest(model)
+    if model_sha256 != model.stem:
+        raise ValueError("corrupt model before engine startup")
+    metadata = model_metadata(model)
+    # Upstream has no inherited-listener option. A random private port/path,
+    # owned child liveness and readiness prevent adopting a public endpoint.
+    engine_port = 0
+    prefix = "/" + secrets.token_hex(24)
+    gateway = Gateway(port, engine_port, prefix, metadata, model_sha256,
+                      lambda: bool(child and child.poll() is None and ready(engine_port, prefix)))
+    port = gateway.server.server_port
+    try:
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            engine_port = probe.getsockname()[1]
+        gateway.engine_port = engine_port
+    except BaseException:
+        gateway.close()
+        raise
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -186,9 +208,11 @@ def supervise(state, binary, port, token, timeout):
                 return
             if self.path == "/stop":
                 stopping = True
+                gateway.closed.set()
             elif self.path != "/status":
                 self.send_error(404)
                 return
+            healthy = gateway.is_ready()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -196,7 +220,8 @@ def supervise(state, binary, port, token, timeout):
                 json.dumps(
                     {
                         "token": token,
-                        "ready": bool(child and child.poll() is None and ready(port)),
+                        "ready": healthy,
+                        "murmur_capabilities": gateway.capabilities if healthy else None,
                         "url": f"http://127.0.0.1:{port}",
                     }
                 ).encode()
@@ -205,7 +230,11 @@ def supervise(state, binary, port, token, timeout):
         def log_message(self, *args):
             pass
 
-    server = LoopbackHTTPServer(("127.0.0.1", 0), Handler)
+    try:
+        server = LoopbackHTTPServer(("127.0.0.1", 0), Handler)
+    except BaseException:
+        gateway.close()
+        raise
     server.timeout = 0.2
     record = {"control_port": server.server_port, "token": token, "port": port}
     try:
@@ -215,9 +244,13 @@ def supervise(state, binary, port, token, timeout):
                 "--host",
                 "127.0.0.1",
                 "--port",
-                str(port),
+                str(engine_port),
+                "--request-path",
+                prefix,
+                "--public",
+                str(state / "unused-public"),
                 "-m",
-                str(state / "model.bin"),
+                str(model),
             ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -226,16 +259,13 @@ def supervise(state, binary, port, token, timeout):
         write_json(state / "runtime.json", record)
         deadline = time.monotonic() + timeout
         became_ready = False
-        while not stopping and child.poll() is None:
-            became_ready = became_ready or ready(port)
+        while not stopping and not gateway.failed.is_set() and child.poll() is None:
+            became_ready = became_ready or gateway.is_ready()
             if not became_ready and time.monotonic() >= deadline:
                 break
             server.handle_request()
     finally:
-        write_json(
-            state / "lifecycle.json",
-            {"reason": "stopped" if stopping else "engine_exited_or_unready"},
-        )
+        gateway.closed.set()
         if child and child.poll() is None:
             child.terminate()
             try:
@@ -244,8 +274,13 @@ def supervise(state, binary, port, token, timeout):
                 child.kill()
                 child.wait()
         server.server_close()
+        gateway.close()
         if read_json(state / "runtime.json").get("token") == token:
             (state / "runtime.json").unlink(missing_ok=True)
+        write_json(
+            state / "lifecycle.json",
+            {"reason": "stopped" if stopping else "engine_exited_or_unready"},
+        )
 
 
 def main():
