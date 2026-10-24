@@ -688,6 +688,7 @@ async fn captured_utterance_uses_one_profile_and_expands_only_the_winning_final(
     let path = root.path().join("vocabulary.json");
     let profile = Profile {
         version: 1,
+        language: "es".into(),
         recognition_hints: vec!["Project Acorn".into()],
         snippets: vec![Snippet {
             name: "signature".into(),
@@ -704,12 +705,14 @@ async fn captured_utterance_uses_one_profile_and_expands_only_the_winning_final(
         let mut ws = accept_hdr_async(socket, |req: &Request, res: Response| {
             let uri = req.uri().to_string();
             assert!(uri.contains("keyterm=Project%20Acorn"));
+            assert!(uri.contains("language=es"), "{uri}");
             assert!(!uri.contains("Private"));
             Ok(res)
         })
         .await
         .unwrap();
         let mut updated = profile;
+        updated.language = "fr".into();
         updated.snippets[0].text = "New profile value".into();
         updated.save(&changed).unwrap();
         while let Some(Ok(message)) = ws.next().await {
@@ -773,4 +776,60 @@ async fn invalid_profile_is_refused_before_microphone_start() {
     .await;
     assert!(result.unwrap_err().contains("schema version"));
     assert_eq!(started.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn unsupported_language_never_opens_microphone_for_cloud_local_or_fallback() {
+    use murmur::capture::CaptureProvider;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    for mode in 0..3 {
+        let (tap, control, started, _) = fixture(48000, 0);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            let n = socket.read(&mut request).await.unwrap();
+            assert!(request[..n].starts_with(b"GET /health "));
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"status\":\"ok\"}").await.unwrap();
+        });
+        let local = murmur::local_stt::LocalEndpoint::new(&format!("http://{address}")).unwrap();
+        let cloud = DeepgramEndpoint::loopback(1);
+        let provider = match mode {
+            0 => CaptureProvider::Deepgram {
+                key: "fixture".into(),
+                endpoint: cloud,
+            },
+            1 => CaptureProvider::Local(local),
+            _ => CaptureProvider::DeepgramThenLocal {
+                key: "fixture".into(),
+                endpoint: cloud,
+                local,
+            },
+        };
+        let profile = murmur::vocabulary::Profile {
+            language: if mode == 0 { "zz" } else { "fr" }.into(),
+            ..Default::default()
+        };
+        let error = murmur::capture::run_provider_with_vocabulary(
+            tap,
+            provider,
+            control,
+            Arc::new(AtomicBool::new(false)),
+            murmur::fallback::Progress::default(),
+            murmur::capture::MicrophoneStartup::default(),
+            fotw_audio::device_change::DeviceChangeSignal::new(),
+            profile,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("language"), "{error}");
+        assert_eq!(started.load(Ordering::SeqCst), 0);
+        if mode == 0 {
+            assert!(!server.is_finished());
+            server.abort();
+        } else {
+            server.await.unwrap();
+        }
+    }
 }

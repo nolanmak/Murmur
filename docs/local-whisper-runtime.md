@@ -47,8 +47,9 @@ following [whisper.cpp v1.9.1 model loading and vocabulary metadata](https://git
 This is file metadata, **not an attestation of the model loaded by the HTTP
 server**. It must not authorize a language choice for an arbitrary endpoint.
 The upstream server health response has no language capabilities and its load
-route can replace the running model. A runtime-bound capability contract and
-pre-capture language selection remain open; do not infer either from filenames.
+route can replace the running model. The client now enforces a [language capability contract](local-language-contract.md)
+and refuses unverifiable non-English selections before capture. The managed
+runtime still needs to implement that contract; do not infer it from filenames.
 
 Behavioral RED: the checksum-valid non-model import test returned success and
 replaced the selection; status lacked model metadata. GREEN: 13 lifecycle tests

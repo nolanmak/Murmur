@@ -106,7 +106,7 @@ pub async fn transcribe_observed(
 )]
 pub async fn transcribe_with_vocabulary(
     key: String,
-    mut audio: mpsc::Receiver<Vec<i16>>,
+    audio: mpsc::Receiver<Vec<i16>>,
     cloud: fotw_stt::DeepgramEndpoint,
     local: crate::local_stt::LocalEndpoint,
     control: Arc<AtomicU8>,
@@ -114,18 +114,47 @@ pub async fn transcribe_with_vocabulary(
     progress: Progress,
     hints: &[String],
 ) -> Result<String, String> {
-    crate::vocabulary::validate_hints(hints)?;
+    let profile = crate::vocabulary::Profile {
+        recognition_hints: hints.to_vec(),
+        ..Default::default()
+    };
+    transcribe_with_profile(
+        key, audio, cloud, local, control, deadlines, progress, &profile,
+    )
+    .await
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "attempt-owned transport and immutable recognition profile"
+)]
+pub async fn transcribe_with_profile(
+    key: String,
+    mut audio: mpsc::Receiver<Vec<i16>>,
+    cloud: fotw_stt::DeepgramEndpoint,
+    local: crate::local_stt::LocalEndpoint,
+    control: Arc<AtomicU8>,
+    deadlines: Deadlines,
+    progress: Progress,
+    profile: &crate::vocabulary::Profile,
+) -> Result<String, String> {
+    profile.validate()?;
+    crate::language::validate_deepgram(&profile.language)?;
+    if local.language() != profile.language {
+        return Err("Local language preflight does not match this utterance".into());
+    }
+    let hints = &profile.recognition_hints;
     progress.set(Stage::Cloud);
     use std::sync::atomic::Ordering;
     let (tx, rx) = mpsc::channel(1024);
     let mut sender = Some(tx);
-    let mut remote = Some(Box::pin(crate::streaming::transcribe_with_vocabulary(
+    let mut remote = Some(Box::pin(crate::streaming::transcribe_with_profile(
         key.clone(),
         rx,
         cloud.clone(),
         deadlines.connect,
         deadlines.cloud_final,
-        hints,
+        profile,
     )));
     let mut pcm = Vec::new();
     let mut ended = false;
@@ -157,8 +186,8 @@ pub async fn transcribe_with_vocabulary(
                     for chunk in pcm.chunks(16_000) {
                         tx.try_send(chunk.to_vec()).map_err(|_| "Cannot replay bounded dictation")?;
                     }
-                    remote = Some(Box::pin(crate::streaming::transcribe_with_vocabulary(
-                        key.clone(), rx, cloud.clone(), deadlines.connect, deadlines.cloud_final, hints,
+                    remote = Some(Box::pin(crate::streaming::transcribe_with_profile(
+                        key.clone(), rx, cloud.clone(), deadlines.connect, deadlines.cloud_final, profile,
                     )));
                     sender = if ended { None } else { Some(tx) };
                 }

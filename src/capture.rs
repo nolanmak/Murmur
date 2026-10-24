@@ -293,7 +293,7 @@ pub async fn run_provider_with_events(
 )]
 pub async fn run_provider_with_vocabulary(
     tap: Box<dyn AudioTap>,
-    provider: CaptureProvider,
+    mut provider: CaptureProvider,
     control: Arc<AtomicU8>,
     receiving: Arc<AtomicBool>,
     progress: crate::fallback::Progress,
@@ -308,12 +308,17 @@ pub async fn run_provider_with_vocabulary(
     if let Some(error) = device_failure(&changes) {
         return Err(error.into());
     }
-    match &provider {
+    if !matches!(&provider, CaptureProvider::Local(_)) {
+        crate::language::validate_deepgram(&profile.language)?;
+    }
+    match &mut provider {
         CaptureProvider::Local(endpoint)
         | CaptureProvider::DeepgramThenLocal {
             local: endpoint, ..
         } => {
-            crate::local_stt::check_ready(endpoint, Duration::from_secs(2)).await?;
+            *endpoint =
+                crate::local_stt::prepare(endpoint, &profile.language, Duration::from_secs(2))
+                    .await?;
             if control.load(Ordering::Acquire) != 0 {
                 return Err("Dictation ended before local engine was ready; try again".into());
             }
@@ -348,13 +353,13 @@ pub async fn run_provider_with_vocabulary(
         match provider {
             CaptureProvider::Deepgram { key, endpoint } => {
                 progress.set(crate::fallback::Stage::Cloud);
-                crate::streaming::transcribe_with_vocabulary(
+                crate::streaming::transcribe_with_profile(
                     key,
                     rx,
                     endpoint,
                     Duration::from_secs(8),
                     Duration::from_secs(8),
-                    &profile.recognition_hints,
+                    &profile,
                 )
                 .await
                 .map_err(|e| e.message)
@@ -364,7 +369,7 @@ pub async fn run_provider_with_vocabulary(
                 endpoint,
                 local,
             } => {
-                crate::fallback::transcribe_with_vocabulary(
+                crate::fallback::transcribe_with_profile(
                     key,
                     rx,
                     endpoint,
@@ -372,7 +377,7 @@ pub async fn run_provider_with_vocabulary(
                     control.clone(),
                     crate::fallback::Deadlines::default(),
                     progress.clone(),
-                    &profile.recognition_hints,
+                    &profile,
                 )
                 .await
             }

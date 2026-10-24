@@ -294,3 +294,145 @@ fn fallback_selection_persists_and_missing_cloud_key_uses_local() {
         murmur::capture::CaptureProvider::Local(_)
     ));
 }
+
+async fn language_fixture(
+    health: serde_json::Value,
+    inference_headers: Option<String>,
+) -> (LocalEndpoint, tokio::task::JoinHandle<Vec<u8>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint =
+        LocalEndpoint::new(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+    let task = tokio::spawn(async move {
+        let replies = std::iter::once((health.to_string(), String::new()))
+            .chain(inference_headers.map(|headers| (r#"{"text":"Bonjour."}"#.into(), headers)));
+        let mut last_request = Vec::new();
+        for (body, headers) in replies {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            loop {
+                let mut chunk = [0; 8192];
+                let n = socket.read(&mut chunk).await.unwrap();
+                assert_ne!(n, 0, "unexpected request EOF");
+                bytes.extend_from_slice(&chunk[..n]);
+                if let Some(end) = bytes.windows(4).position(|s| s == b"\r\n\r\n") {
+                    let header = String::from_utf8_lossy(&bytes[..end]).to_lowercase();
+                    let len = header
+                        .lines()
+                        .find_map(|line| {
+                            line.strip_prefix("content-length: ")?.parse::<usize>().ok()
+                        })
+                        .unwrap_or(0);
+                    if bytes.len() >= end + 4 + len {
+                        break;
+                    }
+                }
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n{headers}\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            last_request = bytes;
+        }
+        last_request
+    });
+    (endpoint, task)
+}
+
+fn language_health() -> serde_json::Value {
+    serde_json::json!({"status":"ok", "murmur_capabilities": {
+        "protocol_version":1, "instance_id":"a".repeat(64),
+        "model_sha256":"b".repeat(64), "languages":["en","fr"]
+    }})
+}
+
+#[tokio::test]
+async fn local_language_preflight_rejects_missing_unsupported_or_malformed_capabilities() {
+    use murmur::local_stt::prepare;
+    let mut unsupported = language_health();
+    unsupported["murmur_capabilities"]["languages"] = serde_json::json!(["en"]);
+    let mut wrong_version = language_health();
+    wrong_version["murmur_capabilities"]["protocol_version"] = 2.into();
+    let mut bad_instance = language_health();
+    bad_instance["murmur_capabilities"]["instance_id"] = "not-an-instance".into();
+    let mut repeated = language_health();
+    repeated["murmur_capabilities"]["languages"] = serde_json::json!(["en", "fr", "fr"]);
+    let mut huge = language_health();
+    huge["padding"] = "x".repeat(16 * 1024).into();
+    for health in [
+        serde_json::json!({"status":"ok"}),
+        unsupported,
+        wrong_version,
+        bad_instance,
+        repeated,
+        huge,
+    ] {
+        let (endpoint, server) = language_fixture(health, None).await;
+        assert!(
+            prepare(&endpoint, "fr", Duration::from_secs(1))
+                .await
+                .is_err()
+        );
+        let request = server.await.unwrap();
+        assert!(request.starts_with(b"GET /health "));
+    }
+    let (endpoint, server) = language_fixture(serde_json::json!({"status":"ok"}), None).await;
+    assert_eq!(
+        prepare(&endpoint, "en", Duration::from_secs(1))
+            .await
+            .unwrap()
+            .language(),
+        "en"
+    );
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn local_inference_binds_language_instance_and_model_and_rejects_changed_runtime() {
+    let expected_headers = format!(
+        "X-Murmur-Instance: {}\r\nX-Murmur-Model: {}\r\n",
+        "a".repeat(64),
+        "b".repeat(64)
+    );
+    let changed_headers = format!(
+        "X-Murmur-Instance: {}\r\nX-Murmur-Model: {}\r\n",
+        "c".repeat(64),
+        "b".repeat(64)
+    );
+    let changed_model = format!(
+        "X-Murmur-Instance: {}\r\nX-Murmur-Model: {}\r\n",
+        "a".repeat(64),
+        "c".repeat(64)
+    );
+    for (headers, succeeds) in [
+        (expected_headers, true),
+        (changed_headers, false),
+        (changed_model, false),
+        (String::new(), false),
+    ] {
+        let (endpoint, server) = language_fixture(language_health(), Some(headers)).await;
+        let bound = murmur::local_stt::prepare(&endpoint, "fr", Duration::from_secs(1))
+            .await
+            .unwrap();
+        let result = transcribe(
+            &bound,
+            &[1000; 1600],
+            Arc::new(AtomicU8::new(1)),
+            Duration::from_secs(1),
+        )
+        .await;
+        if succeeds {
+            assert_eq!(result.unwrap(), "Bonjour.");
+        } else {
+            assert!(result.unwrap_err().contains("changed after preflight"));
+        }
+        let request = server.await.unwrap();
+        let text = String::from_utf8_lossy(&request);
+        assert!(text.contains("name=\"language\"\r\n\r\nfr\r\n"));
+        assert!(text.contains("name=\"translate\"\r\n\r\nfalse\r\n"));
+        assert!(text.contains("name=\"detect_language\"\r\n\r\nfalse\r\n"));
+        assert!(text.contains(&format!("x-murmur-instance: {}", "a".repeat(64))));
+        assert!(text.contains(&format!("x-murmur-model: {}", "b".repeat(64))));
+    }
+}

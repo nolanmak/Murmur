@@ -21,3 +21,5 @@ pub mod local_stt;
 pub mod speech;
 
 pub mod vocabulary;
+
+pub mod language;
