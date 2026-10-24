@@ -51,3 +51,30 @@ sustained-health reset and physical unplug/Bluetooth/sleep testing remain open.
 The native tap must actually report a fault for this callback path to observe it;
 missing callbacks still use the existing three-second stall timeout. No partial
 transcript is automatically inserted and no background recording is started.
+
+
+## Per-attempt device notifications
+
+The macOS shell now registers the shared CoreAudio device watcher before opening
+the microphone and holds it until the attempt completes. Registration failure
+refuses capture with a retry message. Each attempt owns a fresh notification
+signal; an old watcher or delayed callback cannot invalidate a later attempt.
+
+Default-input changes cancel pending startup or active capture. The startup
+worker retains its existing cleanup/lease guarantees if the OS call returns
+late. Output-only and general device-list notifications do not cancel microphone
+dictation. A route change after capture has stopped does not discard a complete
+utterance while transcription drains. No automatic recording restart occurs.
+
+The original default-input test returned a successful transcript and failed its
+cancellation assertion. After wiring, a separate boundary test exposed excessive
+cancellation after stop; restricting notification checks to active capture fixed
+it. All 19 capture tests now pass, including input/output distinction, a fresh
+attempt after a stale notification, completed-audio preservation and prompt
+startup cancellation with late-tap cleanup.
+
+The policy also recognizes explicit StreamFormat/WillSleep/DidWake events, but
+the shared native watcher currently publishes only default-device/device-list
+changes. Native format and sleep event sources, sleep-aware stall clocks,
+background readiness recovery and physical device QA remain unfinished under
+#61. Synthetic event tests do not establish those native acceptance gates.

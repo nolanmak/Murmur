@@ -997,11 +997,15 @@ impl Shell {
             let result = (|| {
                 let provider = speech.capture_provider(crate::config::load)?;
                 let platform = fotw_audio::platform::macos::MacOsPlatform::new();
+                let changes = fotw_audio::device_change::DeviceChangeSignal::new();
+                let _watch = platform
+                    .watch_devices(changes.clone())
+                    .map_err(|_| "Cannot monitor microphone changes; try again".to_string())?;
                 let tap = platform
                     .open_mic(&DeviceId::new("default"), FormatRequest::any())
                     .map_err(|_| "No microphone available".to_string())?;
-                crate::capture::block_on_detached(crate::capture::run_provider_with_startup(
-                    tap, provider, control, receiving, progress, startup,
+                crate::capture::block_on_detached(crate::capture::run_provider_with_events(
+                    tap, provider, control, receiving, progress, startup, changes,
                 ))?
             })();
             let _ = completed.send(Completion { generation, result });

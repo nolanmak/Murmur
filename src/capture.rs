@@ -100,7 +100,11 @@ async fn start_within_deadline(
     control: &AtomicU8,
     startup: &MicrophoneStartup,
     receiving: &AtomicBool,
+    changes: &fotw_audio::device_change::DeviceChangeSignal,
 ) -> Result<(Guard, StreamFormat), String> {
+    if let Some(error) = device_failure(changes) {
+        return Err(error.into());
+    }
     let lease = startup.acquire()?;
     let (tx, mut rx) = tokio::sync::oneshot::channel();
     std::thread::Builder::new()
@@ -123,6 +127,9 @@ async fn start_within_deadline(
                 return Err("Dictation ended before microphone was ready; try again".into());
             }
             _ => {}
+        }
+        if let Some(error) = device_failure(changes) {
+            return Err(error.into());
         }
         tokio::select! {
             started = &mut rx => {
@@ -243,8 +250,34 @@ pub async fn run_provider_with_startup(
     progress: crate::fallback::Progress,
     startup: MicrophoneStartup,
 ) -> Result<String, String> {
+    run_provider_with_events(
+        tap,
+        provider,
+        control,
+        receiving,
+        progress,
+        startup,
+        fotw_audio::device_change::DeviceChangeSignal::new(),
+    )
+    .await
+}
+
+/// Capture with notifications owned by this attempt; do not share the signal
+/// with another attempt or a consumer that clears it.
+pub async fn run_provider_with_events(
+    tap: Box<dyn AudioTap>,
+    provider: CaptureProvider,
+    control: Arc<AtomicU8>,
+    receiving: Arc<AtomicBool>,
+    progress: crate::fallback::Progress,
+    startup: MicrophoneStartup,
+    changes: Arc<fotw_audio::device_change::DeviceChangeSignal>,
+) -> Result<String, String> {
     if control.load(Ordering::Acquire) != 0 {
         return Err("Cancelled before microphone startup".into());
+    }
+    if let Some(error) = device_failure(&changes) {
+        return Err(error.into());
     }
     match &provider {
         CaptureProvider::Local(endpoint)
@@ -265,9 +298,13 @@ pub async fn run_provider_with_startup(
         failed: failed.clone(),
         receiving: receiving.clone(),
     });
-    let started_capture = start_within_deadline(tap, sink, &control, &startup, &receiving).await;
+    let started_capture =
+        start_within_deadline(tap, sink, &control, &startup, &receiving, &changes).await;
     if control.load(Ordering::Acquire) == 2 {
         return Err("Cancelled".into());
+    }
+    if let Some(error) = device_failure(&changes) {
+        return Err(error.into());
     }
     if let Some(error) = audio_failure(&failed) {
         return Err(error.into());
@@ -329,6 +366,7 @@ pub async fn run_provider_with_startup(
         tokio::select! {
              result=&mut network=>{
                  if control.load(Ordering::Acquire)==2 {return Err("Cancelled".into());}
+                 if !finishing && let Some(error)=device_failure(&changes) {return Err(error.into());}
                  if let Some(error)=audio_failure(&failed) {return Err(error.into());}
                  if result.is_ok() && !finishing {return Err("Transcription ended before microphone stopped; no text inserted".into());}
                  return result;
@@ -336,11 +374,13 @@ pub async fn run_provider_with_startup(
              _=tick.tick()=>{
               if control.load(Ordering::Acquire)==2 {return Err("Cancelled".into());}
         if finish_started.is_some_and(|at:std::time::Instant|at.elapsed()>Duration::from_secs(if local { 185 } else { 10 })){return Err("Finalization timed out; no text inserted".into());}
-              if let Some(error)=audio_failure(&failed){return Err(error.into());}
+              if !finishing && let Some(error)=device_failure(&changes) {return Err(error.into());}
+                 if let Some(error)=audio_failure(&failed){return Err(error.into());}
               if !finishing {
                if control.load(Ordering::Acquire)==1 || started.elapsed()>=Duration::from_secs(120) {
                 guard.0.stop().map_err(|_|"Microphone stop failed")?;
-                if let Some(error)=audio_failure(&failed){return Err(error.into());}
+                if !finishing && let Some(error)=device_failure(&changes) {return Err(error.into());}
+                 if let Some(error)=audio_failure(&failed){return Err(error.into());}
                 finishing=true;finish_started=Some(std::time::Instant::now());
                }
                let mut captured=Vec::with_capacity(consumer.slots());
@@ -366,6 +406,22 @@ pub async fn run_provider_with_startup(
 pub(crate) fn append_local_pcm(pcm: &mut Vec<i16>, chunk: Vec<i16>) {
     let remaining = (16000_usize * 120).saturating_sub(pcm.len());
     pcm.extend(chunk.into_iter().take(remaining));
+}
+
+fn device_failure(changes: &fotw_audio::device_change::DeviceChangeSignal) -> Option<&'static str> {
+    use fotw_audio::device_change::DeviceChangeKind;
+    let pending = changes.peek();
+    if pending.contains(DeviceChangeKind::DefaultInput) {
+        Some("Microphone route changed; no text inserted. Start a new dictation.")
+    } else if pending.contains(DeviceChangeKind::StreamFormat) {
+        Some("Audio format changed; no text inserted. Start a new dictation.")
+    } else if pending.contains(DeviceChangeKind::WillSleep)
+        || pending.contains(DeviceChangeKind::DidWake)
+    {
+        Some("Computer sleep interrupted dictation; no text inserted. Start a new dictation.")
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
