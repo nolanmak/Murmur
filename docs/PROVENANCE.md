@@ -6,7 +6,7 @@ License: Apache-2.0; root LICENSE and NOTICE retained.
 
 - `fotw-audio`, `fotw-stt`, `fotw-secrets` and `fotw-dsp`: maintained upstream crates
   consumed by immutable Git revision
-  `3781146810541f49f44a7f86ae79cea4b2514e5e` and Cargo.lock.
+  `25b867f06ad7f9e0edf5ba1e233ffc6d2958940d` and Cargo.lock.
   Their frozen vendor copies were removed after audio, streaming, credentials,
   config and fallback regression checks. Both apps run the shared `conformance`
   suites with synthetic audio and in-memory credentials.
@@ -32,3 +32,33 @@ Finalize's optional from_finalize response, this handles speech already finalize
 by endpointing and empty recordings without assuming a fixed response delay.
 Reference: https://developers.deepgram.com/docs/close-stream
 Reference: https://developers.deepgram.com/docs/finalize
+
+
+## Shared-core upgrade validation (2026-10-24)
+
+The pin at `25b867f06ad7f9e0edf5ba1e233ffc6d2958940d` selects explicit
+credential stores: the same native macOS/Windows stores and a DBus Secret
+Service backend on Linux. Existing service/account addresses remain unchanged.
+The producer's isolated Linux CI job 120845180526 verified reads, updates,
+single-item identity and deletion against the former backend, plus refusal
+when Secret Service is unavailable. No real user keychain was used. Linux
+builds need system libdbus (`libdbus-1-dev` and `pkg-config`); our CI already
+installs these prerequisites.
+
+A consumer's lockfile is independent of the producer's. After moving the pin,
+Murmur's advisory scan still failed on ctutils (RUSTSEC-2026-0385) and Tokio
+(RUSTSEC-2026-0386). Targeted updates to ctutils 0.4.4 and Tokio 1.53.3 address
+those findings. The new advisory job audits Murmur's own lockfile on pushes and
+pull requests. It does not suppress advisories or rely on the producer's green
+check. Preserve the manifest pin and this lockfile together when upgrading or
+rolling back. Native microphone/hotkey/paste and release gates remain separate.
+
+
+Validation after the lockfile updates: warnings-denied Clippy, formatting, full
+locked workspace tests, repository boundaries and all 10 managed Whisper
+lifecycle tests passed locally. `cargo deny check advisories` now passes.
+The production graph still excludes whisper-rs, opusic-sys and ogg. A strict
+`MURMUR_REQUIRE_IDENTITY=1` build succeeded with the existing dev identity;
+`codesign --verify --deep --strict Murmur.app` passed. These checks do not
+establish native capture or insertion acceptance. Hosted checks must run on
+the new consumer revision.
