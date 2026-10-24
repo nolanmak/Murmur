@@ -111,7 +111,8 @@ The cloud connection has a two-second deadline. Eligible transient errors get
 at most one retry, replaying the retained utterance; the minimum backoff is
 100 ms, with provider Retry-After honored only when it fits the connection
 budget. Finalization has a three-second overall budget after release, including
-any retry. Local inference then has its own 180-second deadline. A 120-second
+any retry. A controlled Tokio clock regression verifies that a late retry cannot
+restart that budget. Local inference then has its own 180-second deadline. A 120-second
 PCM bound applies regardless of connection state. Cloud partials are never
 concatenated with local text. The capture generation and original-field checks
 still own insertion; inference completion alone never authorizes a paste.
@@ -126,7 +127,8 @@ runtime tests pass; the development app builds and verifies its signature.
 Native microphone/keyboard/
 insertion checks remain outstanding in #58; these tests do not establish them.
 
-M4 smoke evidence (2026-10-24): isolated whisper.cpp 1.9.1 with pinned base.en
+Historical M4 smoke evidence recorded on the source branch (2026-10-24),
+not rerun as part of this fallback extraction: isolated whisper.cpp 1.9.1 with pinned base.en
 SHA-256 `a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002`,
 engine and benchmark both launched under `scripts/local-whisper-offline.sb`.
 The existing 20 clean synthetic 10-second fixtures measured 0.599% normalized

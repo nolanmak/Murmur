@@ -21,6 +21,97 @@ fn deadlines() -> Deadlines {
         local: Duration::from_secs(2),
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn retry_cannot_restart_the_post_release_cloud_budget() {
+    // Keep the runtime runnable while loopback I/O completes: only explicit
+    // advance calls below may move the test clock.
+    let clock_guard = tokio::spawn(async {
+        loop {
+            tokio::task::yield_now().await;
+        }
+    });
+    let (local, local_task) = local_server().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let cloud = fotw_stt::DeepgramEndpoint::loopback(listener.local_addr().unwrap().port());
+    let (connected_tx, connected_rx) = tokio::sync::oneshot::channel();
+    let (fail_tx, fail_rx) = tokio::sync::oneshot::channel();
+    let (retried_tx, retried_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0; 4096];
+        assert!(socket.read(&mut request).await.unwrap() > 0);
+        connected_tx.send(()).unwrap();
+        fail_rx.await.unwrap();
+        socket
+            .write_all(
+                b"HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        drop(socket);
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = accept_async(socket).await.unwrap();
+        while let Some(Ok(message)) = ws.next().await {
+            if let Message::Text(text) = message
+                && text.contains("CloseStream")
+            {
+                retried_tx.send(()).unwrap();
+                std::future::pending::<()>().await;
+                break;
+            }
+        }
+    });
+    let (tx, rx) = mpsc::channel(2);
+    tx.send(vec![1000; 1600]).await.unwrap();
+    drop(tx);
+    let progress = fallback::Progress::default();
+    let result = tokio::spawn(fallback::transcribe_observed(
+        "fixture".into(),
+        rx,
+        cloud,
+        local,
+        Arc::new(AtomicU8::new(1)),
+        Deadlines::default(),
+        progress.clone(),
+    ));
+    connected_rx.await.unwrap();
+    tokio::time::advance(Duration::from_millis(1800)).await;
+    fail_tx.send(()).unwrap();
+    // Observe the scheduled retry before advancing its 100 ms backoff.
+    let wall_deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while progress.stage() != fallback::Stage::Retrying {
+        assert!(
+            std::time::Instant::now() < wall_deadline,
+            "retry was not scheduled"
+        );
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(Duration::from_millis(100)).await;
+    retried_rx.await.unwrap();
+    tokio::time::advance(Duration::from_millis(1099)).await;
+    for _ in 0..1000 {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        !local_task.is_finished(),
+        "local started before the shared budget expired"
+    );
+    assert!(!result.is_finished());
+    tokio::time::advance(Duration::from_millis(21)).await;
+    let wall_deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !result.is_finished() && std::time::Instant::now() < wall_deadline {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        result.is_finished(),
+        "retry restarted the cloud-final deadline"
+    );
+    assert_eq!(result.await.unwrap().unwrap(), "Complete local utterance.");
+    assert!(!local_task.await.unwrap().is_empty());
+    server.abort();
+    clock_guard.abort();
+}
 async fn local_server() -> (LocalEndpoint, tokio::task::JoinHandle<Vec<u8>>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint =
