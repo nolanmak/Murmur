@@ -66,3 +66,13 @@ their silence thresholds; noisy silence can still hallucinate. Aborting an HTTP
 request prevents insertion/submission but does not promise immediate engine
 compute interruption. Local STT does not make separately configured TTS or
 native Codex/Claude reasoning local.
+
+## Loopback startup and hostname lookup
+
+The supervisor now binds its literal loopback address without Python
+HTTPServer's `socket.getfqdn` call. Local readiness must not depend on reverse
+DNS availability. The synthetic HTTP fixtures also avoid that lookup. A test
+that makes `socket.getfqdn` fail reproduced the dependency before the change;
+all 10 managed-runtime tests pass after it. This removes a plausible cause of
+the hosted macOS readiness failure, but a successful hosted rerun is still
+required before calling that CI failure resolved.
