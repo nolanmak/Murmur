@@ -144,7 +144,12 @@ fn stalled_dns_lookup_does_not_hold_back_a_failed_result() {
     // deadline has already failed the attempt.
     let started = std::time::Instant::now();
     let result = murmur::capture::block_on_detached(async {
-        let lookup = tokio::task::spawn_blocking(|| std::thread::sleep(Duration::from_secs(5)));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let lookup = tokio::task::spawn_blocking(move || {
+            let _ = started_tx.send(());
+            std::thread::sleep(Duration::from_secs(5));
+        });
+        started_rx.await.expect("blocking lookup did not start");
         tokio::time::timeout(Duration::from_millis(50), lookup)
             .await
             .map_err(|_| "Provider connection timed out")
