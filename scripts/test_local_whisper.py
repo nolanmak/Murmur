@@ -1,5 +1,5 @@
 import hashlib, json, pathlib, socket, subprocess, sys, tempfile, unittest
-import importlib.util, io, http.server, threading, os
+import importlib.util, io, http.server, threading, os, struct
 from unittest.mock import Mock, patch
 
 spec = importlib.util.spec_from_file_location(
@@ -10,12 +10,18 @@ spec.loader.exec_module(runtime)
 SCRIPT = pathlib.Path(__file__).with_name("local-whisper.py")
 
 
+def model_fixture(n_vocab=51864):
+    # Valid tiny-model header, synthetic body: only the fake engine loads this.
+    return struct.pack("<12i", 0x67676d6c, n_vocab, 1500, 384, 6, 4,
+                       448, 384, 6, 4, 80, 1) + b"fixture weights"
+
+
 class RuntimeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="local whisper test ")
         self.root = pathlib.Path(self.tmp.name)
         self.model = self.root / "source model.bin"
-        self.model.write_bytes(b"fixture model")
+        self.model.write_bytes(model_fixture())
         self.digest = hashlib.sha256(self.model.read_bytes()).hexdigest()
 
     def tearDown(self):
@@ -107,6 +113,66 @@ class RuntimeTests(unittest.TestCase):
         r = self.run_cli("import-model", str(self.model), "--sha256", "0" * 64)
         self.assertNotEqual(r.returncode, 0)
         self.assertEqual((self.root / "state folder/model.bin").read_bytes(), before)
+
+    def test_checksum_valid_non_model_import_preserves_selection(self):
+        self.install()
+        selected = self.root / "state folder/model.bin"
+        before = selected.read_bytes()
+        invalid_dimensions = []
+        for index, value in ((4, 0), (7, 256), (8, 7), (11, -1)):
+            fields = list(struct.unpack("<12i", model_fixture()[:48]))
+            fields[index] = value
+            invalid_dimensions.append(struct.pack("<12i", *fields))
+        for payload in [b"not a model", model_fixture()[:47],
+                        b"GGUF" + model_fixture()[4:], model_fixture(123),
+                        *invalid_dimensions]:
+            self.model.write_bytes(payload)
+            checksum = hashlib.sha256(payload).hexdigest()
+            r = self.run_cli("import-model", str(self.model), "--sha256", checksum)
+            self.assertNotEqual(r.returncode, 0, r.stdout)
+            self.assertEqual(selected.read_bytes(), before)
+            self.assertFalse(list(selected.parent.glob("*.partial")))
+
+    def test_selected_model_language_metadata_comes_from_header(self):
+        # Deliberately give every model the same misleading .en filename.
+        misleading = self.root / "multilingual.en.bin"
+        for n_vocab, multilingual, count in ((51864, False, 1),
+                                             (51865, True, 99),
+                                             (51866, True, 100)):
+            payload = model_fixture(n_vocab)
+            misleading.write_bytes(payload)
+            checksum = hashlib.sha256(payload).hexdigest()
+            r = self.run_cli("import-model", str(misleading), "--sha256", checksum)
+            self.assertEqual(r.returncode, 0, r.stdout)
+            status = json.loads(self.run_cli("status").stdout)
+            metadata = status["selected_model_metadata"]
+            self.assertEqual(metadata["multilingual"], multilingual)
+            self.assertEqual(metadata["language_count"], count)
+            self.assertEqual(metadata["sha256"], checksum)
+            self.assertFalse(status["ready"])
+
+    def test_legacy_invalid_model_fails_before_launch_and_status_explains(self):
+        state = self.root / "state folder"
+        models = state / "models"
+        models.mkdir(parents=True)
+        payload = b"checksum valid legacy non-model"
+        checksum = hashlib.sha256(payload).hexdigest()
+        selected = models / (checksum + ".bin")
+        selected.write_bytes(payload)
+        (state / "model.bin").symlink_to(selected)
+        marker = self.root / "engine-started"
+        fake = self.root / "engine"
+        fake.write_text("#!" + sys.executable + "\nfrom pathlib import Path\n"
+                        + "Path(" + repr(str(marker)) + ").touch()\n")
+        fake.chmod(0o755)
+        result = self.run_cli("start", "--binary", str(fake), "--timeout", "0.5")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("model", result.stdout)
+        self.assertFalse(marker.exists())
+        status = json.loads(self.run_cli("status").stdout)
+        self.assertEqual(status["reason"], "unsupported_model")
+        self.assertIsNone(status["selected_model_metadata"])
+        self.assertFalse(status["ready"])
 
     def test_missing_model_never_starts(self):
         r = self.run_cli("start")

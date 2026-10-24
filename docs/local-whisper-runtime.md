@@ -27,6 +27,35 @@ Setup requires internet. Start, status, stop and transcription can run offline a
 
 Pinned model source: [ggerganov/whisper.cpp revision 5359861c739e955e79d9a303bcbc70fb988958b1](https://huggingface.co/ggerganov/whisper.cpp/tree/5359861c739e955e79d9a303bcbc70fb988958b1), file `ggml-base.en.bin`. SHA and size (147,964,211 bytes) verified from the [Hugging Face model API](https://huggingface.co/api/models/ggerganov/whisper.cpp/revision/5359861c739e955e79d9a303bcbc70fb988958b1?blobs=true). Runtime source: [whisper.cpp v1.9.1](https://github.com/ggml-org/whisper.cpp/tree/v1.9.1).
 
-Tests: `python3 -m unittest discover -s scripts -p 'test_local_whisper.py'` (9 passed locally in 3.8 seconds). Initial four acceptance tests failed before implementation; all nine now pass. Coverage includes verified imports, corrupt/interrupted replacement preservation, corrupted model startup, missing model, authenticated idempotent lifecycle, paths with spaces, external port collision, stale records, exit-zero/unready engines, readiness timeout cleanup, rejected redirects, and bounded secret handoff. The lifecycle test reads the actual process list and verifies that the secret is absent while authenticated status and stop still work. Real installed 1.9.1/base.en import → start → ready → stop was also exercised. Audio accuracy and end-to-end app insertion/submission require separate app QA.
+Tests: `python3 -m unittest discover -s scripts -p 'test_local_whisper.py'` (13 passed locally). Initial four acceptance tests failed before implementation; the current suite passes. Coverage includes verified imports, corrupt/interrupted replacement preservation, corrupted model startup, missing model, authenticated idempotent lifecycle, paths with spaces, external port collision, stale records, exit-zero/unready engines, readiness timeout cleanup, rejected redirects, and bounded secret handoff. The lifecycle test reads the actual process list and verifies that the secret is absent while authenticated status and stop still work. Real installed 1.9.1/base.en import → start → ready → stop was also exercised. Audio accuracy and end-to-end app insertion/submission require separate app QA.
 
 CI timing: the successful-engine fixture allows a 30-second readiness deadline and 60 seconds for each CLI subprocess, accommodating cold macOS runner startup. The deliberate unready-engine case retains its 0.5-second readiness deadline; readiness, process ownership, port collision, and timeout cleanup assertions are unchanged. The process-list token assertion failed before the private-pipe fix and passed afterward.
+
+## Model language metadata (Murmur #9 groundwork)
+
+Import and startup validate the fixed 48-byte Whisper GGML header after checksum
+verification. Unsupported magic, truncated headers, unknown vocabulary layouts
+and inconsistent dimensions fail before replacing the selected model or starting
+the engine. Status reports `unsupported_model` for a checksum-valid legacy file
+with an unsupported header. Header validation does not validate tensors: engine
+loading and readiness remain required.
+
+`status.selected_model_metadata` reports the selected file's SHA-256, format,
+vocabulary size, multilingual flag and language count. The supported layouts
+are 51,864 tokens (English only), 51,865 (99 languages), and 51,866 (100 languages),
+following [whisper.cpp v1.9.1 model loading and vocabulary metadata](https://github.com/ggml-org/whisper.cpp/blob/v1.9.1/src/whisper.cpp).
+This is file metadata, **not an attestation of the model loaded by the HTTP
+server**. It must not authorize a language choice for an arbitrary endpoint.
+The upstream server health response has no language capabilities and its load
+route can replace the running model. A runtime-bound capability contract and
+pre-capture language selection remain open; do not infer either from filenames.
+
+Behavioral RED: the checksum-valid non-model import test returned success and
+replaced the selection; status lacked model metadata. GREEN: 13 lifecycle tests
+pass, including preserved selection and temporary-file cleanup for malformed
+headers, English/multilingual metadata despite misleading filenames, and legacy
+invalid-model refusal before the fake engine is launched. Existing lifecycle,
+secret-handoff, redirect and integrity tests remain passing. The parser also
+read the installed small.en header as English-only; no inference or microphone
+was used for that check. Synthetic headers in lifecycle fixtures do not prove
+that real model tensors load.
