@@ -102,6 +102,7 @@ pub enum MicrophoneState {
     Stopping = 4,
     CleaningUp = 5,
     Unconfirmed = 6,
+    CleanupFailed = 7,
 }
 /// One native owner across attempts. Only confirmed resource cleanup releases it.
 #[derive(Clone, Default)]
@@ -121,6 +122,8 @@ impl Drop for StartupLease {
             || self.state.load(Ordering::Acquire) == MicrophoneState::Preparing as u8
         {
             MicrophoneState::Idle
+        } else if self.state.load(Ordering::Acquire) == MicrophoneState::CleaningUp as u8 {
+            MicrophoneState::CleanupFailed
         } else {
             MicrophoneState::Unconfirmed
         };
@@ -136,6 +139,7 @@ impl MicrophoneStartup {
             3 => MicrophoneState::Capturing,
             4 => MicrophoneState::Stopping,
             5 => MicrophoneState::CleaningUp,
+            7 => MicrophoneState::CleanupFailed,
             _ => MicrophoneState::Unconfirmed,
         }
     }
@@ -222,7 +226,11 @@ impl Guard {
             }
             tokio::select! {
                 biased;
-                closed = &mut self.closed => break closed.unwrap_or_else(|_| Err("Microphone cleanup unconfirmed; no text inserted; reopen Murmur".into())),
+                closed = &mut self.closed => break closed.unwrap_or_else(|_| Err(if self.stopped.load(Ordering::Acquire) {
+                    "Microphone stopped but cleanup failed; no text inserted; reopen Murmur"
+                } else {
+                    "Microphone cleanup unconfirmed; no text inserted; reopen Murmur"
+                }.into())),
                 _ = &mut deadline => break Err("Microphone cleanup timed out; no text inserted; cleanup is still pending".into()),
                 _ = tick.tick() => {}
             }

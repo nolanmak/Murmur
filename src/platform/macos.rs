@@ -1962,6 +1962,7 @@ pub fn preview_microphone_cleanup(output: &std::path::Path) -> Result<(), String
         ("pending", Mic::Stopping),
         ("stopped", Mic::CleaningUp),
         ("unconfirmed", Mic::Unconfirmed),
+        ("cleanup-failed", Mic::CleanupFailed),
     ] {
         let mut pill = Pill::new(mtm)?;
         // Window opacity does not affect caching its own content view. Keep

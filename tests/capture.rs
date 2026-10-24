@@ -1509,3 +1509,56 @@ async fn aborting_the_async_attempt_never_runs_a_native_destructor_on_its_execut
     assert_eq!(stopped.load(Ordering::SeqCst), 1);
     server.abort();
 }
+
+struct FailedWatcherCleanup;
+impl fotw_audio::DeviceWatch for FailedWatcherCleanup {}
+impl Drop for FailedWatcherCleanup {
+    fn drop(&mut self) {
+        panic!("fixture watcher cleanup failed after successful Stop");
+    }
+}
+#[tokio::test]
+async fn failed_watcher_cleanup_keeps_positive_stop_evidence_and_blocks_new_input() {
+    let (endpoint, server) = quiet_provider().await;
+    let (tap, control, _, stopped) = fixture(48000, 0);
+    let startup = murmur::capture::MicrophoneStartup::default();
+    let input = murmur::capture::InputPreparation::new(move || {
+        Ok(murmur::capture::PreparedInput::watched(
+            tap,
+            Box::new(FailedWatcherCleanup),
+        ))
+    });
+    let error = murmur::capture::run_provider_with_preparation(
+        input,
+        murmur::capture::CaptureProvider::Deepgram {
+            key: "fixture".into(),
+            endpoint,
+        },
+        control,
+        Arc::new(AtomicBool::new(false)),
+        Default::default(),
+        startup.clone(),
+        fotw_audio::device_change::DeviceChangeSignal::new(),
+        Default::default(),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("cleanup"));
+    assert_eq!(stopped.load(Ordering::SeqCst), 1);
+    let notice =
+        murmur::indicator::microphone_notice(startup.state(), murmur::core::Phase::Idle).unwrap();
+    assert!(
+        notice.contains("stopped"),
+        "a confirmed Stop must remain visible despite watcher failure: {notice}"
+    );
+    let next = prepared_fixture(
+        murmur::capture::InputPreparation::new(|| {
+            panic!("cleanup failure must block new preparation")
+        }),
+        Arc::new(AtomicU8::new(0)),
+        startup,
+    )
+    .await;
+    assert!(next.unwrap_err().contains("still pending"));
+    server.abort();
+}

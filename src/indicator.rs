@@ -185,6 +185,7 @@ pub fn microphone_notice(
     use crate::capture::MicrophoneState as Mic;
     match state {
         Mic::Unconfirmed => Some("Mic may still be recording — cleanup unconfirmed; reopen Murmur"),
+        Mic::CleanupFailed => Some("Mic stopped — cleanup failed; reopen Murmur"),
         Mic::CleaningUp => Some("Microphone stopped — finishing cleanup"),
         Mic::Stopping if phase != Phase::Idle => Some("Stopping microphone — Esc to cancel"),
         Mic::Preparing if phase == Phase::Idle => {

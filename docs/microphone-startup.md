@@ -113,13 +113,19 @@ Key release requests cleanup from the existing native owner and waits at most
 four seconds for Stop, tap destruction and watcher removal. Escape waits only a
 20 ms grace period for quick cleanup, then returns Cancelled while the owner
 keeps its resources and lease. Aborting the async task also disconnects that
-handle and requests cleanup. No native destructor runs on the async executor.
+handle and requests cleanup. The active handle itself performs no native
+destruction on the async executor. The native shell uses deferred preparation,
+so it creates no native objects before ownership moves to that worker. Existing
+prebuilt-tap entry points remain compatible; work a caller performs before
+invoking those APIs cannot be bounded by the coordinator.
 A blocked native call is not forcibly interrupted and cannot multiply into new
 microphone workers through repeated activations.
 
 Only successful Stop followed by resource destruction releases the lease and
-returns the operation to Idle. Stop failure or an unexpected cleanup exit leaves
-ownership unconfirmed, refuses another input and asks the user to reopen Murmur.
+returns the operation to Idle. Stop failure leaves capture ownership unconfirmed,
+refuses another input and asks the user to reopen Murmur. If Stop succeeded but
+watcher cleanup failed, that positive Stop evidence remains distinct: audio is
+stopped, cleanup is failed, and another input is still refused until reopening.
 This is deliberate: an unconfirmed stop is not permission to claim recording
 ended. A timeout whose native cleanup later succeeds clears automatically, but
 recording resumes only on a new deliberate activation. A fresh fixture dictation
@@ -131,7 +137,8 @@ The native menu and persistent pill distinguish:
 | --- | --- |
 | Cancelled/timed-out Stop remains pending | Microphone may still be recording; further input preparation is blocked |
 | Stop succeeded, watcher removal remains pending | Microphone stopped — finishing cleanup |
-| Stop/cleanup could not be confirmed | Mic may still be recording · reopen Murmur |
+| Stop could not be confirmed | Mic may still be recording · reopen Murmur |
+| Stop confirmed, cleanup failed | Mic stopped — cleanup failed; reopen Murmur |
 | Cleanup confirmed | Normal ready/processing indicator resumes |
 
 These messages outlive normal notice expiry and take priority over transient
@@ -143,7 +150,8 @@ A successful provider result cannot be inserted after a cleanup timeout/error.
 
 Fresh behavioral REDs observed Escape waiting 2.02 seconds for injected native
 Stop, pending ownership looking Idle after cancellation, and the shortened pill
-losing its reopen action. GREEN evidence: 34 capture tests and 13 indicator tests
+losing its reopen action. Another RED showed a watcher-cleanup failure discarding
+positive Stop evidence. GREEN evidence: 35 capture tests and 14 indicator tests
 cover Stop/watcher deadlines, Escape and async task abort, bounded ownership,
 no insertion on unconfirmed cleanup, post-Stop route changes, fresh speech after
 cleanup, and persistent/clearable honest UI states. Workspace, strict Clippy,
@@ -163,7 +171,9 @@ not an image edit or a physical-device recording test:
 
 ![Audio stopped, resource cleanup remains pending](microphone-cleanup/stopped.png)
 
-![Unconfirmed cleanup retains its recovery action](microphone-cleanup/unconfirmed.png)
+![Unconfirmed Stop retains its recovery action](microphone-cleanup/unconfirmed.png)
+
+![Positive Stop evidence survives cleanup failure](microphone-cleanup/cleanup-failed.png)
 
 ```sh
 cargo run --example microphone_cleanup_preview -- /tmp/murmur-cleanup-preview

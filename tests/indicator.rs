@@ -250,6 +250,7 @@ fn pending_native_cleanup_stays_visible_after_cancel_and_notice_expiry() {
         Mic::Capturing,
         Mic::Stopping,
         Mic::CleaningUp,
+        Mic::CleanupFailed,
         Mic::Unconfirmed,
     ] {
         assert_eq!(
@@ -302,4 +303,16 @@ fn unconfirmed_cleanup_pill_keeps_the_reopen_action_visible() {
     );
     assert!(pill.contains("may still be recording"));
     assert!(pill.chars().count() <= NOTICE_CHARS);
+}
+
+#[test]
+fn confirmed_stop_survives_cleanup_failure_in_the_persistent_ui() {
+    let state = murmur::capture::MicrophoneState::CleanupFailed;
+    let notice = microphone_notice(state, Phase::Idle).unwrap();
+    assert!(notice.contains("stopped") && notice.contains("reopen Murmur"));
+    assert!(!notice.contains("may still be recording"));
+    assert_eq!(
+        Indicator::default().look_with_microphone(100_000, Phase::Idle, false, false, state),
+        Look::Notice
+    );
 }
