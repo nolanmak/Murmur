@@ -7,6 +7,9 @@ Start from a GitHub issue with measurable acceptance criteria.
 3. Refactor without weakening assertions; run the relevant regression tests.
 4. Run `cargo fmt --all -- --check`, `cargo clippy --locked --all-targets -- -D warnings`,
    and `cargo test --locked --workspace` before a PR.
+   Dependency updates also run `cargo deny check advisories` (install
+   `cargo-deny`); CI audits this repository's own lockfile independently of
+   the shared-core producer.
 5. Link tests and manual evidence to the issue criteria. Never close an issue whose
    native acceptance checks have not been performed.
 
