@@ -7,3 +7,6 @@ mod macos_sleep;
 
 #[cfg(target_os = "macos")]
 pub mod macos_local_clipboard;
+
+#[cfg(target_os = "macos")]
+pub mod macos_language;

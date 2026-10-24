@@ -641,6 +641,7 @@ struct Shell {
     status: MenuItem,
     speech: crate::speech::Selection,
     speech_toggle: MenuItem,
+    language_menu: super::macos_language::LanguageMenu,
     pill: Pill,
     indicator: Indicator,
     warning: Option<String>,
@@ -695,6 +696,8 @@ impl Shell {
             true,
             None,
         );
+        let language_menu =
+            super::macos_language::LanguageMenu::new(crate::vocabulary::Profile::path())?;
         let cancel = MenuItem::with_id("cancel", "Cancel dictation (Esc)", true, None);
         let start = MenuItem::with_id("start", "Start dictation", true, None);
         let stop = MenuItem::with_id("stop", "Stop dictation", true, None);
@@ -785,9 +788,11 @@ impl Shell {
             true,
             None,
         );
+        menu.append(&status).map_err(|e| e.to_string())?;
+        menu.append(&speech_toggle).map_err(|e| e.to_string())?;
+        menu.append(&language_menu.menu)
+            .map_err(|e| e.to_string())?;
         for item in [
-            &status,
-            &speech_toggle,
             &start,
             &stop,
             &cancel,
@@ -838,6 +843,7 @@ impl Shell {
             status,
             speech,
             speech_toggle,
+            language_menu,
             pill,
             indicator: Indicator::default(),
             warning: None,
@@ -1132,6 +1138,7 @@ impl Shell {
         if self.core.phase == Phase::Idle && self.permissions.accessibility {
             self.prewarm();
         }
+        self.language_menu.refresh_if_due();
         self.observe_remote_window();
         if self.smoke && !self.smoke_started && self.launched.elapsed() > Duration::from_secs(2) {
             self.smoke_started = true;
@@ -1193,6 +1200,13 @@ impl Shell {
             }
         }
         while let Ok(event) = MenuEvent::receiver().try_recv() {
+            if let Some(result) = self.language_menu.handle(event.id.as_ref()) {
+                match result {
+                    Ok(message) => self.show(&message),
+                    Err(error) => self.show(&error),
+                }
+                continue;
+            }
             match event.id.as_ref() {
                 "speech_provider" => {
                     let provider = match self.speech.provider() {
