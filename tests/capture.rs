@@ -148,6 +148,22 @@ async fn local_release_sends_wav_without_cloud_key_and_stops_microphone() {
     ))
     .unwrap();
     let server = tokio::spawn(async move {
+        let (mut probe, _) = listener.accept().await.unwrap();
+        let mut request = [0; 4096];
+        let n = probe.read(&mut request).await.unwrap();
+        assert!(request[..n].starts_with(b"GET /health "));
+        let health = r#"{"status":"ok"}"#;
+        probe
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{health}",
+                    health.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        drop(probe);
         let (mut socket, _) = listener.accept().await.unwrap();
         let mut bytes = Vec::new();
         loop {
@@ -212,5 +228,25 @@ fn stalled_dns_lookup_does_not_hold_back_a_failed_result() {
     assert!(
         started.elapsed() < Duration::from_secs(1),
         "runtime shutdown held the UI completion hostage"
+    );
+}
+
+#[tokio::test]
+async fn unavailable_local_engine_is_reported_before_microphone_capture() {
+    let (tap, control, started, _) = fixture(48000, 0);
+    let result = murmur::capture::run_provider_observed(
+        tap,
+        murmur::capture::CaptureProvider::Local(
+            murmur::local_stt::LocalEndpoint::new("http://127.0.0.1:1").unwrap(),
+        ),
+        control,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .await;
+    assert!(result.is_err());
+    assert_eq!(
+        started.load(Ordering::SeqCst),
+        0,
+        "readiness failure must precede capture, not waste the utterance"
     );
 }
