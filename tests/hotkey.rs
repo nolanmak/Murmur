@@ -61,3 +61,29 @@ fn pressing_a_modifier_during_dictation_cancels_the_chord() {
     assert_eq!(d.flags(true, true), Some("cancel"));
     assert_eq!(d.flags(false, false), None);
 }
+
+#[test]
+fn sleep_rejects_pending_completion_and_requires_release_before_hotkey_restart() {
+    let mut d = Dictation::default();
+    assert_eq!(d.flags(true, false), Some("start"));
+    let old = d.generation();
+    assert!(d.stop());
+    assert!(d.cancel());
+    assert!(d.complete(old, Ok("stale sleep fixture".into())).is_none());
+    assert_eq!(
+        d.flags(true, false),
+        None,
+        "held key after wake must not restart capture"
+    );
+    assert_eq!(d.flags(false, false), None);
+    assert_eq!(d.flags(true, false), Some("start"));
+    assert!(d.complete(old, Ok("late old fixture".into())).is_none());
+}
+#[test]
+fn sleep_while_idle_allows_fresh_hotkey_and_manual_activation() {
+    let mut d = Dictation::default();
+    assert!(!d.cancel());
+    assert_eq!(d.flags(true, false), Some("start"));
+    assert!(d.cancel());
+    assert!(d.start_manual());
+}

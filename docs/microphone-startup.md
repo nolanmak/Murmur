@@ -45,8 +45,7 @@ All 15 capture tests now pass, including those regressions, valid silent buffers
 and a successful fresh attempt after a discontinuity. Fixtures use local fake
 providers and taps, with no physical microphone or cloud credentials.
 
-This is part of #61, not the full recovery implementation. Native route-change
-notifications, sleep-aware stall detection, bounded background readiness retries,
+This is part of #61, not the full recovery implementation. Sleep-aware stall detection, bounded background readiness retries,
 sustained-health reset and physical unplug/Bluetooth/sleep testing remain open.
 The native tap must actually report a fault for this callback path to observe it;
 missing callbacks still use the existing three-second stall timeout. No partial
@@ -75,6 +74,35 @@ startup cancellation with late-tap cleanup.
 
 The policy also recognizes explicit StreamFormat/WillSleep/DidWake events, but
 the shared native watcher currently publishes only default-device/device-list
-changes. Native format and sleep event sources, sleep-aware stall clocks,
+changes. Native format events and sleep-aware stall clocks,
 background readiness recovery and physical device QA remain unfinished under
 #61. Synthetic event tests do not establish those native acceptance gates.
+
+
+## Sleep and wake cancel stale dictation
+
+The shell now owns NSWorkspace WillSleep/DidWake observers. Each callback marks
+an event pending and sets the active capture's cancel control directly, without
+UI pointers or waiting for the timer. Attaching a new control while an event is
+pending cancels that control too. The observer tokens remain retained and are
+removed on shell teardown.
+
+The UI checks pending sleep events before normal work and again before handling
+queued completions. It invalidates the dictation generation, clears focus and
+pending input/menu actions, cancels remote review and discards a pending Space
+hold without replaying a space. A held shortcut cannot start recording after
+wake until it is released; an explicit manual activation remains available.
+No capture resumes automatically. Interrupted dictation displays a release-and-
+retry message, and ordinary focus/permissions/readiness checks still apply.
+
+Red/green tests demonstrated a pending Space hold firing after a simulated
+sleep and an inactive notification callback. A boundary regression then caught
+an overly broad reset blocking a fresh Space press after idle sleep; preserving
+idle shortcut state fixed it. Existing controller cancellation already preserves
+the held-key state, so the shell reuses it. Tests now
+cover rejected old completions, a fresh activation, cancellation of current and
+racing controls, both notification names and observer removal. Notification
+tests use a private NSNotificationCenter; they do not post to NSWorkspace or
+put the machine to sleep. Physical sleep/wake and subsequent insertion remain
+native acceptance gates. These changes do not implement meeting gap recovery,
+input format notifications or the remaining bounded readiness policy.

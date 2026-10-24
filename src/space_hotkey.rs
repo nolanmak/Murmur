@@ -35,6 +35,12 @@ pub struct HoldSpace {
     state: State,
 }
 impl HoldSpace {
+    /// Discard pending hold/replay work across system sleep.
+    pub fn suspend(&mut self) {
+        if matches!(self.state, State::Pending(_) | State::Dictating) {
+            self.state = State::Cancelled;
+        }
+    }
     pub fn key(&mut self, key: Key, now: u64) -> Action {
         use State::*;
         match key {

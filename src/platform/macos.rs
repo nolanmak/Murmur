@@ -629,6 +629,7 @@ enum LoginRetry {
 
 struct Shell {
     core: Dictation,
+    sleep_events: super::macos_sleep::SleepEvents,
     control: Arc<AtomicU8>,
     focus: Option<Focus>,
     input: mpsc::Receiver<Input>,
@@ -825,6 +826,7 @@ impl Shell {
         let (completed, result) = mpsc::channel();
         Ok(Self {
             core: Dictation::default(),
+            sleep_events: super::macos_sleep::SleepEvents::new(),
             control: Arc::new(AtomicU8::new(2)),
             focus: None,
             input,
@@ -1065,6 +1067,7 @@ impl Shell {
     fn begin_attempt(&mut self, focus: Option<Focus>, status: &str) {
         self.focus = focus;
         self.control = Arc::new(AtomicU8::new(0));
+        self.sleep_events.track(self.control.clone());
         self.receiving = Arc::new(AtomicBool::new(false));
         self.speech_progress = Default::default();
         self.speech_stage = Default::default();
@@ -1103,7 +1106,27 @@ impl Shell {
         self.control.store(1, Ordering::Release);
         self.status("Finishing… · Esc to cancel");
     }
+    fn suspend_for_sleep(&mut self) {
+        self.control.store(2, Ordering::Release);
+        let interrupted = self.core.cancel();
+        self.review.cancel();
+        self.focus = None;
+        self.indicator.disarm();
+        if let Some(tap) = &self.tap {
+            tap._context.space.borrow_mut().suspend();
+        }
+        while self.input.try_recv().is_ok() {}
+        while MenuEvent::receiver().try_recv().is_ok() {}
+        self.smoke_started = true;
+        if interrupted {
+            self.show("Sleep interrupted dictation; release the shortcut and try again");
+        }
+    }
     fn pump(&mut self) {
+        if self.sleep_events.take() {
+            self.suspend_for_sleep();
+            return;
+        }
         if self.core.phase == Phase::Idle && self.permissions.accessibility {
             self.prewarm();
         }
@@ -1360,6 +1383,10 @@ impl Shell {
             self.finish();
         }
         while let Ok(done) = self.result.try_recv() {
+            if self.sleep_events.take() {
+                self.suspend_for_sleep();
+                return;
+            }
             let Some(effect) = self.core.complete(done.generation, done.result) else {
                 continue;
             };
