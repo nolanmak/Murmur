@@ -4,8 +4,7 @@ use crate::{
     core::{CompletionEffect, Dictation, Phase},
     indicator::{self, Indicator, Look},
     insertion::{
-        Preflight, Probe, Target, allowed, late_target, preflight, prewarm_attributes, same_window,
-        settle_focus,
+        Preflight, Probe, Target, allowed, preflight, prewarm_attributes, same_window, settle_focus,
     },
     local_clipboard::Lease as LocalLease,
     local_delivery::{Failure as DeliveryFailure, Outcome as DeliveryOutcome},
@@ -683,8 +682,6 @@ struct Shell {
     fixture_target: Option<Focus>,
     clipboard_attempt: Option<crate::remote::Attempt>,
     selected_remote: crate::remote_review::Selection<RustDeskWindow>,
-    /// App focused when dictation started; a late-resolved target must be in it.
-    start_pid: i32,
     /// Last app asked to expose accessibility, when, and when focus was last checked.
     prewarmed: (i32, Instant),
     prewarm_checked: Instant,
@@ -887,7 +884,6 @@ impl Shell {
             fixture_target: None,
             clipboard_attempt: None,
             selected_remote: Default::default(),
-            start_pid: 0,
             prewarmed: (0, Instant::now()),
             prewarm_checked: Instant::now(),
         })
@@ -1024,24 +1020,19 @@ impl Shell {
         });
     }
     fn preflight_focus(&mut self) -> Result<Option<Focus>, DeliveryFailure> {
-        self.start_pid = 0;
         if self.recording_remote_target.is_some() {
             return Ok(None);
         }
-        self.start_pid = focused_app_pid();
-        // One probe only: waiting here would delay the microphone and lose speech.
-        // A field that is still being exposed is resolved when the transcript is ready.
-        let focus = Focus::current().ok();
+        let focus = if self.remote_mode {
+            Focus::current().ok()
+        } else {
+            settle_focus(|| Focus::current().ok(), probe, std::thread::sleep)
+        };
         match preflight(focus.as_ref().map(probe), self.remote_mode) {
             Preflight::Use => Ok(focus),
-            Preflight::RecordUnresolved => Ok(None),
+            Preflight::ReviewOnly => Ok(None),
             Preflight::Refuse(failure) => Err(failure),
         }
-    }
-    /// Target for a dictation that started before the app exposed its focused field.
-    fn late_focus(&self) -> Option<Focus> {
-        settle_focus(|| Focus::current().ok(), probe, std::thread::sleep)
-            .filter(|f| late_target(self.start_pid, f.target.pid, probe(f)))
     }
     /// Asks the frontmost app to build its accessibility tree before Control is held.
     fn prewarm(&mut self) {
@@ -1379,15 +1370,9 @@ impl Shell {
                     } else if self.recording_remote {
                         self.show("Transcript ready · Review for RustDesk…");
                     } else {
-                        let late = if self.focus.is_none() {
-                            self.late_focus()
-                        } else {
-                            None
-                        };
                         let result = self
                             .focus
                             .as_ref()
-                            .or(late.as_ref())
                             .ok_or(DeliveryFailure::MissingTarget)
                             .and_then(|f| f.insert(&text, &mut self.local_lease));
                         match result {

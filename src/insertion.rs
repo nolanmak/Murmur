@@ -65,21 +65,36 @@ pub const FOCUS_WAIT: std::time::Duration = std::time::Duration::from_millis(750
 /// build their accessibility tree asynchronously after it is enabled, so the first
 /// read can be empty. Returns the last observation once ready or out of budget.
 pub fn settle_focus<T>(
+    probe: impl FnMut() -> Option<T>,
+    classify: impl Fn(&T) -> Probe,
+    sleep: impl FnMut(std::time::Duration),
+) -> Option<T> {
+    let started = std::time::Instant::now();
+    settle_focus_with_clock(probe, classify, sleep, || started.elapsed())
+}
+
+/// The injected monotonic clock includes time spent reading accessibility state.
+pub fn settle_focus_with_clock<T>(
     mut probe: impl FnMut() -> Option<T>,
     classify: impl Fn(&T) -> Probe,
     mut sleep: impl FnMut(std::time::Duration),
+    mut elapsed: impl FnMut() -> std::time::Duration,
 ) -> Option<T> {
-    let mut waited = std::time::Duration::ZERO;
+    let started = elapsed();
     loop {
         let seen = probe();
-        let settled = seen
-            .as_ref()
-            .is_some_and(|focus| classify(focus) != Probe::NotEditable);
-        if settled || waited >= FOCUS_WAIT {
+        let kind = seen.as_ref().map(&classify);
+        let waited = elapsed().saturating_sub(started);
+        if kind == Some(Probe::Secure) {
             return seen;
         }
-        sleep(FOCUS_STEP);
-        waited += FOCUS_STEP;
+        if waited > FOCUS_WAIT {
+            return None;
+        }
+        if kind == Some(Probe::Editable) || waited >= FOCUS_WAIT {
+            return seen;
+        }
+        sleep(FOCUS_STEP.min(FOCUS_WAIT - waited));
     }
 }
 
@@ -88,8 +103,8 @@ pub fn settle_focus<T>(
 pub enum Preflight {
     /// Deliver into this focused field.
     Use,
-    /// Record now; resolve the target when the transcript is ready.
-    RecordUnresolved,
+    /// Remote review records without authorizing local insertion.
+    ReviewOnly,
     Refuse(crate::local_delivery::Failure),
 }
 pub fn preflight(seen: Option<Probe>, remote: bool) -> Preflight {
@@ -97,15 +112,9 @@ pub fn preflight(seen: Option<Probe>, remote: bool) -> Preflight {
     match seen {
         Some(Probe::Secure) => Preflight::Refuse(Failure::SecureTarget),
         Some(Probe::Editable) if !remote => Preflight::Use,
-        Some(Probe::NotEditable) if !remote => Preflight::Refuse(Failure::UnsupportedTarget),
-        // Electron and Chromium can take seconds to expose a focused field after
-        // accessibility is requested; refusing here would block them entirely.
-        _ => Preflight::RecordUnresolved,
+        Some(Probe::NotEditable) | None if !remote => Preflight::Refuse(Failure::NoFocusedField),
+        _ => Preflight::ReviewOnly,
     }
-}
-/// A target found only after recording must be editable and in the app dictation started in.
-pub fn late_target(start_pid: i32, pid: i32, probe: Probe) -> bool {
-    start_pid > 0 && pid == start_pid && probe == Probe::Editable
 }
 const CHROMIUM_BROWSERS: [&str; 8] = [
     "com.google.Chrome",

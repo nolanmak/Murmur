@@ -138,7 +138,7 @@ fn a_new_or_missing_window_observation_blocks_delivery() {
 }
 
 mod settle {
-    use murmur::insertion::{FOCUS_STEP, FOCUS_WAIT, Probe, settle_focus};
+    use murmur::insertion::{FOCUS_STEP, FOCUS_WAIT, Probe, settle_focus_with_clock};
     use std::cell::Cell;
     use std::time::Duration;
 
@@ -146,7 +146,7 @@ mod settle {
     fn run(script: &[Option<Probe>]) -> (Option<Probe>, usize, Duration) {
         let calls = Cell::new(0);
         let slept = Cell::new(Duration::ZERO);
-        let result = settle_focus(
+        let result = settle_focus_with_clock(
             || {
                 let i = calls.get();
                 calls.set(i + 1);
@@ -154,6 +154,7 @@ mod settle {
             },
             |probe| *probe,
             |step| slept.set(slept.get() + step),
+            || slept.get(),
         );
         (result, calls.get(), slept.get())
     }
@@ -206,15 +207,12 @@ mod settle {
 }
 
 mod start {
-    use murmur::insertion::{Preflight, Probe, late_target, preflight, prewarm_attributes};
+    use murmur::insertion::{Preflight, Probe, preflight, prewarm_attributes};
     use murmur::local_delivery::Failure;
 
     #[test]
-    fn missing_focus_still_records_so_slow_trees_can_resolve_later() {
-        // Discord (Electron) and Chrome may expose nothing for seconds after
-        // accessibility is requested; refusing here made Discord unusable.
-        assert_eq!(preflight(None, false), Preflight::RecordUnresolved);
-        assert_eq!(preflight(None, true), Preflight::RecordUnresolved);
+    fn remote_review_does_not_require_a_local_target() {
+        assert_eq!(preflight(None, true), Preflight::ReviewOnly);
     }
 
     #[test]
@@ -222,7 +220,7 @@ mod start {
         assert_eq!(preflight(Some(Probe::Editable), false), Preflight::Use);
         assert_eq!(
             preflight(Some(Probe::Editable), true),
-            Preflight::RecordUnresolved
+            Preflight::ReviewOnly
         );
         for remote in [false, true] {
             assert_eq!(
@@ -232,21 +230,12 @@ mod start {
         }
         assert_eq!(
             preflight(Some(Probe::NotEditable), false),
-            Preflight::Refuse(Failure::UnsupportedTarget)
+            Preflight::Refuse(Failure::NoFocusedField)
         );
         assert_eq!(
             preflight(Some(Probe::NotEditable), true),
-            Preflight::RecordUnresolved
+            Preflight::ReviewOnly
         );
-    }
-
-    #[test]
-    fn late_target_must_be_an_editable_field_in_the_app_dictation_started_in() {
-        assert!(late_target(42, 42, Probe::Editable));
-        assert!(!late_target(42, 7, Probe::Editable), "switched apps");
-        assert!(!late_target(42, 42, Probe::Secure));
-        assert!(!late_target(42, 42, Probe::NotEditable));
-        assert!(!late_target(0, 0, Probe::Editable), "unknown start app");
     }
 
     #[test]
@@ -276,4 +265,49 @@ mod start {
             );
         }
     }
+}
+#[test]
+fn missing_local_target_is_refused_before_recording() {
+    use murmur::{
+        insertion::{Preflight, preflight},
+        local_delivery::Failure,
+    };
+    assert_eq!(
+        preflight(None, false),
+        Preflight::Refuse(Failure::NoFocusedField)
+    );
+    assert!(
+        !Failure::NoFocusedField
+            .message()
+            .contains("Transcript ready")
+    );
+}
+
+#[test]
+fn slow_accessibility_probes_consume_the_focus_budget() {
+    use murmur::insertion::{Probe, settle_focus_with_clock};
+    use std::{cell::Cell, time::Duration};
+    let elapsed = Cell::new(Duration::ZERO);
+    let calls = Cell::new(0);
+    let slept = Cell::new(Duration::ZERO);
+    let result = settle_focus_with_clock(
+        || {
+            let call = calls.get();
+            calls.set(call + 1);
+            elapsed.set(elapsed.get() + Duration::from_millis(if call == 0 { 600 } else { 200 }));
+            (call > 0).then_some(Probe::Editable)
+        },
+        |probe| *probe,
+        |step| {
+            slept.set(slept.get() + step);
+            elapsed.set(elapsed.get() + step);
+        },
+        || elapsed.get(),
+    );
+    assert_eq!(
+        result, None,
+        "a field first exposed after the deadline cannot authorize capture"
+    );
+    assert_eq!(calls.get(), 2);
+    assert_eq!(slept.get(), Duration::from_millis(50));
 }
