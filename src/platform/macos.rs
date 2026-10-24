@@ -1010,16 +1010,20 @@ impl Shell {
                 let vocabulary =
                     crate::vocabulary::Profile::load(&crate::vocabulary::Profile::path()?)?;
                 let provider = speech.capture_provider(crate::config::load)?;
-                let platform = fotw_audio::platform::macos::MacOsPlatform::new();
                 let changes = fotw_audio::device_change::DeviceChangeSignal::new();
-                let _watch = platform
-                    .watch_devices(changes.clone())
-                    .map_err(|_| "Cannot monitor microphone changes; try again".to_string())?;
-                let tap = platform
-                    .open_mic(&DeviceId::new("default"), FormatRequest::any())
-                    .map_err(|_| "No microphone available".to_string())?;
-                crate::capture::block_on_detached(crate::capture::run_provider_with_vocabulary(
-                    tap, provider, control, receiving, progress, startup, changes, vocabulary,
+                let input_changes = changes.clone();
+                let input = crate::capture::InputPreparation::new(move || {
+                    let platform = fotw_audio::platform::macos::MacOsPlatform::new();
+                    let watch = platform
+                        .watch_devices(input_changes)
+                        .map_err(|_| "Cannot monitor microphone changes; try again".to_string())?;
+                    let tap = platform
+                        .open_mic(&DeviceId::new("default"), FormatRequest::any())
+                        .map_err(|_| "No microphone available".to_string())?;
+                    Ok(crate::capture::PreparedInput::watched(tap, watch))
+                });
+                crate::capture::block_on_detached(crate::capture::run_provider_with_preparation(
+                    input, provider, control, receiving, progress, startup, changes, vocabulary,
                 ))?
             });
             let _ = completed.send(Completion { generation, result });

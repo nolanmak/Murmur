@@ -804,3 +804,367 @@ async fn invalid_profile_is_refused_before_microphone_start() {
     assert!(result.unwrap_err().contains("schema version"));
     assert_eq!(started.load(Ordering::SeqCst), 0);
 }
+
+struct FixtureWatcher(Arc<AtomicUsize>);
+impl fotw_audio::DeviceWatch for FixtureWatcher {}
+impl Drop for FixtureWatcher {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn escape_during_input_preparation_returns_without_starting_a_late_microphone() {
+    let blocked = blocked_preparation();
+    let control = Arc::new(AtomicU8::new(0));
+    let cancel = control.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        cancel.store(2, Ordering::Release);
+    });
+    let began = std::time::Instant::now();
+    let result = prepared_fixture(blocked.input, control, Default::default()).await;
+    let elapsed = began.elapsed();
+    blocked.release.send(()).unwrap();
+    assert!(result.unwrap_err().contains("Cancelled"));
+    assert!(
+        elapsed < Duration::from_millis(400),
+        "Escape waited for native preparation: {elapsed:?}"
+    );
+    wait_for_counter(&blocked.watcher_drops).await;
+    assert_eq!(
+        blocked.starts.load(Ordering::SeqCst),
+        0,
+        "cancelled preparation must never start capture"
+    );
+    assert_eq!(
+        blocked.stops.load(Ordering::SeqCst),
+        1,
+        "late owned resources are closed"
+    );
+}
+
+struct BlockingPreparation {
+    input: murmur::capture::InputPreparation,
+    release: std::sync::mpsc::Sender<()>,
+    entered: Arc<AtomicBool>,
+    starts: Arc<AtomicUsize>,
+    stops: Arc<AtomicUsize>,
+    watcher_drops: Arc<AtomicUsize>,
+}
+fn blocked_preparation() -> BlockingPreparation {
+    let (tap, _, starts, stops) = fixture(0, 0);
+    let (release, gate) = std::sync::mpsc::channel();
+    let entered = Arc::new(AtomicBool::new(false));
+    let entered_worker = entered.clone();
+    let watcher_drops = Arc::new(AtomicUsize::new(0));
+    let drops = watcher_drops.clone();
+    BlockingPreparation {
+        input: murmur::capture::InputPreparation::new(move || {
+            let watcher = FixtureWatcher(drops);
+            entered_worker.store(true, Ordering::Release);
+            let _ = gate.recv_timeout(Duration::from_secs(10));
+            Ok(murmur::capture::PreparedInput::watched(
+                tap,
+                Box::new(watcher),
+            ))
+        }),
+        release,
+        entered,
+        starts,
+        stops,
+        watcher_drops,
+    }
+}
+async fn prepared_fixture(
+    input: murmur::capture::InputPreparation,
+    control: Arc<AtomicU8>,
+    startup: murmur::capture::MicrophoneStartup,
+) -> Result<String, String> {
+    murmur::capture::run_provider_with_preparation(
+        input,
+        murmur::capture::CaptureProvider::Deepgram {
+            key: "fixture".into(),
+            endpoint: DeepgramEndpoint::loopback(1),
+        },
+        control,
+        Arc::new(AtomicBool::new(false)),
+        Default::default(),
+        startup,
+        fotw_audio::device_change::DeviceChangeSignal::new(),
+        Default::default(),
+    )
+    .await
+}
+async fn wait_for_counter(counter: &AtomicUsize) {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while counter.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+#[tokio::test]
+async fn release_during_preparation_and_late_deadline_both_prevent_capture() {
+    for release_key in [true, false] {
+        let blocked = blocked_preparation();
+        let control = Arc::new(AtomicU8::new(0));
+        if release_key {
+            let end = control.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                end.store(1, Ordering::Release);
+            });
+        }
+        let began = std::time::Instant::now();
+        let result = prepared_fixture(blocked.input, control, Default::default()).await;
+        let elapsed = began.elapsed();
+        blocked.release.send(()).unwrap();
+        let error = result.unwrap_err();
+        if release_key {
+            assert!(error.contains("before microphone was ready"));
+            assert!(elapsed < Duration::from_millis(400));
+        } else {
+            assert!(error.contains("Microphone did not start"), "{error}");
+            assert!(elapsed <= murmur::capture::MIC_START_DEADLINE + Duration::from_secs(1));
+        }
+        wait_for_counter(&blocked.watcher_drops).await;
+        assert_eq!(blocked.starts.load(Ordering::SeqCst), 0);
+        assert_eq!(blocked.stops.load(Ordering::SeqCst), 1);
+        assert_eq!(blocked.watcher_drops.load(Ordering::SeqCst), 1);
+    }
+}
+#[tokio::test]
+async fn abandoned_preparation_holds_the_lease_and_recovers_without_more_open_workers() {
+    let blocked = blocked_preparation();
+    let startup = murmur::capture::MicrophoneStartup::default();
+    let control = Arc::new(AtomicU8::new(0));
+    let first = tokio::spawn(prepared_fixture(
+        blocked.input,
+        control.clone(),
+        startup.clone(),
+    ));
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !blocked.entered.load(Ordering::Acquire) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    control.store(2, Ordering::Release);
+    assert!(first.await.unwrap().unwrap_err().contains("Cancelled"));
+    let attempts = Arc::new(AtomicUsize::new(0));
+    for _ in 0..3 {
+        let count = attempts.clone();
+        let input = murmur::capture::InputPreparation::new(move || {
+            count.fetch_add(1, Ordering::SeqCst);
+            Err("fixture preparation finished".into())
+        });
+        assert!(
+            prepared_fixture(input, Arc::new(AtomicU8::new(0)), startup.clone())
+                .await
+                .unwrap_err()
+                .contains("still pending")
+        );
+    }
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        0,
+        "repeated attempts must not watch/open more devices"
+    );
+    blocked.release.send(()).unwrap();
+    wait_for_counter(&blocked.watcher_drops).await;
+    // The watcher's Drop runs just before lease release. Retry that tiny cleanup
+    // boundary rather than assuming its counter proves the whole guard is gone.
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let count = attempts.clone();
+            let input = murmur::capture::InputPreparation::new(move || {
+                count.fetch_add(1, Ordering::SeqCst);
+                Err("fixture preparation finished".into())
+            });
+            let error = prepared_fixture(input, Arc::new(AtomicU8::new(0)), startup.clone())
+                .await
+                .unwrap_err();
+            if error == "fixture preparation finished" {
+                break;
+            }
+            assert!(error.contains("still pending"));
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    assert_eq!(blocked.starts.load(Ordering::SeqCst), 0);
+    assert_eq!(blocked.stops.load(Ordering::SeqCst), 1);
+}
+#[tokio::test]
+async fn invalid_profile_and_unready_local_engine_do_not_prepare_native_input() {
+    for invalid_profile in [true, false] {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let input = murmur::capture::InputPreparation::new(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+            Err("must not prepare".into())
+        });
+        let profile = murmur::vocabulary::Profile {
+            version: if invalid_profile { 999 } else { 1 },
+            ..Default::default()
+        };
+        let error = murmur::capture::run_provider_with_preparation(
+            input,
+            murmur::capture::CaptureProvider::Local(
+                murmur::local_stt::LocalEndpoint::new("http://127.0.0.1:1").unwrap(),
+            ),
+            Arc::new(AtomicU8::new(0)),
+            Arc::new(AtomicBool::new(false)),
+            Default::default(),
+            Default::default(),
+            fotw_audio::device_change::DeviceChangeSignal::new(),
+            profile,
+        )
+        .await
+        .unwrap_err();
+        assert_ne!(error, "must not prepare");
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+}
+
+struct CleanupGate {
+    gate: Option<std::sync::mpsc::Receiver<()>>,
+    entered: Arc<AtomicBool>,
+}
+impl CleanupGate {
+    fn wait(&mut self) {
+        if let Some(gate) = self.gate.take() {
+            self.entered.store(true, Ordering::Release);
+            let _ = gate.recv_timeout(Duration::from_secs(2));
+        }
+    }
+}
+struct CleanupGateWatch(CleanupGate);
+impl fotw_audio::DeviceWatch for CleanupGateWatch {}
+impl Drop for CleanupGateWatch {
+    fn drop(&mut self) {
+        self.0.wait();
+    }
+}
+struct StopGateTap {
+    tap: Box<dyn AudioTap>,
+    gate: CleanupGate,
+}
+impl AudioTap for StopGateTap {
+    fn id(&self) -> &TapId {
+        self.tap.id()
+    }
+    fn format(&self) -> StreamFormat {
+        self.tap.format()
+    }
+    fn format_is_authoritative(&self) -> bool {
+        self.tap.format_is_authoritative()
+    }
+    fn start(&mut self, sink: Box<dyn FrameSink>) -> Result<StreamFormat, TapError> {
+        self.tap.start(sink)
+    }
+    fn stop(&mut self) -> Result<(), TapError> {
+        self.gate.wait();
+        self.tap.stop()
+    }
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_cleanup_keeps_the_lease_through_stop_and_watcher_drop() {
+    for block_watcher_drop in [false, true] {
+        let (tap, control, _, _) = fixture(0, 0);
+        let (release, gate) = std::sync::mpsc::channel();
+        let entered = Arc::new(AtomicBool::new(false));
+        let gate = CleanupGate {
+            gate: Some(gate),
+            entered: entered.clone(),
+        };
+        let startup = murmur::capture::MicrophoneStartup::default();
+        let input = murmur::capture::InputPreparation::new(move || {
+            Ok(if block_watcher_drop {
+                murmur::capture::PreparedInput::watched(tap, Box::new(CleanupGateWatch(gate)))
+            } else {
+                murmur::capture::PreparedInput::new(Box::new(StopGateTap { tap, gate }))
+            })
+        });
+        let first = tokio::spawn(prepared_fixture(input, control, startup.clone()));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !entered.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let attempted = Arc::new(AtomicUsize::new(0));
+        let calls = attempted.clone();
+        let result = prepared_fixture(
+            murmur::capture::InputPreparation::new(move || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err("unexpected native preparation during cleanup".into())
+            }),
+            Arc::new(AtomicU8::new(0)),
+            startup,
+        )
+        .await;
+        release.send(()).unwrap();
+        let _ = first.await.unwrap();
+        assert!(result.unwrap_err().contains("still pending"));
+        assert_eq!(attempted.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn route_change_during_preparation_prevents_start_before_the_async_observer_runs() {
+    let (tap, control, starts, stops) = fixture(0, 0);
+    let changes = fotw_audio::device_change::DeviceChangeSignal::new();
+    let notify = changes.clone();
+    let (release, gate) = std::sync::mpsc::channel();
+    let entered = Arc::new(AtomicBool::new(false));
+    let preparing = entered.clone();
+    let input = murmur::capture::InputPreparation::new(move || {
+        preparing.store(true, Ordering::Release);
+        let _ = gate.recv_timeout(Duration::from_secs(2));
+        notify.raise(fotw_audio::device_change::DeviceChangeKind::DefaultInput);
+        Ok(murmur::capture::PreparedInput::new(tap))
+    });
+    let attempt = tokio::spawn(murmur::capture::run_provider_with_preparation(
+        input,
+        murmur::capture::CaptureProvider::Deepgram {
+            key: "fixture".into(),
+            endpoint: DeepgramEndpoint::loopback(1),
+        },
+        control,
+        Arc::new(AtomicBool::new(false)),
+        Default::default(),
+        Default::default(),
+        changes,
+        Default::default(),
+    ));
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !entered.load(Ordering::Acquire) {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+    release.send(()).unwrap();
+    // Hold only this fixture's async executor. The native worker must itself
+    // reject the known route change instead of relying on a later async tick.
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(
+        attempt
+            .await
+            .unwrap()
+            .unwrap_err()
+            .contains("Microphone route changed")
+    );
+    assert_eq!(
+        starts.load(Ordering::SeqCst),
+        0,
+        "a known-stale prepared device must never start"
+    );
+    assert_eq!(stops.load(Ordering::SeqCst), 1);
+}
