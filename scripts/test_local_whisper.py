@@ -1,5 +1,6 @@
 import hashlib, json, pathlib, socket, subprocess, sys, tempfile, unittest
 import importlib.util, io, http.server, threading, os
+from unittest.mock import Mock, patch
 
 spec = importlib.util.spec_from_file_location(
     "runtime", pathlib.Path(__file__).with_name("local-whisper.py")
@@ -41,6 +42,16 @@ class RuntimeTests(unittest.TestCase):
         r = self.run_cli("import-model", str(self.model), "--sha256", self.digest)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
+    def test_loopback_supervisor_startup_never_resolves_a_hostname(self):
+        state = self.root / "state folder"
+        state.mkdir()
+        child = Mock()
+        child.poll.return_value = 0
+        with patch.object(socket, "getfqdn", side_effect=AssertionError("DNS must not be needed")):
+            with patch.object(runtime.subprocess, "Popen", return_value=child):
+                runtime.supervise(state, "fixture-engine", 17863, "a" * 64, 0.5)
+        self.assertFalse((state / "runtime.json").exists())
+
     def test_interrupted_import_preserves_selection(self):
         self.install()
         state = self.root / "state folder"
@@ -68,7 +79,7 @@ class RuntimeTests(unittest.TestCase):
             def log_message(self, *args):
                 pass
 
-        target = http.server.HTTPServer(("127.0.0.1", 0), Destination)
+        target = runtime.LoopbackHTTPServer(("127.0.0.1", 0), Destination)
 
         class Redirect(Destination):
             def do_GET(self):
@@ -76,7 +87,7 @@ class RuntimeTests(unittest.TestCase):
                 self.send_header("Location", f"http://127.0.0.1:{target.server_port}/")
                 self.end_headers()
 
-        redirect = http.server.HTTPServer(("127.0.0.1", 0), Redirect)
+        redirect = runtime.LoopbackHTTPServer(("127.0.0.1", 0), Redirect)
         for server in (target, redirect):
             threading.Thread(target=server.serve_forever, daemon=True).start()
         try:
@@ -159,7 +170,7 @@ class RuntimeTests(unittest.TestCase):
         fake.write_text(
             "#!"
             + sys.executable
-            + '\nimport argparse,http.server\np=argparse.ArgumentParser();p.add_argument("--port",type=int);a,_=p.parse_known_args()\nclass H(http.server.BaseHTTPRequestHandler):\n def do_GET(self):\n  self.send_response(200);self.end_headers();self.wfile.write(b"{\\"status\\":\\"ok\\"}")\n def log_message(self,*a):pass\nhttp.server.HTTPServer(("127.0.0.1",a.port),H).serve_forever()\n'
+            + '\nimport argparse,http.server,socketserver\np=argparse.ArgumentParser();p.add_argument("--port",type=int);a,_=p.parse_known_args()\nclass H(http.server.BaseHTTPRequestHandler):\n def do_GET(self):\n  self.send_response(200);self.end_headers();self.wfile.write(b"{\\"status\\":\\"ok\\"}")\n def log_message(self,*a):pass\nsocketserver.TCPServer(("127.0.0.1",a.port),H).serve_forever()\n'
         )
         fake.chmod(0o755)
         with socket.socket() as s:
