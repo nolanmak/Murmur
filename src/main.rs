@@ -3,11 +3,12 @@ fn main() {
     let result = match command.as_str() {
         "--help" | "help" => {
             println!(
-                "Murmur — macOS hold-Control dictation\n\nrun     Launch the menu-bar app (use the .app bundle)\ndoctor  Report provider configuration without printing secrets\nspeech  Select local [URL], deepgram or fallback [URL] transcription\n\nHold Control to dictate; release to insert; Esc cancels.\nRun scripts/build-app.sh and launch the resulting .app for capture."
+                "Murmur — macOS hold-Control dictation\n\nrun     Launch the menu-bar app (use the .app bundle)\ndoctor  Report provider configuration without printing secrets\nspeech  Select local [URL], deepgram or fallback [URL] transcription\nvocabulary  Import/export/validate a versioned vocabulary profile\n\nHold Control to dictate; release to insert; Esc cancels.\nRun scripts/build-app.sh and launch the resulting .app for capture."
             );
             Ok(())
         }
         "speech" => configure_speech(),
+        "vocabulary" => configure_vocabulary(),
         "doctor" => doctor(),
         #[cfg(target_os = "macos")]
         "review-preview" => murmur::platform::macos::preview_remote_review(),
@@ -51,7 +52,43 @@ fn configure_speech() -> Result<(), String> {
     println!("Saved transcription provider; restart running app to reload CLI changes.");
     Ok(())
 }
+fn configure_vocabulary() -> Result<(), String> {
+    use murmur::vocabulary::{Profile, Snippet};
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() != 4 {
+        return Err("Usage: murmur vocabulary import|export|validate|example FILE".into());
+    }
+    let file = std::path::Path::new(&args[3]);
+    match args[2].as_str() {
+        "import" => Profile::read(file)?.save(&Profile::path()?)?,
+        "export" => Profile::load(&Profile::path()?)?.save(file)?,
+        "validate" => {
+            Profile::read(file)?;
+        }
+        "example" => Profile {
+            version: 1,
+            recognition_hints: vec!["Project Acorn".into()],
+            snippets: vec![Snippet {
+                name: "sign off".into(),
+                text: "Thanks,\nExample team".into(),
+            }],
+        }
+        .save(file)?,
+        _ => return Err("Usage: murmur vocabulary import|export|validate|example FILE".into()),
+    }
+    println!(
+        "Vocabulary profile processed. Changes apply to the next utterance; recognition hints are not supported by local Whisper."
+    );
+    Ok(())
+}
+
 fn doctor() -> Result<(), String> {
+    let vocabulary = murmur::vocabulary::Profile::load(&murmur::vocabulary::Profile::path()?)?;
+    println!(
+        "Vocabulary: {} recognition hints, {} snippets (contents withheld). Local Whisper ignores recognition hints; snippets work with either provider.",
+        vocabulary.recognition_hints.len(),
+        vocabulary.snippets.len()
+    );
     let settings = murmur::speech::Settings::load(&murmur::speech::Settings::path()?)?;
     match settings.provider {
         murmur::speech::Provider::Deepgram => murmur::config::load().map(|c| {

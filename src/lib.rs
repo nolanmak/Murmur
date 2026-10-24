@@ -19,3 +19,5 @@ pub mod transcript;
 pub mod fallback;
 pub mod local_stt;
 pub mod speech;
+
+pub mod vocabulary;

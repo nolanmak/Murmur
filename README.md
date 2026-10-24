@@ -19,9 +19,10 @@ feature-complete or release-validated**. Native permissions and app compatibilit
 still require the [manual QA checklist](docs/QA.md).
 
 The [GitHub issues](https://github.com/nolanmak/Murmur/issues) contain
-acceptance criteria, dependencies and test-first work. AI cleanup, vocabulary,
-snippets, optional history, signed releases, RustDesk remote paste and additional platforms are follow-on
-work. No claim of full Wispr Flow parity is made.
+acceptance criteria, dependencies and test-first work. Vocabulary hints and spoken
+snippets are available through a versioned profile; language selection and a
+vocabulary editing UI remain open. AI cleanup, optional history, signed releases,
+RustDesk remote paste and additional platforms are follow-on work. No claim of full Wispr Flow parity is made.
 
 ## Build and run
 
@@ -171,3 +172,13 @@ requests are surfaced instead of hidden. Rate-limit waits beyond the retry budge
 use local rather than retrying early. Escape and original-field validation remain
 in force. This is not persistent recording/history and never switches local-only
 speech to cloud. See `docs/local-whisper.md` for deadlines and test evidence.
+
+### Vocabulary and deliberate snippets
+
+Use `murmur vocabulary example vocabulary.json` to create an editable profile,
+then `murmur vocabulary import vocabulary.json` to apply it to the next utterance.
+Recognition hints are sent to Deepgram; local Whisper explicitly reports that
+those hints are unavailable. Exact whole-utterance cues such as “insert snippet
+sign off” expand locally with either provider. See [the versioned schema,
+limits and import/export commands](docs/vocabulary.md). Language selection and
+real-model vocabulary accuracy evaluation remain in progress.
