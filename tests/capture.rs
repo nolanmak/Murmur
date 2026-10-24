@@ -421,3 +421,146 @@ async fn release_while_microphone_is_starting_does_not_wait_for_the_device() {
     .unwrap();
     assert!(result.unwrap_err().contains("ended before microphone"));
 }
+
+#[derive(Clone, Copy)]
+enum CaptureFault {
+    None,
+    Silent,
+    Discontinuity,
+    NonFinite,
+    DuringStop,
+}
+struct FaultTap {
+    id: TapId,
+    fault: CaptureFault,
+    control: Arc<AtomicU8>,
+    stopped: Arc<AtomicUsize>,
+    sink: Option<Box<dyn FrameSink>>,
+}
+impl AudioTap for FaultTap {
+    fn id(&self) -> &TapId {
+        &self.id
+    }
+    fn format(&self) -> StreamFormat {
+        StreamFormat::new(48000, 1, SampleFormat::F32)
+    }
+    fn format_is_authoritative(&self) -> bool {
+        true
+    }
+    fn start(&mut self, mut sink: Box<dyn FrameSink>) -> Result<StreamFormat, TapError> {
+        let mut pcm = vec![0.25; 4800];
+        if matches!(self.fault, CaptureFault::Silent) {
+            pcm.fill(0.0);
+        }
+        if matches!(self.fault, CaptureFault::NonFinite) {
+            pcm[100] = f32::NAN;
+        }
+        let flags = if matches!(self.fault, CaptureFault::Discontinuity) {
+            FrameFlags::DISCONTINUITY
+        } else if matches!(self.fault, CaptureFault::Silent) {
+            FrameFlags::SILENT
+        } else {
+            FrameFlags::empty()
+        };
+        sink.on_frames(&pcm, CaptureTimestamp::new(0, 0), flags);
+        self.sink = Some(sink);
+        self.control.store(1, Ordering::Release);
+        Ok(self.format())
+    }
+    fn stop(&mut self) -> Result<(), TapError> {
+        self.stopped.fetch_add(1, Ordering::SeqCst);
+        if let Some(mut sink) = self.sink.take()
+            && matches!(self.fault, CaptureFault::DuringStop)
+        {
+            sink.on_error(TapError::DeviceInvalidated(self.id.clone()));
+        }
+        Ok(())
+    }
+}
+async fn fault_capture(fault: CaptureFault) -> Result<String, String> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = accept_async(socket).await.unwrap();
+        while let Some(Ok(msg)) = ws.next().await {
+            if let Message::Text(t) = msg
+                && t.contains("CloseStream")
+            {
+                let _=ws.send(Message::text(r#"{"type":"Results","is_final":true,"speech_final":true,"channel":{"alternatives":[{"transcript":"Fixture speech."}]}}"#)).await;
+                let _ = ws
+                    .send(Message::text(r#"{"type":"Metadata","duration":0.3}"#))
+                    .await;
+                break;
+            }
+        }
+    });
+    let control = Arc::new(AtomicU8::new(0));
+    let stopped = Arc::new(AtomicUsize::new(0));
+    let tap = FaultTap {
+        id: TapId::mic("fault-fixture"),
+        fault,
+        control: control.clone(),
+        stopped: stopped.clone(),
+        sink: None,
+    };
+    let result = tokio::time::timeout(
+        Duration::from_secs(3),
+        murmur::capture::run_with_endpoint(
+            Box::new(tap),
+            "fixture".into(),
+            control,
+            DeepgramEndpoint::loopback(port),
+        ),
+    )
+    .await;
+    server.abort();
+    let _ = server.await;
+    assert!(
+        stopped.load(Ordering::SeqCst) > 0,
+        "failed capture must close its tap"
+    );
+    result.expect("capture failure must not hang")
+}
+#[tokio::test]
+async fn capture_fault_discontinuity_rejects_partial_speech_and_next_attempt_works() {
+    assert!(
+        fault_capture(CaptureFault::Discontinuity)
+            .await
+            .unwrap_err()
+            .contains("interrupted"),
+        "discontinuous speech must not be inserted as complete"
+    );
+    assert_eq!(
+        fault_capture(CaptureFault::None).await.unwrap(),
+        "Fixture speech."
+    );
+}
+#[tokio::test]
+async fn capture_fault_nonfinite_samples_rejects_partial_speech() {
+    assert!(
+        fault_capture(CaptureFault::NonFinite)
+            .await
+            .unwrap_err()
+            .contains("invalid samples"),
+        "invalid samples must not become a successful transcript"
+    );
+}
+#[tokio::test]
+async fn capture_fault_during_stop_wins_over_fast_provider_completion() {
+    assert!(
+        fault_capture(CaptureFault::DuringStop)
+            .await
+            .unwrap_err()
+            .contains("disconnected"),
+        "microphone failure must win over a ready provider result"
+    );
+}
+
+#[tokio::test]
+async fn capture_silent_buffers_are_valid_delivery_not_device_loss() {
+    assert_eq!(
+        fault_capture(CaptureFault::Silent).await.unwrap(),
+        "Fixture speech."
+    );
+}
