@@ -1,12 +1,14 @@
 //! Bounded, allocation-free handoff from FlyOnTheWall's microphone callback.
 use crate::resample::{Downmixer, Resampler16k};
-use fotw_audio::{AudioTap, CaptureTimestamp, FrameFlags, FrameSink, TapError};
+use fotw_audio::{AudioTap, CaptureTimestamp, FrameFlags, FrameSink, StreamFormat, TapError};
 use rtrb::{Producer, RingBuffer};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU8, Ordering},
 };
 use std::time::Duration;
+/// Maximum wait for a microphone startup operation.
+pub const MIC_START_DEADLINE: Duration = Duration::from_secs(4);
 struct Sink {
     producer: Producer<f32>,
     failed: Arc<AtomicBool>,
@@ -32,6 +34,68 @@ struct Guard(Box<dyn AudioTap>);
 impl Drop for Guard {
     fn drop(&mut self) {
         let _ = self.0.stop();
+    }
+}
+/// Shared by the native shell across attempts. A blocked OS start retains its
+/// lease until it returns and any abandoned microphone has been stopped.
+#[derive(Clone, Default)]
+pub struct MicrophoneStartup(Arc<AtomicBool>);
+struct StartupLease(Arc<AtomicBool>);
+impl Drop for StartupLease {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+impl MicrophoneStartup {
+    fn acquire(&self) -> Result<StartupLease, String> {
+        self.0.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| "Previous microphone startup is still pending; reconnect the input device or reopen Murmur".to_string())?;
+        Ok(StartupLease(self.0.clone()))
+    }
+}
+
+// Adapted from Murmur PR #53 (97fe25c). Carry the RAII Guard through the
+// channel too: receiver cancellation after send must still close the tap.
+async fn start_within_deadline(
+    tap: Box<dyn AudioTap>,
+    sink: Box<dyn FrameSink>,
+    control: &AtomicU8,
+    startup: &MicrophoneStartup,
+    receiving: &AtomicBool,
+) -> Result<(Guard, StreamFormat), String> {
+    let lease = startup.acquire()?;
+    let (tx, mut rx) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("murmur-mic-start".into())
+        .spawn(move || {
+            let _lease = lease;
+            let mut guard = Guard(tap);
+            let started = guard.0.start(sink);
+            // Failed delivery drops Guard on this worker, stopping a late mic.
+            let _ = tx.send((guard, started));
+        })
+        .map_err(|_| "Cannot start microphone worker".to_string())?;
+    let deadline = tokio::time::sleep(MIC_START_DEADLINE);
+    tokio::pin!(deadline);
+    let mut tick = tokio::time::interval(Duration::from_millis(10));
+    loop {
+        match control.load(Ordering::Acquire) {
+            2 => return Err("Cancelled".into()),
+            1 if !receiving.load(Ordering::Acquire) => {
+                return Err("Dictation ended before microphone was ready; try again".into());
+            }
+            _ => {}
+        }
+        tokio::select! {
+            started = &mut rx => {
+                let (guard, format) = started.map_err(|_| "Microphone startup failed")?;
+                if control.load(Ordering::Acquire) == 2 { return Err("Cancelled".into()); }
+                let format = format.map_err(|_| "Cannot start microphone; check permission and input device")?;
+                return Ok((guard, format));
+            }
+            _ = &mut deadline => return Err("Microphone did not start; check the input device and try again".into()),
+            _ = tick.tick() => {}
+        }
     }
 }
 /// Runs one attempt on a private runtime and returns as soon as it resolves.
@@ -100,20 +164,36 @@ pub async fn run_provider_observed(
     control: Arc<AtomicU8>,
     receiving: Arc<AtomicBool>,
 ) -> Result<String, String> {
+    run_provider_with_startup(
+        tap,
+        provider,
+        control,
+        receiving,
+        MicrophoneStartup::default(),
+    )
+    .await
+}
+
+/// Capture with a startup coordinator retained by the caller across attempts.
+pub async fn run_provider_with_startup(
+    tap: Box<dyn AudioTap>,
+    provider: CaptureProvider,
+    control: Arc<AtomicU8>,
+    receiving: Arc<AtomicBool>,
+    startup: MicrophoneStartup,
+) -> Result<String, String> {
     if control.load(Ordering::Acquire) != 0 {
         return Err("Cancelled before microphone startup".into());
     }
     let failed = Arc::new(AtomicBool::new(false));
     let (producer, mut consumer) = RingBuffer::new(192_000);
-    let mut guard = Guard(tap);
-    let format = guard
-        .0
-        .start(Box::new(Sink {
-            producer,
-            failed: failed.clone(),
-            receiving,
-        }))
-        .map_err(|_| "Cannot start microphone; check permission and input device")?;
+    let sink = Box::new(Sink {
+        producer,
+        failed: failed.clone(),
+        receiving: receiving.clone(),
+    });
+    let (mut guard, format) =
+        start_within_deadline(tap, sink, &control, &startup, &receiving).await?;
     let mut resampler =
         Resampler16k::new(format.sample_rate_hz, 1).map_err(|_| "Unsupported microphone format")?;
     // Ten seconds of 10 ms chunks covers the bounded eight-second TLS handshake.

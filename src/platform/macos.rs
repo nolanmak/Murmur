@@ -620,6 +620,7 @@ struct Shell {
     smoke_started: bool,
     launched: Instant,
     receiving: Arc<AtomicBool>,
+    microphone_startup: crate::capture::MicrophoneStartup,
     remote_mode: bool,
     recording_remote: bool,
     recording_remote_target: Option<RustDeskWindow>,
@@ -816,6 +817,7 @@ impl Shell {
             smoke_started: false,
             launched: Instant::now(),
             receiving: Arc::new(AtomicBool::new(false)),
+            microphone_startup: Default::default(),
             remote_mode: remote_fixture,
             recording_remote: remote_fixture,
             recording_remote_target: None,
@@ -915,6 +917,7 @@ impl Shell {
         let completed = self.completed.clone();
         let generation = self.core.generation();
         let receiving = self.receiving.clone();
+        let startup = self.microphone_startup.clone();
         let speech = self.speech.clone();
         std::thread::spawn(move || {
             let result = (|| {
@@ -923,8 +926,8 @@ impl Shell {
                 let tap = platform
                     .open_mic(&DeviceId::new("default"), FormatRequest::any())
                     .map_err(|_| "No microphone available".to_string())?;
-                crate::capture::block_on_detached(crate::capture::run_provider_observed(
-                    tap, provider, control, receiving,
+                crate::capture::block_on_detached(crate::capture::run_provider_with_startup(
+                    tap, provider, control, receiving, startup,
                 ))?
             })();
             let _ = completed.send(Completion { generation, result });

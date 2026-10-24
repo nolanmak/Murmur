@@ -218,3 +218,171 @@ async fn local_release_sends_wav_without_cloud_key_and_stops_microphone() {
     assert!(stopped.load(Ordering::SeqCst) > 0);
     server.await.unwrap();
 }
+
+/// A microphone whose `AudioDeviceStart` never returns until the gate opens,
+/// the way CoreAudio wedges when its IO thread never reaches the run state.
+struct WedgedTap {
+    id: TapId,
+    gate: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+    stopped: Arc<AtomicUsize>,
+}
+impl AudioTap for WedgedTap {
+    fn id(&self) -> &TapId {
+        &self.id
+    }
+    fn format(&self) -> StreamFormat {
+        StreamFormat::new(48000, 1, SampleFormat::F32)
+    }
+    fn format_is_authoritative(&self) -> bool {
+        true
+    }
+    fn start(&mut self, _: Box<dyn FrameSink>) -> Result<StreamFormat, TapError> {
+        let _ = self
+            .gate
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(30));
+        Ok(self.format())
+    }
+    fn stop(&mut self) -> Result<(), TapError> {
+        self.stopped.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+fn wedged() -> (
+    Box<dyn AudioTap>,
+    std::sync::mpsc::Sender<()>,
+    Arc<AtomicUsize>,
+) {
+    let (open, gate) = std::sync::mpsc::channel();
+    let stopped = Arc::new(AtomicUsize::new(0));
+    let tap = WedgedTap {
+        id: TapId::mic("wedged"),
+        gate: std::sync::Mutex::new(gate),
+        stopped: stopped.clone(),
+    };
+    (Box::new(tap), open, stopped)
+}
+#[tokio::test]
+async fn wedged_microphone_start_fails_instead_of_loading_forever() {
+    let (tap, _open, _) = wedged();
+    let control = Arc::new(AtomicU8::new(0));
+    let started = std::time::Instant::now();
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        murmur::capture::run(tap, "test-key".into(), control),
+    )
+    .await
+    .expect("a wedged microphone start must not hang the attempt");
+    assert!(result.unwrap_err().contains("Microphone did not start"));
+    assert!(started.elapsed() <= murmur::capture::MIC_START_DEADLINE + Duration::from_secs(1));
+}
+#[tokio::test]
+async fn escape_cancels_while_microphone_is_starting() {
+    let (tap, _open, _) = wedged();
+    let control = Arc::new(AtomicU8::new(0));
+    let cancel = control.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        cancel.store(2, Ordering::Release);
+    });
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        murmur::capture::run(tap, "test-key".into(), control),
+    )
+    .await
+    .expect("Esc must not wait for the microphone to start");
+    assert_eq!(result.unwrap_err(), "Cancelled");
+}
+#[tokio::test]
+async fn microphone_that_starts_after_giving_up_is_stopped() {
+    let (tap, open, stopped) = wedged();
+    let control = Arc::new(AtomicU8::new(0));
+    let cancel = control.clone();
+    let attempt = tokio::spawn(murmur::capture::run(tap, "test-key".into(), control));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    cancel.store(2, Ordering::Release);
+    assert!(attempt.await.unwrap().is_err());
+    open.send(()).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while stopped.load(Ordering::SeqCst) == 0 && std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        stopped.load(Ordering::SeqCst),
+        1,
+        "a late start must not leave the mic open"
+    );
+}
+
+#[tokio::test]
+async fn repeated_attempts_do_not_start_more_workers_until_abandoned_start_is_cleaned_up() {
+    use murmur::capture::{CaptureProvider, MicrophoneStartup, run_provider_with_startup};
+    let startup = MicrophoneStartup::default();
+    let provider = || CaptureProvider::Deepgram {
+        key: "fixture".into(),
+        endpoint: DeepgramEndpoint::loopback(1),
+    };
+    let (tap, open, stopped) = wedged();
+    let control = Arc::new(AtomicU8::new(0));
+    let first = tokio::spawn(run_provider_with_startup(
+        tap,
+        provider(),
+        control.clone(),
+        Arc::new(AtomicBool::new(false)),
+        startup.clone(),
+    ));
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    control.store(2, Ordering::Release);
+    assert_eq!(first.await.unwrap().unwrap_err(), "Cancelled");
+    for _ in 0..3 {
+        let (tap, control, started, _) = fixture(0, 0);
+        let result = run_provider_with_startup(
+            tap,
+            provider(),
+            control,
+            Arc::new(AtomicBool::new(false)),
+            startup.clone(),
+        )
+        .await;
+        assert!(result.unwrap_err().contains("still pending"));
+        assert_eq!(started.load(Ordering::SeqCst), 0);
+    }
+    open.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while stopped.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let (tap, control, started, _) = fixture(0, 0);
+    let result = run_provider_with_startup(
+        tap,
+        provider(),
+        control,
+        Arc::new(AtomicBool::new(false)),
+        startup,
+    )
+    .await;
+    assert!(result.unwrap_err().contains("format"));
+    assert_eq!(started.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn release_while_microphone_is_starting_does_not_wait_for_the_device() {
+    let (tap, _open, _) = wedged();
+    let control = Arc::new(AtomicU8::new(0));
+    let released = control.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        released.store(1, Ordering::Release);
+    });
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        murmur::capture::run(tap, "fixture".into(), control),
+    )
+    .await
+    .unwrap();
+    assert!(result.unwrap_err().contains("ended before microphone"));
+}
