@@ -1,3 +1,4 @@
+use murmur::vocabulary::ProfileFile as _;
 fn main() {
     let command = std::env::args().nth(1).unwrap_or_else(|| "run".into());
     let result = match command.as_str() {

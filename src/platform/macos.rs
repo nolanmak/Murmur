@@ -1,5 +1,6 @@
 //! macOS-only boundary: AppKit shell, Control event tap and accessibility insertion.
 //! All retained CF/AX objects stay on the main thread. Workers receive no UI pointers.
+use crate::vocabulary::ProfileFile as _;
 use crate::{
     core::{CompletionEffect, Dictation, Phase},
     indicator::{self, Indicator, Look},

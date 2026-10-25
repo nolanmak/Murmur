@@ -1,3 +1,4 @@
+use murmur::vocabulary::ProfileFile as _;
 use murmur::vocabulary::{Profile, Snippet};
 fn profile() -> Profile {
     Profile {

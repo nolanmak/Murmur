@@ -1,4 +1,5 @@
 //! Field-scoped settings edits: merge unrelated changes, reject stale drafts.
+use crate::vocabulary::ProfileFile as _;
 use crate::vocabulary::{Profile, Snippet};
 use std::path::Path;
 

@@ -803,11 +803,7 @@ pub async fn run_provider_raw_with_preparation(
                 .await
             }
             CaptureProvider::Local(endpoint) => {
-                progress.set(if profile.recognition_hints.is_empty() {
-                    crate::fallback::Stage::Local
-                } else {
-                    crate::fallback::Stage::LocalWithoutHints
-                });
+                progress.set(crate::fallback::local_vocabulary_stage(&profile, &endpoint));
                 let mut rx = rx;
                 let mut pcm = Vec::new();
                 while let Some(chunk) = rx.recv().await {
