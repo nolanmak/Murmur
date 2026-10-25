@@ -184,6 +184,9 @@ pub fn microphone_notice(
 ) -> Option<&'static str> {
     use crate::capture::MicrophoneState as Mic;
     match state {
+        Mic::Inspecting => {
+            Some("Checking microphone availability — no recording; retry when finished")
+        }
         Mic::Unconfirmed => Some("Mic may still be recording — cleanup unconfirmed; reopen Murmur"),
         Mic::CleanupFailed => Some("Mic stopped — cleanup failed; reopen Murmur"),
         Mic::CleaningUp => Some("Microphone stopped — finishing cleanup"),

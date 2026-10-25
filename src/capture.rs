@@ -13,6 +13,7 @@ struct Sink {
     producer: Producer<f32>,
     failed: Arc<AtomicU8>,
     receiving: Arc<AtomicBool>,
+    fault: Arc<AtomicBool>,
 }
 impl FrameSink for Sink {
     fn on_frames(&mut self, pcm: &[f32], _: CaptureTimestamp, flags: FrameFlags) {
@@ -47,6 +48,7 @@ impl FrameSink for Sink {
 }
 impl Sink {
     fn fail(&self, reason: u8) {
+        self.fault.store(true, Ordering::Release);
         // Preserve the first fault; subsequent or stale callbacks cannot heal it.
         let _ = self
             .failed
@@ -81,10 +83,21 @@ impl PreparedInput {
     }
 }
 /// Deferred input setup, created without touching a native device.
-pub struct InputPreparation(Box<dyn FnOnce() -> Result<PreparedInput, String> + Send>);
+pub struct InputPreparation {
+    prepare: Box<dyn FnOnce() -> Result<PreparedInput, String> + Send>,
+    fault: Arc<AtomicBool>,
+}
 impl InputPreparation {
     pub fn new(prepare: impl FnOnce() -> Result<PreparedInput, String> + Send + 'static) -> Self {
-        Self(Box::new(prepare))
+        Self {
+            prepare: Box::new(prepare),
+            fault: Arc::new(AtomicBool::new(false)),
+        }
+    }
+    /// Observe microphone faults separately from provider/configuration errors.
+    pub fn with_fault_signal(mut self, fault: Arc<AtomicBool>) -> Self {
+        self.fault = fault;
+        self
     }
 }
 
@@ -103,6 +116,7 @@ pub enum MicrophoneState {
     CleaningUp = 5,
     Unconfirmed = 6,
     CleanupFailed = 7,
+    Inspecting = 8,
 }
 /// One native owner across attempts. Only confirmed resource cleanup releases it.
 #[derive(Clone, Default)]
@@ -140,6 +154,7 @@ impl MicrophoneStartup {
             4 => MicrophoneState::Stopping,
             5 => MicrophoneState::CleaningUp,
             7 => MicrophoneState::CleanupFailed,
+            8 => MicrophoneState::Inspecting,
             _ => MicrophoneState::Unconfirmed,
         }
     }
@@ -150,6 +165,76 @@ impl MicrophoneStartup {
             state: self.0.clone(),
             cleaned: false,
         })
+    }
+    /// Run metadata-only inspection on one owned thread; never create a capture tap here.
+    pub(crate) fn inspect<T: Send + 'static>(
+        &self,
+        inspect: impl FnOnce() -> T + Send + 'static,
+    ) -> Result<std::sync::mpsc::Receiver<Result<T, ()>>, String> {
+        let mut lease = self.acquire()?;
+        // Inspection owns no capture objects. Even a panic releases admission,
+        // but a blocked OS read retains it until this thread actually returns.
+        lease.cleaned = true;
+        lease.phase(MicrophoneState::Inspecting);
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name("input-readiness".into())
+            .spawn(move || {
+                let result =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(inspect)).map_err(|_| ());
+                drop(lease);
+                let _ = send.send(result);
+            })
+            .map_err(|_| "Cannot start input readiness check".to_string())?;
+        Ok(receive)
+    }
+}
+
+#[cfg(test)]
+mod inspection_tests {
+    use super::*;
+    #[test]
+    fn metadata_panic_reports_failure_and_releases_admission() {
+        let startup = MicrophoneStartup::default();
+        let result = startup
+            .inspect(|| -> () { panic!("fixture metadata failure") })
+            .unwrap();
+        assert_eq!(
+            result.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Err(())
+        );
+        assert_eq!(startup.state(), MicrophoneState::Idle);
+        assert!(startup.acquire().is_ok());
+    }
+    #[test]
+    fn blocked_metadata_worker_retains_exclusive_admission_after_receiver_is_dropped() {
+        let startup = MicrophoneStartup::default();
+        let (release, gate) = std::sync::mpsc::channel();
+        let (entered, began) = std::sync::mpsc::channel();
+        let result = startup
+            .inspect(move || {
+                entered.send(()).unwrap();
+                gate.recv().unwrap();
+            })
+            .unwrap();
+        began.recv_timeout(Duration::from_secs(2)).unwrap();
+        let state = startup.state();
+        let second = startup.acquire().is_err();
+        drop(result);
+        let retained = startup.state();
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while startup.state() != MicrophoneState::Idle && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(state, MicrophoneState::Inspecting);
+        assert!(
+            second,
+            "capture and other probes cannot bypass an outstanding native read"
+        );
+        assert_eq!(retained, MicrophoneState::Inspecting);
+        assert_eq!(startup.state(), MicrophoneState::Idle);
+        assert!(startup.acquire().is_ok());
     }
 }
 
@@ -305,7 +390,7 @@ async fn start_within_deadline(
                 let _ = closed_tx.send(Ok(()));
                 return;
             }
-            let prepared = match (input.0)() {
+            let prepared = match (input.prepare)() {
                 Ok(prepared) => prepared,
                 Err(error) => {
                     drop(lease);
@@ -582,11 +667,12 @@ pub async fn run_provider_with_preparation(
     changes: Arc<fotw_audio::device_change::DeviceChangeSignal>,
     profile: crate::vocabulary::Profile,
 ) -> Result<String, String> {
+    let fault = input.fault.clone();
     profile.validate()?;
     if control.load(Ordering::Acquire) != 0 {
         return Err("Cancelled before microphone startup".into());
     }
-    if let Some(error) = device_failure(&changes) {
+    if let Some(error) = observed_device_failure(&changes, &fault) {
         return Err(error.into());
     }
     if !matches!(&provider, CaptureProvider::Local(_)) {
@@ -611,7 +697,7 @@ pub async fn run_provider_with_preparation(
                             "Dictation ended before local engine was ready; try again".into()
                         );
                     }
-                    if let Some(error) = device_failure(&changes) {
+                    if let Some(error) = observed_device_failure(&changes, &fault) {
                         return Err(error.into());
                     }
                     tokio::select! {
@@ -631,16 +717,20 @@ pub async fn run_provider_with_preparation(
         producer,
         failed: failed.clone(),
         receiving: receiving.clone(),
+        fault: fault.clone(),
     });
     let started_capture =
         start_within_deadline(input, sink, &control, &startup, &receiving, &changes).await;
     let (mut guard, format) = match started_capture {
         Ok(started) => started,
         Err(error) => {
+            if control.load(Ordering::Acquire) == 0 {
+                fault.store(true, Ordering::Release);
+            }
             if control.load(Ordering::Acquire) == 2 {
                 return Err("Cancelled".into());
             }
-            if let Some(error) = device_failure(&changes) {
+            if let Some(error) = observed_device_failure(&changes, &fault) {
                 return Err(error.into());
             }
             if let Some(error) = audio_failure(&failed) {
@@ -651,9 +741,9 @@ pub async fn run_provider_with_preparation(
     };
     let result = async {
         if control.load(Ordering::Acquire) == 2 { return Err("Cancelled".into()); }
-        if let Some(error) = device_failure(&changes) { return Err(error.into()); }
+        if let Some(error) = observed_device_failure(&changes, &fault) { return Err(error.into()); }
         if let Some(error) = audio_failure(&failed) { return Err(error.into()); }
-    let mut converter = CaptureConverter::new(format)?;
+    let mut converter = CaptureConverter::new(format).inspect_err(|_| fault.store(true, Ordering::Release))?;
     // Ten seconds of 10 ms chunks covers the bounded eight-second TLS handshake.
     // The previous 320 ms queue overflowed before a live connection could open.
     let (tx, rx) = tokio::sync::mpsc::channel(1024);
@@ -722,7 +812,7 @@ pub async fn run_provider_with_preparation(
         tokio::select! {
              result=&mut network=>{
                  if control.load(Ordering::Acquire)==2 {return Err("Cancelled".into());}
-                 if !finishing && let Some(error)=device_failure(&changes) {return Err(error.into());}
+                 if !finishing && let Some(error)=observed_device_failure(&changes, &fault) {return Err(error.into());}
                  if let Some(error)=audio_failure(&failed) {return Err(error.into());}
                  if result.is_ok() && !finishing {return Err("Transcription ended before microphone stopped; no text inserted".into());}
                  return result.map(|text| profile.expand(&text));
@@ -730,7 +820,7 @@ pub async fn run_provider_with_preparation(
              _=tick.tick()=>{
               if control.load(Ordering::Acquire)==2 {return Err("Cancelled".into());}
         if finish_started.is_some_and(|at:std::time::Instant|at.elapsed()>Duration::from_secs(if local { 185 } else { 10 })){return Err("Finalization timed out; no text inserted".into());}
-              if !finishing && let Some(error)=device_failure(&changes) {return Err(error.into());}
+              if !finishing && let Some(error)=observed_device_failure(&changes, &fault) {return Err(error.into());}
                  if let Some(error)=audio_failure(&failed){return Err(error.into());}
               if !finishing {
                if control.load(Ordering::Acquire)==1 || started.elapsed()>=Duration::from_secs(120) {
@@ -744,7 +834,7 @@ pub async fn run_provider_with_preparation(
                let mut captured=Vec::with_capacity(consumer.slots());
                while let Ok(sample)=consumer.pop(){captured.push(sample);}
                if !captured.is_empty(){last_frame=std::time::Instant::now();}
-               if last_frame.elapsed()>Duration::from_secs(3)&&!finishing{return Err("Microphone stopped delivering audio; no text inserted".into());}
+               if last_frame.elapsed()>Duration::from_secs(3)&&!finishing{fault.store(true, Ordering::Release);return Err("Microphone stopped delivering audio; no text inserted".into());}
                let samples=converter.process(&captured,finishing)?;
                if !samples.is_empty() && let Some(sender)=&sender {
                 sender.try_send(Downmixer::to_i16(&samples)).map_err(|_|"Transcription cannot keep up; no text inserted")?;
@@ -756,6 +846,9 @@ pub async fn run_provider_with_preparation(
     }
     }.await;
     let cleanup = guard.close(&control, &changes).await;
+    if cleanup.is_err() && control.load(Ordering::Acquire) != 2 {
+        fault.store(true, Ordering::Release);
+    }
     if control.load(Ordering::Acquire) == 2 {
         return Err("Cancelled".into());
     }
@@ -805,6 +898,17 @@ impl CaptureConverter {
         }
         Ok(Downmixer::to_mono(&samples, self.format.channels))
     }
+}
+
+fn observed_device_failure(
+    changes: &fotw_audio::device_change::DeviceChangeSignal,
+    fault: &AtomicBool,
+) -> Option<&'static str> {
+    let error = device_failure(changes);
+    if error.is_some() {
+        fault.store(true, Ordering::Release);
+    }
+    error
 }
 
 fn device_failure(changes: &fotw_audio::device_change::DeviceChangeSignal) -> Option<&'static str> {

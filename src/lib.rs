@@ -8,6 +8,7 @@ pub mod local_delivery;
 pub mod login_item;
 pub mod permissions;
 pub mod platform;
+pub mod readiness;
 pub mod remote;
 pub mod remote_clipboard;
 pub mod remote_review;

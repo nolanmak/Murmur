@@ -1896,11 +1896,17 @@ async fn final_format_change_rejects_complete_speech_names_the_fault_and_allows_
     use murmur::capture::{InputPreparation, MicrophoneStartup, PreparedInput};
     let (tap, control, _, _) = fixture(48000, 0);
     let startup = MicrophoneStartup::default();
-    let input = InputPreparation::new(move || Ok(PreparedInput::new(Box::new(FormatStopTap(tap)))));
+    let fault = Arc::new(AtomicBool::new(false));
+    let input = InputPreparation::new(move || Ok(PreparedInput::new(Box::new(FormatStopTap(tap)))))
+        .with_fault_signal(fault.clone());
     let error = prepared_fixture(input, control, startup.clone())
         .await
         .unwrap_err();
     wait_for_input_idle(&startup).await;
+    assert!(
+        fault.load(Ordering::Acquire),
+        "native format failure must schedule readiness independently of provider errors"
+    );
     assert!(error.contains("format changed"), "{error}");
     assert!(
         error.contains("new dictation") && error.contains("no text inserted"),
@@ -1922,4 +1928,90 @@ async fn final_format_change_rejects_complete_speech_names_the_fault_and_allows_
     .unwrap();
     assert_eq!(text, "Recovered fixture.");
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn metadata_timeout_blocks_capture_until_release_then_fresh_deliberate_speech_succeeds() {
+    use murmur::{
+        capture::{MicrophoneStartup, MicrophoneState},
+        readiness::Monitor,
+    };
+    let startup = MicrophoneStartup::default();
+    let mut readiness = Monitor::new(Duration::from_secs(30));
+    let (release, gate) = std::sync::mpsc::channel();
+    let (entered, began) = std::sync::mpsc::channel();
+    readiness.fault(Duration::ZERO);
+    readiness.tick(Duration::ZERO, true, &startup, move || {
+        entered.send(()).unwrap();
+        gate.recv().unwrap();
+        Some("fixture-input")
+    });
+    began.recv_timeout(Duration::from_secs(2)).unwrap();
+    readiness.tick(Duration::from_secs(4), true, &startup, || {
+        panic!("native inspection still owned")
+    });
+    let (tap, control, starts, _) = fixture(48000, 0);
+    let rejected = murmur::capture::run_provider_with_startup(
+        tap,
+        murmur::capture::CaptureProvider::Deepgram {
+            key: "fixture".into(),
+            endpoint: DeepgramEndpoint::loopback(1),
+        },
+        control,
+        Arc::new(AtomicBool::new(false)),
+        startup.clone(),
+    )
+    .await;
+    assert!(rejected.unwrap_err().contains("pending"));
+    assert_eq!(starts.load(Ordering::SeqCst), 0);
+    assert_eq!(startup.state(), MicrophoneState::Inspecting);
+    readiness.cancel();
+    release.send(()).unwrap();
+    wait_for_input_idle(&startup).await;
+    let (endpoint, server) = quiet_provider().await;
+    let (tap, control, _, _) = fixture(48000, 0);
+    let text = murmur::capture::run_provider_with_startup(
+        tap,
+        murmur::capture::CaptureProvider::Deepgram {
+            key: "fixture".into(),
+            endpoint,
+        },
+        control,
+        Arc::new(AtomicBool::new(false)),
+        startup,
+    )
+    .await
+    .unwrap();
+    assert_eq!(text, "Recovered fixture.");
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn provider_failure_and_user_cancellation_do_not_trigger_microphone_recovery() {
+    use murmur::capture::{InputPreparation, MicrophoneStartup, PreparedInput};
+    for initial in [0, 2] {
+        let (tap, control, _, _) = fixture(48000, initial);
+        let fault = Arc::new(AtomicBool::new(false));
+        let input = InputPreparation::new(move || Ok(PreparedInput::new(tap)))
+            .with_fault_signal(fault.clone());
+        let result = murmur::capture::run_provider_with_preparation(
+            input,
+            murmur::capture::CaptureProvider::Deepgram {
+                key: "fixture".into(),
+                endpoint: DeepgramEndpoint::loopback(1),
+            },
+            control,
+            Arc::new(AtomicBool::new(false)),
+            Default::default(),
+            MicrophoneStartup::default(),
+            fotw_audio::device_change::DeviceChangeSignal::new(),
+            Default::default(),
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(
+            !fault.load(Ordering::Acquire),
+            "provider failure/cancel cannot masquerade as microphone failure"
+        );
+    }
 }

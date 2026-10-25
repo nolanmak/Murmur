@@ -231,3 +231,38 @@ They prove the native notification bridge and cancellation policy, not physical
 sleep/wake, USB/Bluetooth route changes or next-attempt insertion. Those signed-app
 acceptance gates, format-change publication and background readiness recovery
 remain unfinished under #61.
+# Bounded background readiness
+
+After a current dictation reports a microphone setup, callback, route, format,
+stall or cleanup fault, the native shell may inspect input metadata while idle.
+Provider/configuration failures and cancelled or stale dictations do not start
+this episode. Nothing records, resumes an old generation or inserts text.
+
+An episode permits at most three starts, at least fifteen seconds apart. Each
+probe has a four-second handoff deadline. A blocked property read retains the
+same microphone-operation lease until its thread returns; timeout, cancellation,
+provider changes and repeated shortcuts cannot multiply it or start capture
+beside it. The persistent notice explicitly says no recording is taking place.
+Existing unconfirmed Stop/resource-release notices retain priority, and recovery
+waits for actual native cleanup before probing.
+
+Readiness uses the shared backend's real input UID and validated format, with no
+tap, IOProc or audio buffer. All successful observations must match across a
+thirty-second health window (configurable through `Monitor::new`). A failure,
+changed route or observation gap over nineteen seconds restarts that window
+without refilling the three-attempt budget. One success cannot heal an episode.
+Three unsuccessful or insufficiently stable attempts leave an explicit user-retry
+notice. Metadata availability is not proof of live audio or a locked route.
+
+Escape, a deliberate new activation, key release, sleep/wake, permission/modal
+work and a frontmost-app change revoke pending readiness results. A pending OS
+read still owns admission; the user retries after it returns. New dictation
+always runs fresh permission/focus checks and constructs its own capture state
+and resampler. Readiness completions can update only idle status, never focus,
+recording control, provider selection or insertion.
+
+Device-free clock/worker tests exercise flapping, deadlines, stale completions,
+exhaustion, stable health and retained ownership. A loopback provider test proves
+capture is refused during a stuck metadata read and a new deliberate dictation
+returns speech after release. They do not establish signed-app USB/Bluetooth,
+physical sleep/wake or real next-field insertion; those gates remain unchecked.
