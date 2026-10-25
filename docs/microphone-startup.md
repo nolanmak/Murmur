@@ -204,3 +204,30 @@ The synthetic capture suite exercises all three error states, real next-attempt
 admission, and a blocked resource release after an early Stop observation. It
 does not prove physical device or permission behavior, and native calls can
 still block on their owner thread.
+
+## Native sleep and wake cancellation
+
+The macOS shell now owns observers on `NSWorkspace`'s sleep/wake notification
+center. The callback cancels the active attempt immediately through its shared
+control flag, without touching UI objects. A generation tracked while an event
+is pending starts cancelled too. The shell consumes the pending event before
+handling shortcuts or completed transcripts, cancels the old generation/review,
+clears its focus target and pending hold-to-dictate work, and discards queued
+commands. Monitor-disable recovery is preserved, and an explicit queued Quit
+still wins. Wake never starts capture or replays a shortcut automatically.
+
+The existing native microphone lease remains authoritative: cancellation does
+not free a blocked Stop or watcher cleanup, and another attempt still requires
+confirmed release. The existing microphone-state indicator continues to report
+retained or unconfirmed native ownership independently of dictation phase.
+
+A fresh runtime RED posted a real Foundation notification on a private center
+and observed that the tracked attempt was not cancelled. The observer bridge
+now passes both sleep/wake cancellation, tracking during a pending event,
+coalesced event consumption and observer removal on drop. Hotkey/hold tests
+cover stale completion rejection and fresh deliberate activation after release.
+These tests use no microphone, global input, system sleep or user clipboard.
+They prove the native notification bridge and cancellation policy, not physical
+sleep/wake, USB/Bluetooth route changes or next-attempt insertion. Those signed-app
+acceptance gates, format-change publication and background readiness recovery
+remain unfinished under #61.

@@ -11,3 +11,6 @@ pub mod macos_language;
 
 #[cfg(target_os = "macos")]
 pub mod macos_vocabulary;
+
+#[cfg(target_os = "macos")]
+mod macos_sleep;
