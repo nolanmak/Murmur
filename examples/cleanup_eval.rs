@@ -1,6 +1,6 @@
 //! Versioned synthetic cleanup corpus. Default mode has no provider/credential capability.
 use murmur::{
-    cleanup::{Plan, Privacy, apply_plan},
+    cleanup::{Disposition, Plan, Privacy, apply_plan},
     cleanup_config::{NetworkPolicy, Settings},
 };
 #[tokio::main]
@@ -32,6 +32,7 @@ async fn main() -> Result<(), String> {
             .map_err(|_| "Invalid corpus")?;
     let mut passed = 0;
     let mut fallback = 0;
+    let mut evaluated = 0;
     let started = std::time::Instant::now();
     let cases = corpus["cases"].as_array().ok_or("Invalid corpus")?;
     for case in cases {
@@ -39,31 +40,32 @@ async fn main() -> Result<(), String> {
         let language = case["language"].as_str().ok_or("Invalid corpus")?;
         let expected = case["cleaned"].as_str();
         let began = std::time::Instant::now();
+        let mut provider_evaluated = false;
         let actual = if let Some(settings) = &configured {
             let profile = murmur::vocabulary::Profile {
                 language: language.into(),
                 ..Default::default()
             };
-            Some(
-                service
-                    .run(
-                        raw,
-                        &profile,
-                        Ok(settings),
-                        Privacy::Configured,
-                        std::sync::Arc::new(std::sync::atomic::AtomicU8::new(1)),
-                        murmur::config::load_named,
-                    )
-                    .await?
-                    .text,
-            )
+            let outcome = service
+                .run(
+                    raw,
+                    &profile,
+                    Ok(settings),
+                    Privacy::Configured,
+                    std::sync::Arc::new(std::sync::atomic::AtomicU8::new(1)),
+                    murmur::config::load_named,
+                )
+                .await?;
+            provider_evaluated = model_result(outcome.disposition);
+            Some(outcome.text)
         } else {
             let plan: Plan =
                 serde_json::from_value(case["plan"].clone()).map_err(|_| "Invalid corpus plan")?;
             apply_plan(raw, language, &plan)
         };
+        evaluated += usize::from(provider_evaluated);
         let matches = if live {
-            actual.as_deref() == Some(expected.unwrap_or(raw))
+            provider_evaluated && actual.as_deref() == Some(expected.unwrap_or(raw))
         } else {
             actual.as_deref() == expected
         };
@@ -71,15 +73,31 @@ async fn main() -> Result<(), String> {
         fallback += usize::from(actual.as_deref().is_none_or(|s| s == raw));
         println!(
             "{}",
-            serde_json::json!({"case":case["name"],"golden_match":matches,"raw_or_rejected":actual.as_deref().is_none_or(|s|s==raw),"elapsed_us":began.elapsed().as_micros(),"provider_evaluated":live})
+            serde_json::json!({"case":case["name"],"golden_match":matches,"raw_or_rejected":actual.as_deref().is_none_or(|s|s==raw),"elapsed_us":began.elapsed().as_micros(),"provider_evaluated":provider_evaluated,"inconclusive":live && !provider_evaluated})
         );
     }
     println!(
         "{}",
-        serde_json::json!({"corpus_version":1,"cases":cases.len(),"golden_matches":passed,"raw_or_rejected":fallback,"elapsed_us":started.elapsed().as_micros(),"provider_evaluated":live,"semantic_quality_proven":false})
+        serde_json::json!({"corpus_version":1,"cases":cases.len(),"golden_matches":passed,"raw_or_rejected":fallback,"elapsed_us":started.elapsed().as_micros(),"provider_evaluated":evaluated > 0,"provider_evaluated_cases":evaluated,"inconclusive_cases":if live {cases.len()-evaluated} else {0},"semantic_quality_proven":false})
     );
+    if live && evaluated == 0 {
+        return Err("Provider evaluation inconclusive: no model result obtained".into());
+    }
     if !live && passed != cases.len() {
         return Err("Fixture validation regression".into());
     }
     Ok(())
+}
+
+fn model_result(disposition: Disposition) -> bool {
+    matches!(disposition, Disposition::Raw | Disposition::Cleaned)
+}
+
+#[test]
+fn fallback_is_not_provider_evidence() {
+    assert!(!model_result(Disposition::Fallback));
+    assert!(!model_result(Disposition::Offline));
+    assert!(!model_result(Disposition::Snippet));
+    assert!(model_result(Disposition::Raw));
+    assert!(model_result(Disposition::Cleaned));
 }
