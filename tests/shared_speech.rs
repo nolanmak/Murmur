@@ -14,3 +14,8 @@ async fn shared_local_lifecycle() {
 fn shared_streaming_pcm_conversion() {
     fotw_dsp::conformance::streaming();
 }
+
+#[test]
+fn shared_vocabulary_schema_and_boundaries() {
+    fotw_stt::conformance::vocabulary();
+}

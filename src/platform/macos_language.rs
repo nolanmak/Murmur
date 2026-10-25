@@ -1,4 +1,5 @@
 //! Native language menu. Saving reloads the profile instead of overwriting a stale copy.
+use crate::vocabulary::ProfileFile as _;
 use crate::{language, language_catalog, vocabulary::Profile};
 use muda::{CheckMenuItem, MenuItem, Submenu};
 use std::{

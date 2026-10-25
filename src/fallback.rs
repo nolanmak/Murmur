@@ -143,7 +143,6 @@ pub async fn transcribe_with_profile(
     if local.language() != profile.language {
         return Err("Local language preflight does not match this utterance".into());
     }
-    let hints = &profile.recognition_hints;
     progress.set(Stage::Cloud);
     use std::sync::atomic::Ordering;
     let (tx, rx) = mpsc::channel(1024);
@@ -167,11 +166,7 @@ pub async fn transcribe_with_profile(
             return Err("Cancelled".into());
         }
         if remote.is_none() && retry_at.is_none() {
-            progress.set(if hints.is_empty() {
-                Stage::Local
-            } else {
-                Stage::LocalWithoutHints
-            });
+            progress.set(local_vocabulary_stage(profile, &local));
             if ended {
                 break;
             }
@@ -247,4 +242,20 @@ pub async fn transcribe_with_profile(
     crate::local_stt::transcribe(&local, &pcm, control, deadlines.local)
         .await
         .map_err(|e| format!("Cloud transcription unavailable; local fallback: {e}"))
+}
+
+/// The local adapter's capability determines the limitation, not the profile's
+/// deterministic snippets. Unsupported hints never become hosted repair work.
+pub(crate) fn local_vocabulary_stage(
+    profile: &crate::vocabulary::Profile,
+    endpoint: &crate::local_stt::LocalEndpoint,
+) -> Stage {
+    if matches!(
+        profile.hints_for(endpoint.vocabulary_capability()),
+        fotw_stt::vocabulary::HintSelection::Unsupported
+    ) {
+        Stage::LocalWithoutHints
+    } else {
+        Stage::Local
+    }
 }

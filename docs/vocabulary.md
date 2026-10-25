@@ -197,3 +197,14 @@ Owned AppKit renders (fixed light appearance, synthetic values):
 ![A stale draft preserves the external edit](vocabulary-ui/hints-stale.png)
 ![Multiline snippet form](vocabulary-ui/snippet-add.png)
 ![Deletion confirmation](vocabulary-ui/delete-confirm.png)
+
+
+The version-1 schema, limits and exact cue matcher are maintained in the pinned
+`fotw-stt` dependency; Murmur uses the same `Profile`/`Snippet` types directly.
+Rust callers of file methods import `murmur::vocabulary::ProfileFile` alongside
+`Profile`; the JSON and CLI remain compatible. Persistence paths, writer locks
+and guarded native editing remain in Murmur. Provider capability selects
+recognition hints separately from local literal snippets. A local adapter with
+no hint mechanism still reports that limitation, while snippets remain local.
+Unicode matching uses lowercase comparison without normalization; the shared
+fixture matrix includes combining characters and preserves unmatched prose.

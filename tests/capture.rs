@@ -3,6 +3,7 @@ use fotw_audio::{
 };
 use fotw_stt::DeepgramEndpoint;
 use futures_util::{SinkExt, StreamExt};
+use murmur::vocabulary::ProfileFile as _;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},

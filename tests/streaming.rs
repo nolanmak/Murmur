@@ -124,7 +124,16 @@ async fn vocabulary_is_encoded_as_separate_nova3_keyterms() {
                     .collect::<Vec<_>>(),
                 vec!["C++", "Zoë & Sons"]
             );
-            assert!(!pairs.iter().any(|(k, _)| k == "keywords"));
+            assert!(
+                !pairs
+                    .iter()
+                    .any(|(k, _)| matches!(k.as_str(), "keywords" | "prompt" | "snippets"))
+            );
+            assert!(
+                !pairs
+                    .iter()
+                    .any(|(_, value)| value.contains("local-only replacement"))
+            );
             Ok(res)
         })
         .await
@@ -140,13 +149,20 @@ async fn vocabulary_is_encoded_as_separate_nova3_keyterms() {
     });
     let (tx, rx) = mpsc::channel(1);
     drop(tx);
-    murmur::streaming::transcribe_with_vocabulary(
+    murmur::streaming::transcribe_with_profile(
         "fixture".into(),
         rx,
         DeepgramEndpoint::loopback(port),
         Duration::from_secs(1),
         Duration::from_secs(1),
-        &["C++".into(), "Zoë & Sons".into()],
+        &murmur::vocabulary::Profile {
+            recognition_hints: vec!["C++".into(), "Zoë & Sons".into()],
+            snippets: vec![murmur::vocabulary::Snippet {
+                name: "signature".into(),
+                text: "local-only replacement".into(),
+            }],
+            ..Default::default()
+        },
     )
     .await
     .unwrap();

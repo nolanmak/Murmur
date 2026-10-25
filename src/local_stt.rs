@@ -53,6 +53,11 @@ impl Capabilities {
     }
 }
 impl LocalEndpoint {
+    /// This HTTP adapter does not encode recognition hints or provider prompts.
+    pub fn vocabulary_capability(&self) -> fotw_stt::CustomVocabulary {
+        fotw_stt::CustomVocabulary::None
+    }
+
     pub fn language(&self) -> &str {
         &self.language
     }

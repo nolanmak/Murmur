@@ -1,7 +1,7 @@
 # Shared FlyOnTheWall components
 
 Source: https://github.com/nolanmak/FlyOnTheWall
-Pinned revision: `0f144bb2aa3fc23c81d167bb27d9c58875e4419f`
+Pinned revision: `33375fe7baf0ef6c1d15dd66f8ee8cc949bb8e03`
 License: Apache-2.0; root LICENSE and NOTICE retained.
 
 Murmur resolves four crates from that immutable Git revision, with matching
@@ -9,7 +9,7 @@ normal/dev-dependency pins and Cargo.lock. There is no sibling-checkout path
 requirement or moving-branch dependency:
 
 - `fotw-audio`: capture types, microphone platform implementation and fixture seam.
-- `fotw-stt`: transcript types, Deepgram wire parameters and normalization.
+- `fotw-stt`: transcript types, Deepgram wire parameters/normalization and the versioned vocabulary schema.
 - `fotw-secrets`: credential namespace, redacted values and platform stores.
 - `fotw-dsp`: resampling and PCM conversion, re-exported by `src/resample.rs`.
 
@@ -109,3 +109,20 @@ The pinned producer includes FlyOnTheWall #163: real default-input UID and
 validated format observations without creating capture resources. Murmur owns
 the background worker lease, retry budget, health window and cancellation policy.
 A snapshot is advisory metadata, not proof of permissions or live audio.
+
+## Shared vocabulary schema
+
+The profile, snippet type, JSON parsing, validation, language syntax and exact
+cue matching now come from `fotw_stt::vocabulary`. The shared producer extracted
+these semantics from Murmur revision `9c6723f07e6996dd0aeca87919211cc5519cc7cc`
+and retains Murmur copyright in its NOTICE. Version-1 JSON, language defaults
+and application limits are unchanged; no profile migration is needed.
+
+Murmur's `vocabulary::ProfileFile` extension retains application-specific paths,
+bounded reads, nonblocking writer locking and atomic replacement. Native editor
+stale-draft/field-scoped merge policy remains here. Local and cloud adapters use
+the shared hint capability assessment; snippets never enter provider prompts.
+`tests/shared_speech.rs` also runs the producer-owned vocabulary fixture matrix.
+The application-level writer, transport and fallback tests remain here. Neither
+code sharing nor these fixtures prove a term-recall improvement; #9/#118 keep
+the human/model quality and physical interaction gates open.

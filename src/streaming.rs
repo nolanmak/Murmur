@@ -85,9 +85,22 @@ pub async fn transcribe_with_profile(
             "Unencrypted remote provider rejected",
         ));
     }
+    let hints = match profile.hints_for(fotw_stt::SttCapabilities::deepgram().custom_vocabulary) {
+        fotw_stt::vocabulary::HintSelection::NotRequested => &[][..],
+        fotw_stt::vocabulary::HintSelection::Supported {
+            mechanism: fotw_stt::CustomVocabulary::Keyterm,
+            terms,
+        } => terms,
+        _ => {
+            return Err(failure(
+                SttErrorClass::BadRequest,
+                "Selected speech adapter cannot encode these recognition hints",
+            ));
+        }
+    };
     let params = DeepgramStreamParams::spec()
         .with_diarize(false)
-        .with_keyterms(profile.recognition_hints.iter().cloned())
+        .with_keyterms(hints.iter().cloned())
         .with_language(&profile.language);
     let mut request = endpoint
         .url_with(&params.to_query())

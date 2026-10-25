@@ -1,4 +1,5 @@
 //! Native, field-scoped vocabulary forms. No recording or clipboard access.
+use crate::vocabulary::ProfileFile as _;
 use crate::{
     vocabulary::{Profile, Snippet},
     vocabulary_editor::Editor,
