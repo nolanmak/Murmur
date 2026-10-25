@@ -40,7 +40,7 @@ impl FrameSink for Sink {
     fn on_error(&mut self, error: TapError) {
         self.fail(match error {
             TapError::DeviceInvalidated(_) | TapError::DeviceNotFound(_) => 2,
-            TapError::StreamFormatChanged => 6,
+            TapError::StreamFormatChanged | TapError::FormatChangedAfterStop => 6,
             _ => 5,
         });
     }
@@ -181,8 +181,11 @@ impl NativeInput {
             self.lease.phase(MicrophoneState::Unconfirmed);
         }
         let released = result.is_ok() || evidence.is_some_and(|state| state.resources_released());
+        let format_changed = matches!(&result, Err(TapError::FormatChangedAfterStop));
         let result = result.map_err(|_| {
-            if released {
+            if format_changed {
+                "Microphone format changed; start a new dictation; no text inserted"
+            } else if released {
                 "Microphone stopped; native cleanup reported an error; no text inserted; try again"
             } else if self.stopped.load(Ordering::Acquire) {
                 "Microphone stopped but cleanup failed; no text inserted; reopen Murmur"
