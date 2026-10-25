@@ -301,15 +301,16 @@ struct Guard {
     result: Option<Result<(), String>>,
 }
 impl Guard {
-    async fn close(
-        &mut self,
-        control: &AtomicU8,
-        changes: &fotw_audio::device_change::DeviceChangeSignal,
-    ) -> Result<(), String> {
+    async fn close(&mut self, control: &AtomicU8) -> Result<(), String> {
         self.stop.take();
         if let Some(result) = &self.result {
             return result.clone();
         }
+        // Capture-time route checks run before requesting Stop. Once Stop is
+        // in flight, wait for its bounded native result: a notification can be
+        // raised before stop_observed publishes successful Stop evidence. It
+        // cannot by itself turn that later success into an incomplete capture.
+        // Callback faults and failed/unconfirmed cleanup still reject delivery.
         let deadline = tokio::time::sleep(MIC_STOP_DEADLINE);
         tokio::pin!(deadline);
         let mut cancelled_at = None;
@@ -320,11 +321,6 @@ impl Guard {
                 if began.elapsed() >= CANCEL_CLEANUP_GRACE {
                     break Err("Cancelled".into());
                 }
-            }
-            if !self.stopped.load(Ordering::Acquire)
-                && let Some(error) = device_failure(changes)
-            {
-                break Err(error.to_string());
             }
             tokio::select! {
                 biased;
@@ -850,7 +846,7 @@ pub async fn run_provider_raw_with_preparation(
                  if let Some(error)=audio_failure(&failed){return Err(error.into());}
               if !finishing {
                if control.load(Ordering::Acquire)==1 || started.elapsed()>=Duration::from_secs(120) {
-                guard.close(&control, &changes).await?;
+                guard.close(&control).await?;
                 // Successful stop closes the capture epoch. Later route notifications
                 // cannot invalidate audio already collected, but a callback fault
                 // reported during stop must still reject this utterance.
@@ -871,7 +867,7 @@ pub async fn run_provider_raw_with_preparation(
             }
     }
     }.await;
-    let cleanup = guard.close(&control, &changes).await;
+    let cleanup = guard.close(&control).await;
     if cleanup.is_err() && control.load(Ordering::Acquire) != 2 {
         fault.store(true, Ordering::Release);
     }
