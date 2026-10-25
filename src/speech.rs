@@ -91,6 +91,20 @@ impl Settings {
 #[derive(Clone, Debug)]
 pub struct Selection(Result<Settings, String>);
 impl Selection {
+    /// Offline-all selects the configured local endpoint without cloud credentials.
+    pub fn capture_provider_with_privacy(
+        &self,
+        offline_all: bool,
+        credentials: impl FnOnce() -> Result<crate::config::Credentials, String>,
+    ) -> Result<crate::capture::CaptureProvider, String> {
+        if offline_all {
+            let settings = self.0.as_ref().map_err(Clone::clone)?;
+            return Ok(crate::capture::CaptureProvider::Local(
+                crate::local_stt::LocalEndpoint::new(&settings.local_endpoint)?,
+            ));
+        }
+        self.capture_provider(credentials)
+    }
     pub fn load(path: Result<PathBuf, String>) -> Self {
         Self(path.and_then(|path| Settings::load(&path)))
     }

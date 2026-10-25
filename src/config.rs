@@ -82,3 +82,52 @@ pub fn load() -> Result<Credentials, String> {
             })
     })
 }
+
+/// Resolve an explicitly configured cleanup variable, without any Keychain fallback.
+pub fn resolve_named(
+    vars: &HashMap<String, String>,
+    path: Option<&Path>,
+    name: &str,
+) -> Result<SecretString, String> {
+    if let Some(value) = vars.get(name).filter(|v| !v.trim().is_empty()) {
+        return Ok(SecretString::new(value.clone()));
+    }
+    if let Some(path) = path {
+        if std::fs::metadata(path)
+            .map_err(|_| "Cleanup credential file unavailable")?
+            .len()
+            > 256 * 1024
+        {
+            return Err("Cleanup credential file unavailable".into());
+        }
+        for entry in
+            dotenvy::from_path_iter(path).map_err(|_| "Cleanup credential file unavailable")?
+        {
+            let (key, value) = entry.map_err(|_| "Cleanup credential file unavailable")?;
+            if key == name && !value.trim().is_empty() {
+                return Ok(SecretString::new(value));
+            }
+        }
+    }
+    Err("Cleanup credential unavailable; raw transcript retained".into())
+}
+/// Called only after explicit cleanup/privacy/snippet admission.
+pub fn load_named(name: &str) -> Result<SecretString, String> {
+    let mut vars = HashMap::new();
+    if let Ok(value) = std::env::var(name) {
+        vars.insert(name.into(), value);
+    }
+    let file = std::env::var_os("FOTW_ENV_FILE")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| bundle_env(&exe))
+        })
+        .or_else(|| {
+            PathBuf::from(".env")
+                .is_file()
+                .then(|| PathBuf::from(".env"))
+        });
+    resolve_named(&vars, file.as_deref(), name)
+}

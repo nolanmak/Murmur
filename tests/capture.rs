@@ -2015,3 +2015,54 @@ async fn provider_failure_and_user_cancellation_do_not_trigger_microphone_recove
         );
     }
 }
+
+#[tokio::test]
+async fn raw_capture_defers_snippet_expansion_until_the_local_delivery_stage() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = DeepgramEndpoint::loopback(listener.local_addr().unwrap().port());
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+        while let Some(Ok(message)) = ws.next().await {
+            if matches!(message,Message::Text(ref text) if text.contains("CloseStream")) {
+                ws.send(Message::text(r#"{"type":"Results","is_final":true,"speech_final":true,"channel":{"alternatives":[{"transcript":"Insert snippet signature."}]}}"#)).await.unwrap();
+                ws.send(Message::text(r#"{"type":"Metadata"}"#))
+                    .await
+                    .unwrap();
+                break;
+            }
+        }
+    });
+    let (tap, control, _, stopped) = fixture(48000, 0);
+    let profile = murmur::vocabulary::Profile {
+        snippets: vec![murmur::vocabulary::Snippet {
+            name: "signature".into(),
+            text: "Private unrelated snippet contents".into(),
+        }],
+        ..Default::default()
+    };
+    let raw = murmur::capture::run_provider_raw_with_preparation(
+        murmur::capture::InputPreparation::new(move || {
+            Ok(murmur::capture::PreparedInput::new(tap))
+        }),
+        murmur::capture::CaptureProvider::Deepgram {
+            key: "fixture".into(),
+            endpoint,
+        },
+        control,
+        Arc::new(AtomicBool::new(false)),
+        murmur::fallback::Progress::default(),
+        murmur::capture::MicrophoneStartup::default(),
+        fotw_audio::device_change::DeviceChangeSignal::new(),
+        profile.clone(),
+    )
+    .await
+    .unwrap();
+    server.await.unwrap();
+    assert!(stopped.load(Ordering::SeqCst) > 0);
+    assert_eq!(raw, "Insert snippet signature.");
+    assert_eq!(
+        profile.snippet(&raw),
+        Some("Private unrelated snippet contents")
+    );
+}

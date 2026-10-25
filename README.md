@@ -21,8 +21,10 @@ compatibility still require the [manual QA checklist](docs/QA.md).
 
 The [GitHub issues](https://github.com/nolanmak/Murmur/issues) contain acceptance
 criteria, dependencies and test-first evidence. See [vocabulary editing](docs/vocabulary.md)
-for the native forms and capability limits. AI cleanup, optional history,
-notarized distribution and additional platforms remain follow-on work. No claim
+for the native forms and capability limits. [Optional text cleanup](docs/text-cleanup.md)
+now has explicit provider opt-in and Offline-all controls. Real-model cleanup
+quality/latency, optional history, notarized distribution and additional platforms
+remain follow-on work. No claim
 of full Wispr Flow parity is made.
 
 ## Build and run
@@ -107,7 +109,7 @@ cargo run -- doctor  # shows credential source, never the value
   Local insertion uses a native paste shortcut for recognized text inputs in any app.
   Multiline/control-character output requires manual copying; no Enter key is synthesized.
 - Changing apps or fields blocks automatic insertion. Cancelling invalidates late results.
-- Optional Deepgram-to-local fallback is explicit; Local Whisper never falls back to cloud. No LLM cleanup, screen context, analytics or vendor relay.
+- Optional Deepgram-to-local fallback is explicit; Local Whisper never falls back to cloud. LLM cleanup is separately opt-in; Offline-all selects local speech and disables cleanup. No screen context, analytics or vendor relay.
 - Current microphone adapter uses the default device. Unplugging a device cancels;
   automatic device recovery is not yet implemented.
 - Experimental [RustDesk review mode](docs/rustdesk.md) keeps the transcript for
@@ -181,8 +183,7 @@ then `murmur vocabulary import vocabulary.json` to apply it to the next utteranc
 Recognition hints are sent to Deepgram; local Whisper explicitly reports that
 those hints are unavailable. Exact whole-utterance cues such as “insert snippet
 sign off” expand locally with either provider. See [the versioned schema,
-limits and import/export commands](docs/vocabulary.md). Vocabulary editing UI and
-real-model accuracy evaluation remain in progress.
+limits and import/export commands](docs/vocabulary.md). Native vocabulary editing is available; real-model accuracy evaluation remains in progress.
 
 Choose **Language** in the menu bar, or save it with `murmur language es`
 (English is `en`). It shares the per-utterance vocabulary snapshot and profile import/export.

@@ -409,6 +409,7 @@ impl Drop for EventTap {
     }
 }
 struct Completion {
+    cleanup: Option<crate::cleanup::Disposition>,
     input_failed: bool,
     generation: u64,
     result: Result<String, String>,
@@ -653,6 +654,8 @@ struct Shell {
     speech_toggle: MenuItem,
     language_menu: super::macos_language::LanguageMenu,
     vocabulary_menu: super::macos_vocabulary::VocabularyMenu,
+    cleanup_menu: super::macos_cleanup::CleanupMenu,
+    cleanup_service: crate::cleanup_http::Service,
     _native_menu: Menu,
     pill: Pill,
     indicator: Indicator,
@@ -719,6 +722,11 @@ impl Shell {
             super::macos_language::LanguageMenu::new(crate::vocabulary::Profile::path())?;
         let vocabulary_menu =
             super::macos_vocabulary::VocabularyMenu::new(crate::vocabulary::Profile::path())?;
+        let cleanup_menu = super::macos_cleanup::CleanupMenu::new(
+            crate::cleanup_config::Settings::path(),
+            crate::cleanup_config::NetworkPolicy::path(),
+        )?;
+        speech_toggle.set_text(cleanup_menu.speech_label(speech_label(speech.provider())));
         let native_menu = Menu::new();
         let application_menu = muda::Submenu::new("Murmur", true);
         application_menu
@@ -827,6 +835,7 @@ impl Shell {
             .map_err(|e| e.to_string())?;
         menu.append(&vocabulary_menu.menu)
             .map_err(|e| e.to_string())?;
+        menu.append(&cleanup_menu.menu).map_err(|e| e.to_string())?;
         for item in [
             &start,
             &stop,
@@ -880,6 +889,8 @@ impl Shell {
             speech_toggle,
             language_menu,
             vocabulary_menu,
+            cleanup_menu,
+            cleanup_service: Default::default(),
             _native_menu: native_menu,
             pill,
             indicator: Indicator::default(),
@@ -995,6 +1006,9 @@ impl Shell {
         {
             return message.into();
         }
+        if self.cleanup_menu.network_error() {
+            return "Privacy settings invalid · choose Offline-all to repair".into();
+        }
         if self.speech.error().is_some() {
             return "Speech settings invalid — choose Local Whisper in the Transcription menu to repair".into();
         }
@@ -1033,7 +1047,7 @@ impl Shell {
             self.show(&self.ready());
             return;
         }
-        if self.speech.error().is_some() {
+        if self.speech.error().is_some() || self.cleanup_menu.network_error() {
             self.cancel();
             self.show(&self.ready());
             return;
@@ -1073,12 +1087,26 @@ impl Shell {
         let startup = self.microphone_startup.clone();
         let progress = self.speech_progress.clone();
         let speech = self.speech.clone();
+        let remote_cleanup = self.recording_remote;
+        let cleanup_service = self.cleanup_service.clone();
         std::thread::spawn(move || {
             let fault = Arc::new(AtomicBool::new(false));
+            let mut cleanup_notice = None;
             let result = crate::core::contain_worker(|| {
                 let vocabulary =
                     crate::vocabulary::Profile::load(&crate::vocabulary::Profile::path()?)?;
-                let provider = speech.capture_provider(crate::config::load)?;
+                let policy = crate::cleanup_config::NetworkPolicy::load(
+                    &crate::cleanup_config::NetworkPolicy::path()?,
+                )?;
+                let privacy = if policy.offline_all {
+                    crate::cleanup::Privacy::OfflineAll
+                } else {
+                    crate::cleanup::Privacy::Configured
+                };
+                let settings = crate::cleanup_config::Settings::path()
+                    .and_then(|p| crate::cleanup_config::Settings::load(&p));
+                let provider = speech
+                    .capture_provider_with_privacy(policy.offline_all, crate::config::load)?;
                 let changes = fotw_audio::device_change::DeviceChangeSignal::new();
                 let input_changes = changes.clone();
                 let input = crate::capture::InputPreparation::new(move || {
@@ -1092,11 +1120,35 @@ impl Shell {
                     Ok(crate::capture::PreparedInput::watched(tap, watch))
                 })
                 .with_fault_signal(fault.clone());
-                crate::capture::block_on_detached(crate::capture::run_provider_with_preparation(
-                    input, provider, control, receiving, progress, startup, changes, vocabulary,
-                ))?
+                let outcome = crate::capture::block_on_detached(async {
+                    let raw = crate::capture::run_provider_raw_with_preparation(
+                        input,
+                        provider,
+                        control.clone(),
+                        receiving,
+                        progress,
+                        startup,
+                        changes,
+                        vocabulary.clone(),
+                    )
+                    .await?;
+                    let outcome = cleanup_service
+                        .run(
+                            &raw,
+                            &vocabulary,
+                            settings.as_ref().map_err(String::as_str),
+                            privacy,
+                            control,
+                            crate::config::load_named,
+                        )
+                        .await?;
+                    Ok::<_, String>(outcome.for_destination(&raw, remote_cleanup))
+                })??;
+                cleanup_notice = Some(outcome.disposition);
+                Ok(outcome.text)
             });
             let _ = completed.send(Completion {
+                cleanup: cleanup_notice,
                 input_failed: fault.load(Ordering::Acquire),
                 generation,
                 result,
@@ -1169,12 +1221,14 @@ impl Shell {
         let generation = self.core.generation();
         self.core.stop();
         let _ = self.completed.send(Completion {
+            cleanup: None,
             input_failed: false,
             generation,
             result: Ok(text.into()),
         });
         if duplicate {
             let _ = self.completed.send(Completion {
+                cleanup: None,
                 input_failed: false,
                 generation,
                 result: Ok("Late synthetic duplicate".into()),
@@ -1259,6 +1313,15 @@ impl Shell {
         {
             self.prewarm();
         }
+        if self.cleanup_menu.refresh_if_due() {
+            self.speech_toggle.set_text(
+                self.cleanup_menu
+                    .speech_label(speech_label(self.speech.provider())),
+            );
+        }
+        self.cleanup_menu
+            .menu
+            .set_enabled(self.core.phase == Phase::Idle);
         self.language_menu.refresh_if_due();
         self.vocabulary_menu.refresh_if_due();
         self.vocabulary_menu
@@ -1332,6 +1395,23 @@ impl Shell {
             }
         }
         while let Ok(event) = MenuEvent::receiver().try_recv() {
+            if super::macos_cleanup::CleanupMenu::handles(event.id.as_ref()) {
+                if self.core.phase != Phase::Idle {
+                    self.show("Finish dictation before changing cleanup or privacy");
+                    continue;
+                }
+                if let Some(result) = self.cleanup_menu.handle(event.id.as_ref()) {
+                    self.speech_toggle.set_text(
+                        self.cleanup_menu
+                            .speech_label(speech_label(self.speech.provider())),
+                    );
+                    match result {
+                        Ok(message) => self.show(&message),
+                        Err(error) => self.show(&error),
+                    }
+                }
+                continue;
+            }
             if super::macos_vocabulary::VocabularyMenu::handles(event.id.as_ref()) {
                 if self.core.phase != Phase::Idle {
                     self.show("Finish dictation before editing vocabulary");
@@ -1394,8 +1474,10 @@ impl Shell {
                         .and_then(|path| self.speech.choose(provider, &path))
                     {
                         Ok(()) => {
-                            self.speech_toggle
-                                .set_text(speech_label(self.speech.provider()));
+                            self.speech_toggle.set_text(
+                                self.cleanup_menu
+                                    .speech_label(speech_label(self.speech.provider())),
+                            );
                             self.show("Transcription provider saved for the next recording");
                         }
                         Err(error) => self.show(&error),
@@ -1592,20 +1674,26 @@ impl Shell {
             };
             match effect {
                 CompletionEffect::Transcript(text) => {
+                    let cleanup_suffix = match done.cleanup {
+                        Some(crate::cleanup::Disposition::Fallback) => {
+                            " · raw text; cleanup unavailable"
+                        }
+                        Some(crate::cleanup::Disposition::Offline) => " · Offline-all",
+                        _ => "",
+                    };
                     eprintln!(
                         "transcription complete: {} characters",
                         text.chars().count()
                     );
                     self.last.set(text.clone());
-                    if self.recording_remote_target.is_some() {
+                    if !self.recording_remote && text.contains('\n') {
+                        self.show("Formatted text ready · choose Copy Last Transcript");
+                    } else if self.recording_remote_target.is_some() {
                         self.copy_automatic_remote(&text);
                     } else if self.recording_remote {
-                        self.show(
-                            &self
-                                .speech_progress
-                                .stage()
-                                .completion_message("Transcript ready · Review for RustDesk…"),
-                        );
+                        self.show(&self.speech_progress.stage().completion_message(&format!(
+                            "Transcript ready · Review for RustDesk…{cleanup_suffix}"
+                        )));
                     } else {
                         let result = self
                             .focus
@@ -1613,12 +1701,11 @@ impl Shell {
                             .ok_or(DeliveryFailure::MissingTarget)
                             .and_then(|f| f.insert(&text, &mut self.local_lease));
                         match result {
-                            Ok(outcome) => self.show(
-                                &self
-                                    .speech_progress
-                                    .stage()
-                                    .completion_message(outcome.message()),
-                            ),
+                            Ok(outcome) => {
+                                self.show(&self.speech_progress.stage().completion_message(
+                                    &format!("{}{cleanup_suffix}", outcome.message()),
+                                ))
+                            }
                             Err(reason) => self.show(reason.message()),
                         }
                     }

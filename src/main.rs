@@ -3,11 +3,13 @@ fn main() {
     let result = match command.as_str() {
         "--help" | "help" => {
             println!(
-                "Murmur — macOS hold-Control dictation\n\nrun     Launch the menu-bar app (use the .app bundle)\ndoctor  Report provider configuration without printing secrets\nspeech  Select local [URL], deepgram or fallback [URL] transcription\nlanguage CODE  Select an explicit transcription language (default en)\nvocabulary  Import/export/validate a versioned vocabulary profile\n\nHold Control to dictate; release to insert; Esc cancels.\nRun scripts/build-app.sh and launch the resulting .app for capture."
+                "Murmur — macOS hold-Control dictation\n\nrun     Launch the menu-bar app (use the .app bundle)\ndoctor  Report provider configuration without printing secrets\nspeech  Select local [URL], deepgram or fallback [URL] transcription\nlanguage CODE  Select an explicit transcription language (default en)\nvocabulary  Import/export/validate a versioned vocabulary profile\ncleanup  Configure a provider, then explicitly turn text cleanup on/off\nprivacy  Choose offline-all (local speech, no cleanup) or configured providers\n\nHold Control to dictate; release to insert; Esc cancels.\nRun scripts/build-app.sh and launch the resulting .app for capture."
             );
             Ok(())
         }
         "speech" => configure_speech(),
+        "cleanup" => configure_cleanup(false),
+        "privacy" => configure_cleanup(true),
         "vocabulary" => configure_vocabulary(),
         "language" => configure_language(),
         "doctor" => doctor(),
@@ -29,6 +31,29 @@ fn main() {
         eprintln!("{error}");
         std::process::exit(1);
     }
+}
+
+fn configure_cleanup(privacy: bool) -> Result<(), String> {
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    if !privacy
+        && args
+            .first()
+            .is_some_and(|s| matches!(s.as_str(), "offline-all" | "configured"))
+    {
+        return Err("Use murmur privacy offline-all | configured".into());
+    }
+    if privacy && (args.len() != 1 || !matches!(args[0].as_str(), "offline-all" | "configured")) {
+        return Err("Usage: murmur privacy offline-all | configured".into());
+    }
+    println!(
+        "{}",
+        murmur::cleanup_config::command(
+            &args,
+            &murmur::cleanup_config::Settings::path()?,
+            &murmur::cleanup_config::NetworkPolicy::path()?
+        )?
+    );
+    Ok(())
 }
 
 fn configure_speech() -> Result<(), String> {
@@ -109,6 +134,13 @@ fn doctor() -> Result<(), String> {
         "Selected language: {} (checked against provider/model before capture).",
         vocabulary.language
     );
+    let privacy = murmur::cleanup_config::NetworkPolicy::load(
+        &murmur::cleanup_config::NetworkPolicy::path()?,
+    )?;
+    if privacy.offline_all {
+        println!("Offline-all: local speech only, cleanup disabled; cloud credentials not read.");
+        return Ok(());
+    }
     match settings.provider {
         murmur::speech::Provider::Deepgram => murmur::config::load().map(|c| {
             println!(

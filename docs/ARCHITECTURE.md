@@ -14,8 +14,13 @@ work; a 120-second limit bounds missing-release events. The indicator cannot tak
 
 ## M2: writing features
 
-Optional meaning-preserving cleanup, vocabulary, snippets, language controls and
-explicit recovery/history. These have separate issues and are not enabled in the MVP.
+Vocabulary, snippets and language controls are available. Optional text cleanup
+is explicitly configured and off by default; it validates source-token edit plans
+after confirmed microphone shutdown, before the existing generation/target
+delivery guards. Its separate Offline-all policy forces local speech and bypasses
+cleanup. See [cleanup protocol, privacy and validation](text-cleanup.md). General
+semantic quality and native release-to-paste checks remain open. Explicit
+recovery/history has its own issue.
 
 ## M3: distribution and portability
 
