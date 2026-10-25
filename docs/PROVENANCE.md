@@ -1,7 +1,7 @@
 # Shared FlyOnTheWall components
 
 Source: https://github.com/nolanmak/FlyOnTheWall
-Pinned revision: `a82b049bdab2eaadbd6b8319d69b6c9549437731`
+Pinned revision: `0f144bb2aa3fc23c81d167bb27d9c58875e4419f`
 License: Apache-2.0; root LICENSE and NOTICE retained.
 
 Murmur resolves four crates from that immutable Git revision, with matching
@@ -102,3 +102,10 @@ by this repository's tests.
 This immutable producer includes FlyOnTheWall [#162](https://github.com/nolanmak/FlyOnTheWall/pull/162): per-capture device/input-stream format listeners, stale-rate IO rejection, non-authoritative invalidated formats, owned listener teardown and positive Released evidence after a format fault discovered at completed Stop. The shared macOS `formats()` conformance now drives the actual native callback/latch/IO/finalization path with synthetic PCM and no capture device.
 
 Murmur names `FormatChangedAfterStop` as a format fault, returns no transcript for automatic insertion and releases the startup lease only using the SDK’s positive cleanup evidence. A fixture checks that the same controller can complete fresh dictation after that fault. Retained/unconfirmed cleanup remains blocked. Native USB/Bluetooth/rate-change and next-field insertion are still unverified; the producer’s read-only probe reported no default input on this Mac. Background readiness episodes and sustained-health policy remain unfinished.
+
+## Read-only input readiness snapshot
+
+The pinned producer includes FlyOnTheWall #163: real default-input UID and
+validated format observations without creating capture resources. Murmur owns
+the background worker lease, retry budget, health window and cancellation policy.
+A snapshot is advisory metadata, not proof of permissions or live audio.

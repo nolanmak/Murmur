@@ -409,6 +409,7 @@ impl Drop for EventTap {
     }
 }
 struct Completion {
+    input_failed: bool,
     generation: u64,
     result: Result<String, String>,
 }
@@ -669,6 +670,10 @@ struct Shell {
     receiving: Arc<AtomicBool>,
     microphone_startup: crate::capture::MicrophoneStartup,
     microphone_notice: Option<&'static str>,
+    microphone_readiness: crate::readiness::Monitor<fotw_audio::platform::macos::InputSnapshot>,
+    readiness_status: crate::readiness::Status,
+    readiness_focus: i32,
+    readiness_reason: Option<String>,
     speech_progress: crate::fallback::Progress,
     speech_stage: crate::fallback::Stage,
     remote_mode: bool,
@@ -898,6 +903,10 @@ impl Shell {
             receiving: Arc::new(AtomicBool::new(false)),
             microphone_startup: Default::default(),
             microphone_notice: None,
+            microphone_readiness: crate::readiness::Monitor::new(Duration::from_secs(30)),
+            readiness_status: crate::readiness::Status::Inactive,
+            readiness_focus: 0,
+            readiness_reason: None,
             speech_progress: Default::default(),
             speech_stage: Default::default(),
             remote_mode: remote_fixture,
@@ -991,11 +1000,24 @@ impl Shell {
         }
         match &self.warning {
             Some(warning) => warning.clone(),
+            None if self.microphone_readiness.message().is_some() => {
+                let message = self.microphone_readiness.message().unwrap();
+                match &self.readiness_reason {
+                    Some(reason)
+                        if self.microphone_readiness.status()
+                            != crate::readiness::Status::Ready =>
+                    {
+                        format!("{reason} · {message}")
+                    }
+                    _ => message.into(),
+                }
+            }
             None if self.remote_mode => "Hold Control to record for remote review".into(),
             None => "Hold Control to dictate".into(),
         }
     }
     fn cancel(&mut self) {
+        self.microphone_readiness.cancel();
         self.review.cancel();
         self.control.store(2, Ordering::Release);
         if self.core.cancel() {
@@ -1004,6 +1026,7 @@ impl Shell {
         }
     }
     fn start(&mut self) {
+        self.microphone_readiness.cancel();
         if self.microphone_startup.state() != crate::capture::MicrophoneState::Idle {
             self.last.begin();
             self.cancel();
@@ -1051,6 +1074,7 @@ impl Shell {
         let progress = self.speech_progress.clone();
         let speech = self.speech.clone();
         std::thread::spawn(move || {
+            let fault = Arc::new(AtomicBool::new(false));
             let result = crate::core::contain_worker(|| {
                 let vocabulary =
                     crate::vocabulary::Profile::load(&crate::vocabulary::Profile::path()?)?;
@@ -1066,12 +1090,17 @@ impl Shell {
                         .open_mic(&DeviceId::new("default"), FormatRequest::any())
                         .map_err(|_| "No microphone available".to_string())?;
                     Ok(crate::capture::PreparedInput::watched(tap, watch))
-                });
+                })
+                .with_fault_signal(fault.clone());
                 crate::capture::block_on_detached(crate::capture::run_provider_with_preparation(
                     input, provider, control, receiving, progress, startup, changes, vocabulary,
                 ))?
             });
-            let _ = completed.send(Completion { generation, result });
+            let _ = completed.send(Completion {
+                input_failed: fault.load(Ordering::Acquire),
+                generation,
+                result,
+            });
         });
     }
     fn preflight_focus(&mut self) -> Result<Option<Focus>, DeliveryFailure> {
@@ -1140,22 +1169,26 @@ impl Shell {
         let generation = self.core.generation();
         self.core.stop();
         let _ = self.completed.send(Completion {
+            input_failed: false,
             generation,
             result: Ok(text.into()),
         });
         if duplicate {
             let _ = self.completed.send(Completion {
+                input_failed: false,
                 generation,
                 result: Ok("Late synthetic duplicate".into()),
             });
         }
     }
     fn finish(&mut self) {
+        self.microphone_readiness.cancel();
         self.released = Instant::now();
         self.control.store(1, Ordering::Release);
         self.status("Finishing… · Esc to cancel");
     }
     fn suspend_for_sleep(&mut self) {
+        self.microphone_readiness.cancel();
         self.control.store(2, Ordering::Release);
         let interrupted = self.core.cancel();
         self.review.cancel();
@@ -1181,6 +1214,38 @@ impl Shell {
         self.smoke_started = true;
         if interrupted {
             self.show("Sleep interrupted dictation; release the shortcut and try again");
+        }
+    }
+    fn poll_microphone_readiness(&mut self) {
+        use crate::{capture::MicrophoneState as Mic, permissions::Access};
+        if self.readiness_focus != focused_app_pid() {
+            self.microphone_readiness.cancel();
+        }
+        let allowed = self.core.phase == Phase::Idle
+            && self.permissions.microphone == Access::Granted
+            && !self.onboarding.waiting();
+        let native_available = self.microphone_startup.state() == Mic::Idle
+            || (self.microphone_startup.state() == Mic::Inspecting
+                && self.microphone_readiness.pending());
+        // A failed capture can still be finishing cleanup. Preserve the episode,
+        // but never compete with or bypass that native owner.
+        if allowed && !native_available {
+            return;
+        }
+        self.microphone_readiness.tick(
+            self.launched.elapsed(),
+            allowed,
+            &self.microphone_startup,
+            || fotw_audio::platform::macos::default_input_snapshot().ok(),
+        );
+        let status = self.microphone_readiness.status();
+        if status != self.readiness_status {
+            self.readiness_status = status;
+            // Metadata completions have no recording, focus or insertion action.
+            // Only an idle status may change, after cancellation/input handling.
+            if self.core.phase == Phase::Idle {
+                self.status(&self.ready());
+            }
         }
     }
     fn pump(&mut self) {
@@ -1238,6 +1303,9 @@ impl Shell {
             self.show("Input queue overflow; dictation cancelled");
         }
         while let Ok(event) = self.input.try_recv() {
+            if matches!(event, Input::Flags(false, _) | Input::HotkeyAbort) {
+                self.microphone_readiness.cancel();
+            }
             match event {
                 Input::HotkeyDown => {
                     let now = self.now();
@@ -1272,6 +1340,7 @@ impl Shell {
                 // A modal editor must not collect shortcuts for replay when it
                 // closes. Keep ordinary editing keys available to AppKit.
                 self.core.cancel();
+                self.microphone_readiness.cancel();
                 self.indicator.disarm();
                 if let Some(tap) = &self.tap {
                     tap._context.busy.set(true);
@@ -1555,7 +1624,14 @@ impl Shell {
                     }
                 }
                 CompletionEffect::Empty => self.show("No speech detected"),
-                CompletionEffect::Error(e) => self.show(&e),
+                CompletionEffect::Error(e) => {
+                    if done.input_failed {
+                        self.readiness_reason = Some(e.clone());
+                        self.readiness_focus = focused_app_pid();
+                        self.microphone_readiness.fault(self.launched.elapsed());
+                    }
+                    self.show(&e);
+                }
             }
             self.focus = None;
         }
@@ -1567,6 +1643,7 @@ impl Shell {
             self.check_permissions();
             self.pill.place();
         }
+        self.poll_microphone_readiness();
         let now = self.now();
         let stage = self.speech_progress.stage();
         if stage != self.speech_stage
