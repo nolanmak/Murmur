@@ -1867,3 +1867,59 @@ async fn language_preflight_observes_cancel_release_and_route_change_while_healt
         assert!(error.contains(expected), "{error}");
     }
 }
+
+struct FormatStopTap(Box<dyn AudioTap>);
+impl AudioTap for FormatStopTap {
+    fn id(&self) -> &TapId {
+        self.0.id()
+    }
+    fn format(&self) -> StreamFormat {
+        self.0.format()
+    }
+    fn format_is_authoritative(&self) -> bool {
+        self.0.format_is_authoritative()
+    }
+    fn start(&mut self, sink: Box<dyn FrameSink>) -> Result<StreamFormat, TapError> {
+        self.0.start(sink)
+    }
+    fn stop(&mut self) -> Result<(), TapError> {
+        self.stop_observed(&mut || {})
+    }
+    fn stop_observed(&mut self, stopped: &mut dyn FnMut()) -> Result<(), TapError> {
+        self.0.stop()?;
+        stopped();
+        Err(TapError::FormatChangedAfterStop)
+    }
+}
+#[tokio::test]
+async fn final_format_change_rejects_complete_speech_names_the_fault_and_allows_fresh_dictation() {
+    use murmur::capture::{InputPreparation, MicrophoneStartup, PreparedInput};
+    let (tap, control, _, _) = fixture(48000, 0);
+    let startup = MicrophoneStartup::default();
+    let input = InputPreparation::new(move || Ok(PreparedInput::new(Box::new(FormatStopTap(tap)))));
+    let error = prepared_fixture(input, control, startup.clone())
+        .await
+        .unwrap_err();
+    wait_for_input_idle(&startup).await;
+    assert!(error.contains("format changed"), "{error}");
+    assert!(
+        error.contains("new dictation") && error.contains("no text inserted"),
+        "{error}"
+    );
+    let (endpoint, server) = quiet_provider().await;
+    let (tap, control, _, _) = fixture(48000, 0);
+    let text = murmur::capture::run_provider_with_startup(
+        tap,
+        murmur::capture::CaptureProvider::Deepgram {
+            key: "fixture".into(),
+            endpoint,
+        },
+        control,
+        Arc::new(AtomicBool::new(false)),
+        startup,
+    )
+    .await
+    .unwrap();
+    assert_eq!(text, "Recovered fixture.");
+    server.await.unwrap();
+}
