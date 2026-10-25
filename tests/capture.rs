@@ -489,6 +489,9 @@ impl AudioTap for FaultTap {
         if matches!(self.fault, CaptureFault::RouteAtSuccessfulStop) {
             self.changes
                 .raise(fotw_audio::device_change::DeviceChangeKind::DefaultInput);
+            // Hold the successful Stop return long enough for the async owner
+            // to observe the notification before the positive-stop callback.
+            std::thread::sleep(Duration::from_millis(50));
         }
         Ok(())
     }
