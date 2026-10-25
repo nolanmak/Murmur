@@ -659,6 +659,32 @@ pub async fn run_provider_with_vocabulary(
 )]
 pub async fn run_provider_with_preparation(
     input: InputPreparation,
+    provider: CaptureProvider,
+    control: Arc<AtomicU8>,
+    receiving: Arc<AtomicBool>,
+    progress: crate::fallback::Progress,
+    startup: MicrophoneStartup,
+    changes: Arc<fotw_audio::device_change::DeviceChangeSignal>,
+    profile: crate::vocabulary::Profile,
+) -> Result<String, String> {
+    let raw = run_provider_raw_with_preparation(
+        input,
+        provider,
+        control,
+        receiving,
+        progress,
+        startup,
+        changes,
+        profile.clone(),
+    )
+    .await?;
+    Ok(profile.expand(&raw))
+}
+
+/// Capture a raw winning utterance; optional processing follows confirmed mic cleanup.
+#[allow(clippy::too_many_arguments, reason = "attempt-owned capture seams")]
+pub async fn run_provider_raw_with_preparation(
+    input: InputPreparation,
     mut provider: CaptureProvider,
     control: Arc<AtomicU8>,
     receiving: Arc<AtomicBool>,
@@ -815,7 +841,7 @@ pub async fn run_provider_with_preparation(
                  if !finishing && let Some(error)=observed_device_failure(&changes, &fault) {return Err(error.into());}
                  if let Some(error)=audio_failure(&failed) {return Err(error.into());}
                  if result.is_ok() && !finishing {return Err("Transcription ended before microphone stopped; no text inserted".into());}
-                 return result.map(|text| profile.expand(&text));
+                 return result;
              },
              _=tick.tick()=>{
               if control.load(Ordering::Acquire)==2 {return Err("Cancelled".into());}

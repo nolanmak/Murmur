@@ -23,7 +23,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 [dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "stream", "native-tls"] }
 tempfile = "3"
 fotw-audio = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "0f144bb2aa3fc23c81d167bb27d9c58875e4419f" }
 fotw-stt = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "0f144bb2aa3fc23c81d167bb27d9c58875e4419f" }

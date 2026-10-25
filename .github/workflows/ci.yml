@@ -30,6 +30,7 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked --workspace
+      - run: cargo run --locked --example cleanup_eval
       - run: python3 scripts/check-repo.py
       - name: Test managed local Whisper lifecycle
         run: python3 -m unittest discover -s scripts -p 'test_local_whisper.py'
@@ -42,6 +43,15 @@ jobs:
           output = os.path.join(os.environ["RUNNER_TEMP"], "native-vocabulary-fixture")
           subprocess.run(["target/debug/examples/vocabulary_native_qa", output], check=True, timeout=40)
           PY
+      - if: runner.os == 'macOS'
+        name: Test owned cleanup and privacy menu actions
+        run: |
+          cargo build --locked --example cleanup_menu_qa
+          python3 - <<'PYTHON'
+          import os, subprocess
+          output = os.path.join(os.environ["RUNNER_TEMP"], "native-cleanup-menu-fixture")
+          subprocess.run(["target/debug/examples/cleanup_menu_qa", output], check=True, timeout=20)
+          PYTHON
       - if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
         with:

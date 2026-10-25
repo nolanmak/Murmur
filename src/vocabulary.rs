@@ -82,6 +82,10 @@ impl Profile {
         Ok(())
     }
     pub fn expand(&self, text: &str) -> String {
+        self.snippet(text).unwrap_or(text).to_owned()
+    }
+    /// Resolve only the exact deliberate cue; expansion stays entirely local.
+    pub fn snippet(&self, text: &str) -> Option<&str> {
         let cue = text.trim();
         let cue = cue
             .strip_suffix('.')
@@ -89,13 +93,11 @@ impl Profile {
             .or_else(|| cue.strip_suffix('?'))
             .unwrap_or(cue)
             .to_lowercase();
-        let Some(name) = cue.strip_prefix("insert snippet ") else {
-            return text.to_owned();
-        };
+        let name = cue.strip_prefix("insert snippet ")?;
         self.snippets
             .iter()
             .find(|s| s.name.to_lowercase() == name)
-            .map_or_else(|| text.to_owned(), |s| s.text.clone())
+            .map(|s| s.text.as_str())
     }
     pub fn path() -> Result<PathBuf, String> {
         Ok(
