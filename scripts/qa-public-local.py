@@ -32,6 +32,7 @@ WAV = args.wav.resolve()
 BINARY = args.server.resolve()
 ADAPTER = args.adapter.resolve()
 OUTPUT = args.output.resolve()
+ADAPTER_SHA256 = hashlib.sha256(ADAPTER.read_bytes()).hexdigest()
 SB = ['/usr/bin/sandbox-exec', '-f', str(TREE / 'scripts/local-whisper-offline.sb')]
 REFERENCE_NORMALIZED_SHA256 = '880038ec1c8c450de59e56c613f14ac01b455a934e4752321e07f1a7cbcec0ee'
 for (path, size, digest) in [(MODEL, 487614201, 'c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d'), (WAV, 352078, '59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e')]:
@@ -121,6 +122,7 @@ with owned_state() as temp:
         report = {
             'source_tracked_changes': bool(subprocess.check_output(['git', 'diff', 'HEAD', '--name-only'], cwd=TREE, text=True).strip()),
             'example_sha256': hashlib.sha256((TREE / 'examples/local_transcribe.rs').read_bytes()).hexdigest(),
+            'adapter_binary_sha256': ADAPTER_SHA256,
             'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=TREE, text=True).strip(),
             'hardware_model': subprocess.check_output(['/usr/sbin/sysctl', '-n', 'hw.model'], text=True).strip(),
             'ram_bytes': int(subprocess.check_output(['/usr/sbin/sysctl', '-n', 'hw.memsize'], text=True)),
@@ -153,6 +155,7 @@ with owned_state() as temp:
             'paired_provider_accuracy': False,
             'concurrent_apps': False,
         }
+        assert hashlib.sha256(ADAPTER.read_bytes()).hexdigest() == ADAPTER_SHA256, 'Adapter binary changed during trials'
     finally:
         stop_sampler.set()
         if sampler:
