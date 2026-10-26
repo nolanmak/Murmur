@@ -1,0 +1,328 @@
+{
+  "source_tracked_changes": false,
+  "example_sha256": "842b40b0a715bc19677d37eca1df6d4d9382bc6947aa948b4f8d5d26fb6c23aa",
+  "adapter_binary_sha256": "dcf524eb7a8f8589ea5f8ab781abac79f497582baa4e0e5b946d081a416ddff2",
+  "source_commit": "c663d47de4fdabf03858c98eae130c53bd950aea",
+  "hardware_model": "Mac16,10",
+  "ram_bytes": 17179869184,
+  "macos": "26.4",
+  "runtime_binary_name": "whisper-server",
+  "runtime_version": "whisper.cpp 1.9.1 Homebrew",
+  "runtime_binary_sha256": "437a74a72cea6d8a3c3c035f5ca9d65bd4b553ce0d8eff635b18c727740e6c37",
+  "model_sha256": "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
+  "wave_sha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+  "wave_samples": 176000,
+  "audio_seconds": 11,
+  "adapter": "actual local_stt direct and fallback::transcribe_with_profile cloud-loss paths",
+  "gateway": "actual managed helper with instance/model binding",
+  "external_network_denied": true,
+  "startup_to_ready_seconds": 0.8744460419999999,
+  "cache_controlled": false,
+  "transcript_retained": false,
+  "model_import_preceded_startup": true,
+  "runtime_settings": "helper defaults, including native automatic GPU selection; no thread override",
+  "rss_sampling_interval_seconds": 0.05,
+  "gateway_sampled_peak_rss_bytes": 27049984,
+  "engine_sampled_peak_rss_bytes": 731774976,
+  "startup_rss_measured": false,
+  "gpu_allocation_separately_measured": false,
+  "sum_rss_is_not_unique_physical_memory": true,
+  "trials": [
+    {
+      "mode": "direct",
+      "trial": 1,
+      "adapter_wall_seconds": 0.697529083,
+      "adapter_max_rss_bytes": 22036480,
+      "reference_matches": true,
+      "reference_words": 22,
+      "recovery": null
+    },
+    {
+      "mode": "direct",
+      "trial": 2,
+      "adapter_wall_seconds": 0.3786087079999998,
+      "adapter_max_rss_bytes": 21970944,
+      "reference_matches": true,
+      "reference_words": 22,
+      "recovery": null
+    },
+    {
+      "mode": "direct",
+      "trial": 3,
+      "adapter_wall_seconds": 0.3742685830000001,
+      "adapter_max_rss_bytes": 21938176,
+      "reference_matches": true,
+      "reference_words": 22,
+      "recovery": null
+    },
+    {
+      "mode": "cloud-loss",
+      "trial": 1,
+      "adapter_wall_seconds": 0.492604375,
+      "adapter_max_rss_bytes": 23789568,
+      "reference_matches": true,
+      "reference_words": 22,
+      "recovery": {
+        "additional_samples_after_disconnect": 88000,
+        "cloud_connections": 2,
+        "cloud_samples_before_disconnect": 88000,
+        "input_samples": 176000,
+        "insertion_performed": false,
+        "partial_cloud_text_discarded": true,
+        "real_provider_calls": 0,
+        "result_provider": "Local Whisper"
+      }
+    },
+    {
+      "mode": "cloud-loss",
+      "trial": 2,
+      "adapter_wall_seconds": 0.4954020840000002,
+      "adapter_max_rss_bytes": 23904256,
+      "reference_matches": true,
+      "reference_words": 22,
+      "recovery": {
+        "additional_samples_after_disconnect": 88000,
+        "cloud_connections": 2,
+        "cloud_samples_before_disconnect": 88000,
+        "input_samples": 176000,
+        "insertion_performed": false,
+        "partial_cloud_text_discarded": true,
+        "real_provider_calls": 0,
+        "result_provider": "Local Whisper"
+      }
+    },
+    {
+      "mode": "cloud-loss",
+      "trial": 3,
+      "adapter_wall_seconds": 0.49302141700000046,
+      "adapter_max_rss_bytes": 23986176,
+      "reference_matches": true,
+      "reference_words": 22,
+      "recovery": {
+        "additional_samples_after_disconnect": 88000,
+        "cloud_connections": 2,
+        "cloud_samples_before_disconnect": 88000,
+        "input_samples": 176000,
+        "insertion_performed": false,
+        "partial_cloud_text_discarded": true,
+        "real_provider_calls": 0,
+        "result_provider": "Local Whisper"
+      }
+    }
+  ],
+  "cancellation": {
+    "trials": [
+      {
+        "trial": 1,
+        "adapter": {
+          "cancel_requested_after_seconds": 0.053031292,
+          "cancel_to_return_seconds": 0.007604792,
+          "cancelled": true,
+          "compute_interruption_measured": false,
+          "input_samples": 176000,
+          "insertion_performed": false,
+          "real_provider_calls": 0,
+          "transcript_returned": false,
+          "trigger": "fixture timer, not native Escape"
+        },
+        "slot_probes": [
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.003532208000000203
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.03388804099999998
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.05904008300000019
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.08945658300000048
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.11996162500000018
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.1430760410000005
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.17436375000000037
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.20497879100000027
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.22926241600000008
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.2504633329999999
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.2812058750000004
+          },
+          {
+            "status": 413,
+            "after_adapter_exit_seconds": 0.30248558300000017
+          }
+        ],
+        "next_request_seconds": 0.3762985419999998,
+        "next_request_reference_matches": true,
+        "next_request_reference_words": 22
+      },
+      {
+        "trial": 2,
+        "adapter": {
+          "cancel_requested_after_seconds": 0.052499583,
+          "cancel_to_return_seconds": 0.00888,
+          "cancelled": true,
+          "compute_interruption_measured": false,
+          "input_samples": 176000,
+          "insertion_performed": false,
+          "real_provider_calls": 0,
+          "transcript_returned": false,
+          "trigger": "fixture timer, not native Escape"
+        },
+        "slot_probes": [
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.0006280829999996129
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.031125291999999583
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.061562792000000144
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.09195854199999953
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.12248708300000022
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.15255975
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.18297279200000016
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.20732179200000012
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.23779787500000005
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.25849316700000013
+          },
+          {
+            "status": 413,
+            "after_adapter_exit_seconds": 0.2891055419999997
+          }
+        ],
+        "next_request_seconds": 0.369644042,
+        "next_request_reference_matches": true,
+        "next_request_reference_words": 22
+      },
+      {
+        "trial": 3,
+        "adapter": {
+          "cancel_requested_after_seconds": 0.05175775,
+          "cancel_to_return_seconds": 0.008863958,
+          "cancelled": true,
+          "compute_interruption_measured": false,
+          "input_samples": 176000,
+          "insertion_performed": false,
+          "real_provider_calls": 0,
+          "transcript_returned": false,
+          "trigger": "fixture timer, not native Escape"
+        },
+        "slot_probes": [
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.0006034589999996953
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.027254709000000155
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.057531250000000256
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.08015237499999994
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.10561349999999958
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.13552466700000032
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.16624683399999984
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.1949958340000002
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.2187560839999998
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.2440172089999999
+          },
+          {
+            "status": 429,
+            "after_adapter_exit_seconds": 0.27447554200000024
+          },
+          {
+            "status": 413,
+            "after_adapter_exit_seconds": 0.30563295899999954
+          }
+        ],
+        "next_request_seconds": 0.37524991700000054,
+        "next_request_reference_matches": true,
+        "next_request_reference_words": 22
+      }
+    ],
+    "capacity_measurement": "Bound empty POST: 429 while occupied, 413 once free; probes do not invoke inference",
+    "capacity_time_origin": "adapter process exit, after cancellation acknowledgement; includes HTTP probe/poll latency",
+    "probe_interval_seconds": 0.02,
+    "engine_stopped_or_restarted": false,
+    "gpu_kernels_instrumented": false,
+    "immediate_compute_interruption_claimed": false,
+    "native_escape_or_insertion_tested": false
+  },
+  "input_pacing": "accelerated two-part public fixture, not realtime capture",
+  "physical_wifi_failure": false,
+  "physical_capture_or_insertion": false,
+  "paired_provider_accuracy": false,
+  "concurrent_apps": false,
+  "owned_runtime_stopped": true,
+  "temporary_control_state_removed": true
+}

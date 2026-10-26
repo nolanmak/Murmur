@@ -8,6 +8,7 @@ Model/audio paths and a prebuilt example must be supplied explicitly.
 from pathlib import Path
 import argparse
 import hashlib
+import http.client
 import json
 import re
 import socket
@@ -17,6 +18,7 @@ import tempfile
 import threading
 import time
 import shutil
+import urllib.parse
 from contextlib import contextmanager
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--model', type=Path, required=True)
@@ -25,6 +27,7 @@ parser.add_argument('--server', type=Path, required=True)
 parser.add_argument('--adapter', type=Path, required=True)
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--runtime-version', default='unverified operator-supplied binary')
+parser.add_argument('--cancellation', action='store_true', help='Also measure adapter cancellation, occupied inference capacity and next-request recovery')
 args = parser.parse_args()
 TREE = Path(__file__).resolve().parents[1]
 MODEL = args.model.resolve()
@@ -85,6 +88,7 @@ with owned_state() as temp:
         engine = children[0]
         comm = subprocess.check_output(['/bin/ps', '-p', str(engine), '-o', 'comm='], text=True).strip()
         assert Path(comm).resolve() == BINARY
+        engine_identity = subprocess.check_output(['/bin/ps', '-p', str(engine), '-o', 'lstart=,comm='], text=True, timeout=10)
 
         def sample():
             while not stop_sampler.is_set():
@@ -116,6 +120,56 @@ with owned_state() as temp:
             assert peak
             trials.append({'mode': mode, 'trial': number % 3 + 1, 'adapter_wall_seconds': elapsed, 'adapter_max_rss_bytes': int(peak.group(1)), 'reference_matches': matched, 'reference_words': 22, 'recovery': recovery})
             print(mode, 'trial', number % 3 + 1, 'seconds', round(elapsed, 3), 'reference_matches', matched, flush=True)
+        cancellation_trials = []
+        if args.cancellation:
+            address = urllib.parse.urlsplit(ready['url'])
+            caps = ready['murmur_capabilities']
+
+            def capacity_status():
+                # A bound zero-byte POST never enters inference: free -> 413;
+                # occupied -> 429. Health alone does not establish free capacity.
+                conn = http.client.HTTPConnection(address.hostname, address.port, timeout=2)
+                try:
+                    conn.request('POST', '/inference', body=b'', headers={
+                        'X-Murmur-Instance': caps['instance_id'],
+                        'X-Murmur-Model': caps['model_sha256'],
+                    })
+                    response = conn.getresponse()
+                    response.read(2048)
+                    return response.status
+                finally:
+                    conn.close()
+
+            for number in range(3):
+                result = command([ADAPTER, '--cancel-after-ms', '50', ready['url'], WAV, 'en'], timeout=15)
+                exited = time.monotonic()
+                assert not result.stdout.strip(), 'Cancellation fixture must not return transcript text'
+                cancellation = json.loads(next(line.split('=', 1)[1] for line in result.stderr.splitlines() if line.startswith('fixture_cancellation=')))
+                assert cancellation['cancelled'] and not cancellation['transcript_returned']
+                assert cancellation['input_samples'] == 176000
+                assert not cancellation['insertion_performed'] and cancellation['real_provider_calls'] == 0
+                probes = []
+                while time.monotonic() - exited < 10:
+                    status = capacity_status()
+                    probes.append({'status': status, 'after_adapter_exit_seconds': time.monotonic() - exited})
+                    if status == 413:
+                        break
+                    assert status == 429, 'Runtime did not preserve its bound ready instance after cancellation'
+                    time.sleep(.02)
+                assert probes and probes[-1]['status'] == 413, 'Inference capacity did not recover within the fixture deadline'
+                assert probes[0]['status'] == 429, 'No occupied inference slot observed after cancellation; this trial cannot establish continued work'
+                began = time.monotonic()
+                recovered = command([ADAPTER, ready['url'], WAV, 'en'], timeout=120)
+                recovery_seconds = time.monotonic() - began
+                normalized = ' '.join(re.findall('[a-z0-9]+', recovered.stdout.lower()))
+                matched = hashlib.sha256(normalized.encode()).hexdigest() == REFERENCE_NORMALIZED_SHA256
+                assert matched, 'Post-cancel reference mismatch (transcript intentionally omitted)'
+                cancellation_trials.append({'trial': number + 1, 'adapter': cancellation,
+                    'slot_probes': probes, 'next_request_seconds': recovery_seconds,
+                    'next_request_reference_matches': matched, 'next_request_reference_words': 22})
+                print('cancellation trial', number + 1, 'cancel return seconds', round(cancellation['cancel_to_return_seconds'], 4),
+                      'capacity recovered after adapter exit seconds', round(probes[-1]['after_adapter_exit_seconds'], 3),
+                      'next reference matches', matched, flush=True)
         stop_sampler.set()
         sampler.join()
         peaks = {str(pid): max((value for (_, p, value) in samples if p == pid)) for pid in [gateway, engine]}
@@ -149,6 +203,16 @@ with owned_state() as temp:
             'gpu_allocation_separately_measured': False,
             'sum_rss_is_not_unique_physical_memory': True,
             'trials': trials,
+            'cancellation': {
+                'trials': cancellation_trials,
+                'capacity_measurement': 'Bound empty POST: 429 while occupied, 413 once free; probes do not invoke inference',
+                'capacity_time_origin': 'adapter process exit, after cancellation acknowledgement; includes HTTP probe/poll latency',
+                'probe_interval_seconds': .02,
+                'engine_stopped_or_restarted': False,
+                'gpu_kernels_instrumented': False,
+                'immediate_compute_interruption_claimed': False,
+                'native_escape_or_insertion_tested': False,
+            } if args.cancellation else None,
             'input_pacing': 'accelerated two-part public fixture, not realtime capture',
             'physical_wifi_failure': False,
             'physical_capture_or_insertion': False,
@@ -156,6 +220,7 @@ with owned_state() as temp:
             'concurrent_apps': False,
         }
         assert hashlib.sha256(ADAPTER.read_bytes()).hexdigest() == ADAPTER_SHA256, 'Adapter binary changed during trials'
+        assert subprocess.check_output(['/bin/ps', '-p', str(engine), '-o', 'lstart=,comm='], text=True, timeout=10) == engine_identity, 'Owned engine identity changed during trials'
     finally:
         stop_sampler.set()
         if sampler:

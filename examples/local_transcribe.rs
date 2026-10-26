@@ -1,14 +1,25 @@
-//! Fixture QA: local_transcribe [--simulate-cloud-loss] URL mono16k.wav [LANGUAGE].
+//! Fixture QA: local_transcribe [--simulate-cloud-loss | --cancel-after-ms N] URL mono16k.wav [LANGUAGE].
 //! The optional fake cloud is owned loopback only; no credentials are resolved.
 #[tokio::main]
 async fn main() -> Result<(), String> {
     let mut args: Vec<String> = std::env::args().collect();
+    let cancel_ms = if args.get(1).is_some_and(|v| v == "--cancel-after-ms") {
+        let value = args
+            .get(2)
+            .and_then(|s| s.parse::<u64>().ok())
+            .filter(|v| (1..=5000).contains(v))
+            .ok_or("Cancellation delay must be 1..=5000 milliseconds")?;
+        args.drain(1..3);
+        Some(value)
+    } else {
+        None
+    };
     let simulate_loss = args.get(1).is_some_and(|v| v == "--simulate-cloud-loss");
     if simulate_loss {
         args.remove(1);
     }
     if !(3..=4).contains(&args.len()) {
-        return Err("Usage: local_transcribe [--simulate-cloud-loss] http://127.0.0.1:17863 mono16k.wav [LANGUAGE]".into());
+        return Err("Usage: local_transcribe [--simulate-cloud-loss | --cancel-after-ms N] http://127.0.0.1:17863 mono16k.wav [LANGUAGE]".into());
     }
     let wav = std::fs::read(&args[2]).map_err(|e| e.to_string())?;
     if wav.len() < 44 || &wav[..4] != b"RIFF" || &wav[8..12] != b"WAVE" {
@@ -52,6 +63,14 @@ async fn main() -> Result<(), String> {
     )
     .await?;
     let pcm = pcm.ok_or("Missing audio data")?;
+    if let Some(ms) = cancel_ms {
+        if simulate_loss {
+            return Err("Choose one fixture mode".into());
+        }
+        let report = cancel_after(&endpoint, &pcm, std::time::Duration::from_millis(ms)).await?;
+        eprintln!("fixture_cancellation={report}");
+        return Ok(());
+    }
     let text = if simulate_loss {
         recover_after_loss(endpoint, pcm).await?
     } else {
@@ -65,6 +84,56 @@ async fn main() -> Result<(), String> {
     };
     println!("{text}");
     Ok(())
+}
+
+/// Cancel the real adapter after a fixture delay, never print its transcript.
+/// Completion before the signal is an invalid measurement, not successful cancellation.
+async fn cancel_after(
+    endpoint: &murmur::local_stt::LocalEndpoint,
+    pcm: &[i16],
+    delay: std::time::Duration,
+) -> Result<serde_json::Value, String> {
+    cancel_when(endpoint, pcm, tokio::time::sleep(delay)).await
+}
+
+/// Let the synthetic server acknowledge the entire request before its test timer starts.
+/// The CLI keeps its original timer-at-adapter-start behavior through cancel_after.
+async fn cancel_when(
+    endpoint: &murmur::local_stt::LocalEndpoint,
+    pcm: &[i16],
+    signal: impl std::future::Future<Output = ()>,
+) -> Result<serde_json::Value, String> {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU8, Ordering},
+    };
+    use std::time::Duration;
+    let control = Arc::new(AtomicU8::new(1));
+    let began = std::time::Instant::now();
+    let inference =
+        murmur::local_stt::transcribe(endpoint, pcm, control.clone(), Duration::from_secs(180));
+    tokio::pin!(inference);
+    tokio::select! {
+        // Never turn an already-ready result into a cancellation measurement.
+        biased;
+        _=&mut inference=>return Err("Inference completed before fixture cancellation; no cancellation was measured".into()),
+        _=signal=>{}
+    }
+    control.store(2, Ordering::Release);
+    let cancelled = std::time::Instant::now();
+    let result = tokio::time::timeout(Duration::from_secs(2), inference)
+        .await
+        .map_err(|_| "Adapter did not return within the cancellation fixture deadline")?;
+    if !matches!(result,Err(ref message) if message=="Cancelled") {
+        return Err("Adapter did not acknowledge cancellation; output withheld".into());
+    }
+    Ok(
+        serde_json::json!({"cancelled":true,"transcript_returned":false,
+        "input_samples":pcm.len(),"cancel_requested_after_seconds":cancelled.duration_since(began).as_secs_f64(),
+        "cancel_to_return_seconds":cancelled.elapsed().as_secs_f64(),
+        "trigger":"fixture timer, not native Escape","compute_interruption_measured":false,
+        "insertion_performed":false,"real_provider_calls":0}),
+    )
 }
 
 async fn recover_after_loss(
@@ -233,5 +302,95 @@ mod tests {
         let wav = murmur::local_stt::wav16k(&pcm);
         assert!(request.windows(wav.len()).any(|v| v == wav));
         assert!(String::from_utf8_lossy(&request).contains("name=\"language\"\r\n\r\nes\r\n"));
+    }
+    #[tokio::test]
+    async fn cancellation_fixture_suppresses_a_late_engine_response() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = murmur::local_stt::LocalEndpoint::new(&format!(
+            "http://{}",
+            listener.local_addr().unwrap()
+        ))
+        .unwrap();
+        let received = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = received.clone();
+        let (received_tx, received_rx) = tokio::sync::oneshot::channel();
+        let (late_tx, late_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let mut request = Vec::new();
+            loop {
+                let mut bytes = [0; 8192];
+                let n = socket.read(&mut bytes).await.unwrap();
+                assert_ne!(n, 0);
+                request.extend_from_slice(&bytes[..n]);
+                if let Some(end) = request.windows(4).position(|v| v == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&request[..end]).to_lowercase();
+                    let len = headers
+                        .lines()
+                        .find_map(|s| s.strip_prefix("content-length: "))
+                        .unwrap()
+                        .parse::<usize>()
+                        .unwrap();
+                    if request.len() >= end + 4 + len {
+                        break;
+                    }
+                }
+            }
+            observed.store(true, std::sync::atomic::Ordering::Release);
+            received_tx.send(()).unwrap();
+            // Release the late response only after cancellation is acknowledged.
+            // This also avoids a scheduling race between two elapsed timers.
+            late_rx.await.unwrap();
+            let body = r#"{"text":"Late fixture text must not be delivered"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+            request
+        });
+        let pcm = vec![1000; 1600];
+        let report = cancel_when(&endpoint, &pcm, async {
+            tokio::time::timeout(std::time::Duration::from_secs(2), received_rx)
+                .await
+                .unwrap()
+                .unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        })
+        .await
+        .unwrap();
+        assert!(
+            received.load(std::sync::atomic::Ordering::Acquire),
+            "cancellation timing must start after the complete request is received"
+        );
+        assert_eq!(report["cancelled"], true);
+        assert_eq!(report["transcript_returned"], false);
+        assert!(report["cancel_to_return_seconds"].as_f64().unwrap() < 2.0);
+        late_tx.send(()).unwrap();
+        let request = server.await.unwrap();
+        let wav = murmur::local_stt::wav16k(&pcm);
+        assert!(request.windows(wav.len()).any(|s| s == wav));
+    }
+
+    #[tokio::test]
+    async fn an_already_completed_request_is_not_claimed_as_cancellation() {
+        let endpoint = murmur::local_stt::LocalEndpoint::new("http://127.0.0.1:1").unwrap();
+        let error = cancel_after(&endpoint, &[0; 1600], std::time::Duration::from_millis(30))
+            .await
+            .unwrap_err();
+        assert!(error.contains("no cancellation was measured"));
+    }
+    #[tokio::test]
+    async fn ready_completion_always_wins_over_a_ready_cancellation_signal() {
+        let endpoint = murmur::local_stt::LocalEndpoint::new("http://127.0.0.1:1").unwrap();
+        for _ in 0..64 {
+            let result = cancel_when(&endpoint, &[0; 1600], std::future::ready(())).await;
+            assert!(
+                result.is_err(),
+                "already completed silence must never be reported as cancelled"
+            );
+            assert!(result.unwrap_err().contains("no cancellation was measured"));
+        }
     }
 }
