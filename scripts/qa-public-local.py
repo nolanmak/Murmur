@@ -28,6 +28,7 @@ parser.add_argument('--adapter', type=Path, required=True)
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--runtime-version', default='unverified operator-supplied binary')
 parser.add_argument('--cancellation', action='store_true', help='Also measure adapter cancellation, occupied inference capacity and next-request recovery')
+parser.add_argument('--busy-recovery', action='store_true', help='Submit the next utterance immediately after observing busy inference following cancellation')
 args = parser.parse_args()
 TREE = Path(__file__).resolve().parents[1]
 MODEL = args.model.resolve()
@@ -61,6 +62,7 @@ def owned_state():
         if (temp / 'state' / 'runtime.json').exists():
             raise RuntimeError(f'Owned runtime may still be active; retained control state at {temp}')
         shutil.rmtree(temp)
+        print('Owned temporary model/control state removed.', flush=True)
 with owned_state() as temp:
     state = Path(temp) / 'state'
     helper = [sys.executable, str(TREE / 'scripts/local-whisper.py'), '--app', 'murmur', '--state-dir', str(state)]
@@ -121,7 +123,8 @@ with owned_state() as temp:
             trials.append({'mode': mode, 'trial': number % 3 + 1, 'adapter_wall_seconds': elapsed, 'adapter_max_rss_bytes': int(peak.group(1)), 'reference_matches': matched, 'reference_words': 22, 'recovery': recovery})
             print(mode, 'trial', number % 3 + 1, 'seconds', round(elapsed, 3), 'reference_matches', matched, flush=True)
         cancellation_trials = []
-        if args.cancellation:
+        busy_recovery_trials = []
+        if args.cancellation or args.busy_recovery:
             address = urllib.parse.urlsplit(ready['url'])
             caps = ready['murmur_capabilities']
 
@@ -140,7 +143,7 @@ with owned_state() as temp:
                 finally:
                     conn.close()
 
-            for number in range(3):
+            for number in range(3 if args.cancellation else 0):
                 result = command([ADAPTER, '--cancel-after-ms', '50', ready['url'], WAV, 'en'], timeout=15)
                 exited = time.monotonic()
                 assert not result.stdout.strip(), 'Cancellation fixture must not return transcript text'
@@ -170,6 +173,28 @@ with owned_state() as temp:
                 print('cancellation trial', number + 1, 'cancel return seconds', round(cancellation['cancel_to_return_seconds'], 4),
                       'capacity recovered after adapter exit seconds', round(probes[-1]['after_adapter_exit_seconds'], 3),
                       'next reference matches', matched, flush=True)
+            for number in range(3 if args.busy_recovery else 0):
+                result = command([ADAPTER, '--cancel-after-ms', '50', ready['url'], WAV, 'en'], timeout=15)
+                assert not result.stdout.strip(), 'Cancelled input must not return text'
+                cancellation = json.loads(next(line.split('=', 1)[1] for line in result.stderr.splitlines() if line.startswith('fixture_cancellation=')))
+                assert cancellation['cancelled'] and not cancellation['transcript_returned']
+                assert cancellation['input_samples'] == 176000 and not cancellation['insertion_performed']
+                assert cancellation['real_provider_calls'] == 0
+                before = capacity_status()
+                assert before == 429, 'No busy capacity observed before the immediate next request'
+                began = time.monotonic()
+                recovered = command([ADAPTER, ready['url'], WAV, 'en'], timeout=15)
+                elapsed = time.monotonic() - began
+                normalized = ' '.join(re.findall('[a-z0-9]+', recovered.stdout.lower()))
+                matched = hashlib.sha256(normalized.encode()).hexdigest() == REFERENCE_NORMALIZED_SHA256
+                assert matched, 'Immediate-next-request reference mismatch (text intentionally omitted)'
+                after = capacity_status()
+                assert after == 413, 'Bound engine capacity did not remain usable after the next request'
+                busy_recovery_trials.append({'trial': number + 1, 'cancelled_adapter': cancellation,
+                    'capacity_status_before_next_request': before, 'capacity_status_after_next_request': after,
+                    'next_request_seconds': elapsed, 'next_request_reference_matches': matched,
+                    'next_request_reference_words': 22, 'explicit_wait_for_capacity_before_request': False})
+                print('immediate busy recovery', number + 1, 'seconds', round(elapsed, 3), 'reference matches', matched, flush=True)
         stop_sampler.set()
         sampler.join()
         peaks = {str(pid): max((value for (_, p, value) in samples if p == pid)) for pid in [gateway, engine]}
@@ -203,6 +228,13 @@ with owned_state() as temp:
             'gpu_allocation_separately_measured': False,
             'sum_rss_is_not_unique_physical_memory': True,
             'trials': trials,
+            'busy_recovery': {
+                'trials': busy_recovery_trials,
+                'capacity_probe': 'Bound empty POST; 429 busy before dispatch and 413 free after completion; no inference in probes',
+                'http_retry_count_instrumented': False,
+                'engine_stopped_or_restarted': False,
+                'native_escape_or_insertion_tested': False,
+            } if args.busy_recovery else None,
             'cancellation': {
                 'trials': cancellation_trials,
                 'capacity_measurement': 'Bound empty POST: 429 while occupied, 413 once free; probes do not invoke inference',
@@ -229,6 +261,7 @@ with owned_state() as temp:
         assert not (state / 'runtime.json').exists(), 'Owned supervisor still active; do not delete its state'
         if started_runtime:
             assert stopped['stopped']
+            print('Owned runtime shutdown verified.', flush=True)
 report['owned_runtime_stopped'] = True
 report['temporary_control_state_removed'] = not temp.exists()
 OUTPUT.write_text(json.dumps(report, indent=2) + '\n')
