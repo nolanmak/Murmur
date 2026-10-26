@@ -6,7 +6,7 @@ jobs:
   advisories:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check advisories
@@ -17,12 +17,12 @@ jobs:
         os: [macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - if: runner.os == 'macOS'
         run: brew install gitleaks && gitleaks git --redact --no-banner .
-      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: dtolnay/rust-toolchain@035fceb3c12fb0c6a9461b52775e16473133e591 # 1.95.0
         with:
           components: rustfmt, clippy
       - if: runner.os == 'Linux'
@@ -55,7 +55,7 @@ jobs:
           subprocess.run(["target/debug/examples/cleanup_menu_qa", output], check=True, timeout=20)
           PYTHON
       - if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: native-vocabulary-fixtures
           path: ${{ runner.temp }}/native-vocabulary-fixture
@@ -67,7 +67,7 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent Murmur.app Murmur-macOS-preview.zip
           shasum -a 256 Murmur-macOS-preview.zip > Murmur-macOS-preview.zip.sha256
       - if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Murmur-macOS-preview
           path: |
