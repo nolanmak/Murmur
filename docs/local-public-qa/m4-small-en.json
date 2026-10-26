@@ -1,7 +1,8 @@
 {
   "source_tracked_changes": false,
   "example_sha256": "d0650640fe38912e35067e725c52c829187f7964c0f12ae3ed0ce8a04b007f9c",
-  "source_commit": "83d05ddf8dfdbca3c9a332c3844b073dc8f063f8",
+  "adapter_binary_sha256": "b58f76b7317edae9f885158148b44fbd9b437c7b7b15cb0137c4be968ff11984",
+  "source_commit": "e4e762d5e96bd37f902194e7db92137b5acab6f6",
   "hardware_model": "Mac16,10",
   "ram_bytes": 17179869184,
   "macos": "26.4",
@@ -15,14 +16,14 @@
   "adapter": "actual local_stt direct and fallback::transcribe_with_profile cloud-loss paths",
   "gateway": "actual managed helper with instance/model binding",
   "external_network_denied": true,
-  "startup_to_ready_seconds": 0.64313475,
+  "startup_to_ready_seconds": 0.8864496249999999,
   "cache_controlled": false,
   "transcript_retained": false,
   "model_import_preceded_startup": true,
   "runtime_settings": "helper defaults, including native automatic GPU selection; no thread override",
   "rss_sampling_interval_seconds": 0.05,
-  "gateway_sampled_peak_rss_bytes": 26738688,
-  "engine_sampled_peak_rss_bytes": 731791360,
+  "gateway_sampled_peak_rss_bytes": 23625728,
+  "engine_sampled_peak_rss_bytes": 731643904,
   "startup_rss_measured": false,
   "gpu_allocation_separately_measured": false,
   "sum_rss_is_not_unique_physical_memory": true,
@@ -30,8 +31,8 @@
     {
       "mode": "direct",
       "trial": 1,
-      "adapter_wall_seconds": 0.7124854589999998,
-      "adapter_max_rss_bytes": 22052864,
+      "adapter_wall_seconds": 0.39905837499999985,
+      "adapter_max_rss_bytes": 21970944,
       "reference_matches": true,
       "reference_words": 22,
       "recovery": null
@@ -39,8 +40,8 @@
     {
       "mode": "direct",
       "trial": 2,
-      "adapter_wall_seconds": 0.36500341700000005,
-      "adapter_max_rss_bytes": 21987328,
+      "adapter_wall_seconds": 0.3688785830000003,
+      "adapter_max_rss_bytes": 21970944,
       "reference_matches": true,
       "reference_words": 22,
       "recovery": null
@@ -48,8 +49,8 @@
     {
       "mode": "direct",
       "trial": 3,
-      "adapter_wall_seconds": 0.36419333399999987,
-      "adapter_max_rss_bytes": 21970944,
+      "adapter_wall_seconds": 0.364668875,
+      "adapter_max_rss_bytes": 22003712,
       "reference_matches": true,
       "reference_words": 22,
       "recovery": null
@@ -57,8 +58,8 @@
     {
       "mode": "cloud-loss",
       "trial": 1,
-      "adapter_wall_seconds": 0.4810954169999997,
-      "adapter_max_rss_bytes": 24018944,
+      "adapter_wall_seconds": 0.4796100000000001,
+      "adapter_max_rss_bytes": 23986176,
       "reference_matches": true,
       "reference_words": 22,
       "recovery": {
@@ -75,8 +76,8 @@
     {
       "mode": "cloud-loss",
       "trial": 2,
-      "adapter_wall_seconds": 0.48175212499999986,
-      "adapter_max_rss_bytes": 23904256,
+      "adapter_wall_seconds": 0.48421395899999986,
+      "adapter_max_rss_bytes": 23986176,
       "reference_matches": true,
       "reference_words": 22,
       "recovery": {
@@ -93,8 +94,8 @@
     {
       "mode": "cloud-loss",
       "trial": 3,
-      "adapter_wall_seconds": 0.47891154199999963,
-      "adapter_max_rss_bytes": 24035328,
+      "adapter_wall_seconds": 0.48447458300000035,
+      "adapter_max_rss_bytes": 23986176,
       "reference_matches": true,
       "reference_words": 22,
       "recovery": {
