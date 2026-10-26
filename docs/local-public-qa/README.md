@@ -149,7 +149,7 @@ cancelled. CI runs these asset-free tests alongside the existing cloud-loss
 fixture. This advances the cancellation/recovery evidence for #58/#60; physical
 Escape, output insertion, busy-engine UX and broader release gates remain open.
 
-Review followup: a forced 100 ms server-read delay reproduced the test ordering
+Review follow-up: a forced 100 ms server-read delay reproduced the test ordering
 race (`cancellation timing must start after the complete request is received`).
 The synthetic test now waits for a complete-body acknowledgement before starting
 its cancellation timer, and releases the late response only after cancellation
@@ -157,3 +157,8 @@ returns. Neither slow request receipt nor two elapsed timers can decide the test
 outcome. The CLI still times cancellation from adapter start; the retained native
 measurement above identifies its original executed commit/binary, separately
 from this test synchronization change.
+
+A second review regression made silence completion and the signal ready in the
+same poll, reproducing a false cancellation report. Biased selection now polls
+inference first, so completed inference always invalidates the measurement.
+This affects only the QA fixture, not production cancellation arbitration.

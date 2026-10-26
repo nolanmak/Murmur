@@ -114,6 +114,8 @@ async fn cancel_when(
         murmur::local_stt::transcribe(endpoint, pcm, control.clone(), Duration::from_secs(180));
     tokio::pin!(inference);
     tokio::select! {
+        // Never turn an already-ready result into a cancellation measurement.
+        biased;
         _=&mut inference=>return Err("Inference completed before fixture cancellation; no cancellation was measured".into()),
         _=signal=>{}
     }
@@ -378,5 +380,17 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.contains("no cancellation was measured"));
+    }
+    #[tokio::test]
+    async fn ready_completion_always_wins_over_a_ready_cancellation_signal() {
+        let endpoint = murmur::local_stt::LocalEndpoint::new("http://127.0.0.1:1").unwrap();
+        for _ in 0..64 {
+            let result = cancel_when(&endpoint, &[0; 1600], std::future::ready(())).await;
+            assert!(
+                result.is_err(),
+                "already completed silence must never be reported as cancelled"
+            );
+            assert!(result.unwrap_err().contains("no cancellation was measured"));
+        }
     }
 }
