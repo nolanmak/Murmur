@@ -95,3 +95,56 @@ cold model, simultaneous FlyOnTheWall/Murmur usage, or paired Deepgram accuracy.
 A clean 11-second public clip cannot establish noisy-room, name, accent, or
 meeting quality. Existing synthetic arbitration/cancellation tests complement
 this measurement; they do not replace those native acceptance gates.
+
+## Cancellation and capacity recovery on M4
+
+Append `--cancellation` to the reproduction command above. After the six normal
+requests, it runs three timer-cancelled adapter requests and verifies the next
+request after each. The example also accepts
+`local_transcribe --cancel-after-ms 50 URL WAV [LANGUAGE]` directly. The timer
+starts after readiness, at the beginning of the adapter call; it is a fixture
+signal, not a native Escape or focus-change event. A request completing before
+observed cancellation is rejected as an invalid measurement, not called a pass.
+Cancelled requests print only non-text metadata on stderr and no transcript.
+
+The [retained report](m4-cancellation.json) records clean measured source
+`cb6bbd296b9a632ed12677bc04449155c3a6e42c`, the executed adapter/server checksums,
+and the same approved public model/WAV hashes. Hardware is Mac16,10, 16 GiB,
+macOS 26.4. The external-network-denied runtime used automatic GPU selection.
+
+| Trial | Signal after adapter start | Cancellation to adapter return | Slot free after adapter process exit | Next full request |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 52.25 ms | 0.043 ms | 300.7 ms | 364.2 ms |
+| 2 | 53.05 ms | 0.056 ms | 304.6 ms | 361.8 ms |
+| 3 | 52.80 ms | 0.061 ms | 306.2 ms | 365.3 ms |
+
+Every cancelled request returned no text. Each next request matched all 22
+reference words using the same engine process; start identity was checked
+before/after. All six normal direct/cloud-loss requests also matched. The runner
+stopped its owned runtime and removed temporary model copies/control state.
+
+Capacity probes send an empty POST with the bound instance/model headers. The
+gateway returns 429 while its single inference slot is occupied and 413 once
+free; these probes cannot start inference. There were 11–12 observed busy replies
+per trial before recovery. The recovery times are sampled observations after
+**adapter process exit**, with 20 ms polling plus HTTP overhead; they do not time
+the exact engine completion or GPU kernel interruption. This demonstrates that
+HTTP cancellation does not immediately make this managed runtime available for
+another request. No engine kill/restart is used to force recovery. The measured
+sub-millisecond acknowledgement is three timer-aligned observations, not a
+latency guarantee: the adapter's cancellation polling interval remains 10 ms.
+
+Fresh-process readiness was 0.863 s with uncontrolled filesystem cache, not a
+cold-start measurement. The first normal direct request took 0.760 s; later
+direct requests took 0.364–0.368 s. Post-readiness sampled RSS peaks were 697.8 MiB
+for the engine and 25.7 MiB for the gateway; unique physical/GPU allocation was
+not measured. No microphone, insertion, clipboard, global input, user library,
+provider credential or paid request was used.
+
+Test-first: a real loopback server returned a delayed synthetic transcript; the
+new fixture initially failed with `no cancellation was measured`. It now returns
+only cancellation metadata, and the server verifies the complete synthetic WAV
+was sent. A second check refuses to call an already completed silence request
+cancelled. CI runs these asset-free tests alongside the existing cloud-loss
+fixture. This advances the cancellation/recovery evidence for #58/#60; physical
+Escape, output insertion, busy-engine UX and broader release gates remain open.
