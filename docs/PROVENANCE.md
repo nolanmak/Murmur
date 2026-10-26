@@ -1,7 +1,7 @@
 # Shared FlyOnTheWall components
 
 Source: https://github.com/nolanmak/FlyOnTheWall
-Pinned revision: `33375fe7baf0ef6c1d15dd66f8ee8cc949bb8e03`
+Pinned revision: `83a1c438675e1b70dad3da0f2486901c8af69590`
 License: Apache-2.0; root LICENSE and NOTICE retained.
 
 Murmur resolves four crates from that immutable Git revision, with matching
@@ -126,3 +126,21 @@ the shared hint capability assessment; snippets never enter provider prompts.
 The application-level writer, transport and fallback tests remain here. Neither
 code sharing nor these fixtures prove a term-recall improvement; #9/#118 keep
 the human/model quality and physical interaction gates open.
+
+## Native input timestamp upgrade
+
+FlyOnTheWall [#199](https://github.com/nolanmak/FlyOnTheWall/pull/199) maps
+validated Core Audio input timestamps into the shared continuous-clock epoch.
+Unavailable, stale or untrustworthy native timing uses a monotonic arrival-time
+fallback with TIMESTAMP_ERROR; PCM and delivered frame counts are preserved.
+Native sample gaps/resets, epoch shifts and genuine native host-clock reversals
+report discontinuity. Ordered native timing behind a previous arrival fallback
+does not invent an audio interruption.
+
+Murmur still owns short-dictation policy: actual discontinuities cancel capture
+and block automatic insertion. It does not use the meeting pipeline's timing
+mailbox or AEC and does not adopt a meeting recovery supervisor through this pin.
+The other three shared crates are unchanged from the previous producer pin.
+All eight manifest pins and the lockfile move together. Producer arithmetic and
+native-callback fixtures are synthetic; physical timestamp availability, device
+latency, USB/Bluetooth and sleep/wake acceptance remain unverified in #61/#58.
