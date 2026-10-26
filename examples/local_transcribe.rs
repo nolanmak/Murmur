@@ -93,6 +93,16 @@ async fn cancel_after(
     pcm: &[i16],
     delay: std::time::Duration,
 ) -> Result<serde_json::Value, String> {
+    cancel_when(endpoint, pcm, tokio::time::sleep(delay)).await
+}
+
+/// Let the synthetic server acknowledge the entire request before its test timer starts.
+/// The CLI keeps its original timer-at-adapter-start behavior through cancel_after.
+async fn cancel_when(
+    endpoint: &murmur::local_stt::LocalEndpoint,
+    pcm: &[i16],
+    signal: impl std::future::Future<Output = ()>,
+) -> Result<serde_json::Value, String> {
     use std::sync::{
         Arc,
         atomic::{AtomicU8, Ordering},
@@ -105,7 +115,7 @@ async fn cancel_after(
     tokio::pin!(inference);
     tokio::select! {
         _=&mut inference=>return Err("Inference completed before fixture cancellation; no cancellation was measured".into()),
-        _=tokio::time::sleep(delay)=>{}
+        _=signal=>{}
     }
     control.store(2, Ordering::Release);
     let cancelled = std::time::Instant::now();
@@ -299,8 +309,13 @@ mod tests {
             listener.local_addr().unwrap()
         ))
         .unwrap();
+        let received = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = received.clone();
+        let (received_tx, received_rx) = tokio::sync::oneshot::channel();
+        let (late_tx, late_rx) = tokio::sync::oneshot::channel();
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             let mut request = Vec::new();
             loop {
                 let mut bytes = [0; 8192];
@@ -320,7 +335,11 @@ mod tests {
                     }
                 }
             }
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            observed.store(true, std::sync::atomic::Ordering::Release);
+            received_tx.send(()).unwrap();
+            // Release the late response only after cancellation is acknowledged.
+            // This also avoids a scheduling race between two elapsed timers.
+            late_rx.await.unwrap();
             let body = r#"{"text":"Late fixture text must not be delivered"}"#;
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -330,12 +349,23 @@ mod tests {
             request
         });
         let pcm = vec![1000; 1600];
-        let report = cancel_after(&endpoint, &pcm, std::time::Duration::from_millis(30))
-            .await
-            .unwrap();
+        let report = cancel_when(&endpoint, &pcm, async {
+            tokio::time::timeout(std::time::Duration::from_secs(2), received_rx)
+                .await
+                .unwrap()
+                .unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        })
+        .await
+        .unwrap();
+        assert!(
+            received.load(std::sync::atomic::Ordering::Acquire),
+            "cancellation timing must start after the complete request is received"
+        );
         assert_eq!(report["cancelled"], true);
         assert_eq!(report["transcript_returned"], false);
         assert!(report["cancel_to_return_seconds"].as_f64().unwrap() < 2.0);
+        late_tx.send(()).unwrap();
         let request = server.await.unwrap();
         let wav = murmur::local_stt::wav16k(&pcm);
         assert!(request.windows(wav.len()).any(|s| s == wav));
