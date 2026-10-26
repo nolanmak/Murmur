@@ -163,3 +163,12 @@ A second review regression made silence completion and the signal ready in the
 same poll, reproducing a false cancellation report. Biased selection now polls
 inference first, so completed inference always invalidates the measurement.
 This affects only the QA fixture, not production cancellation arbitration.
+
+## Immediate next dictation after cancellation
+
+Add `--busy-recovery` to submit the next utterance immediately after observing
+busy capacity, rather than waiting for it to become free. See
+[local-engine busy recovery](../local-busy-recovery.md) for policy, actual
+before/after results and limits, and [the report](m4-busy-recovery.json).
+`--cancellation` retains the separate capacity-release measurement described
+above; the two modes can be selected independently.
