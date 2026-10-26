@@ -1,0 +1,120 @@
+{
+  "source_tracked_changes": false,
+  "example_sha256": "d0650640fe38912e35067e725c52c829187f7964c0f12ae3ed0ce8a04b007f9c",
+  "adapter_binary_sha256": "b58f76b7317edae9f885158148b44fbd9b437c7b7b15cb0137c4be968ff11984",
+  "source_commit": "e4e762d5e96bd37f902194e7db92137b5acab6f6",
+  "hardware_model": "Mac16,10",
+  "ram_bytes": 17179869184,
+  "macos": "26.4",
+  "runtime_binary_name": "whisper-server",
+  "runtime_version": "whisper.cpp 1.9.1",
+  "runtime_binary_sha256": "437a74a72cea6d8a3c3c035f5ca9d65bd4b553ce0d8eff635b18c727740e6c37",
+  "model_sha256": "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
+  "wave_sha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+  "wave_samples": 176000,
+  "audio_seconds": 11,
+  "adapter": "actual local_stt direct and fallback::transcribe_with_profile cloud-loss paths",
+  "gateway": "actual managed helper with instance/model binding",
+  "external_network_denied": true,
+  "startup_to_ready_seconds": 0.8864496249999999,
+  "cache_controlled": false,
+  "transcript_retained": false,
+  "model_import_preceded_startup": true,
+  "runtime_settings": "helper defaults, including native automatic GPU selection; no thread override",
+  "rss_sampling_interval_seconds": 0.05,
+  "gateway_sampled_peak_rss_bytes": 23625728,
+  "engine_sampled_peak_rss_bytes": 731643904,
+  "startup_rss_measured": false,
+  "gpu_allocation_separately_measured": false,
+  "sum_rss_is_not_unique_physical_memory": true,
+  "trials": [
+    {
+      "mode": "direct",
+      "trial": 1,
+      "adapter_wall_seconds": 0.39905837499999985,
+      "adapter_max_rss_bytes": 21970944,
+      "reference_matches": true,
+      "reference_words": 22,
+      "recovery": null
+    },
+    {
+      "mode": "direct",
+      "trial": 2,
+      "adapter_wall_seconds": 0.3688785830000003,
+      "adapter_max_rss_bytes": 21970944,
+      "reference_matches": true,
+      "reference_words": 22,
+      "recovery": null
+    },
+    {
+      "mode": "direct",
+      "trial": 3,
+      "adapter_wall_seconds": 0.364668875,
+      "adapter_max_rss_bytes": 22003712,
+      "reference_matches": true,
+      "reference_words": 22,
+      "recovery": null
+    },
+    {
+      "mode": "cloud-loss",
+      "trial": 1,
+      "adapter_wall_seconds": 0.4796100000000001,
+      "adapter_max_rss_bytes": 23986176,
+      "reference_matches": true,
+      "reference_words": 22,
+      "recovery": {
+        "additional_samples_after_disconnect": 88000,
+        "cloud_connections": 2,
+        "cloud_samples_before_disconnect": 88000,
+        "input_samples": 176000,
+        "insertion_performed": false,
+        "partial_cloud_text_discarded": true,
+        "real_provider_calls": 0,
+        "result_provider": "Local Whisper"
+      }
+    },
+    {
+      "mode": "cloud-loss",
+      "trial": 2,
+      "adapter_wall_seconds": 0.48421395899999986,
+      "adapter_max_rss_bytes": 23986176,
+      "reference_matches": true,
+      "reference_words": 22,
+      "recovery": {
+        "additional_samples_after_disconnect": 88000,
+        "cloud_connections": 2,
+        "cloud_samples_before_disconnect": 88000,
+        "input_samples": 176000,
+        "insertion_performed": false,
+        "partial_cloud_text_discarded": true,
+        "real_provider_calls": 0,
+        "result_provider": "Local Whisper"
+      }
+    },
+    {
+      "mode": "cloud-loss",
+      "trial": 3,
+      "adapter_wall_seconds": 0.48447458300000035,
+      "adapter_max_rss_bytes": 23986176,
+      "reference_matches": true,
+      "reference_words": 22,
+      "recovery": {
+        "additional_samples_after_disconnect": 88000,
+        "cloud_connections": 2,
+        "cloud_samples_before_disconnect": 88000,
+        "input_samples": 176000,
+        "insertion_performed": false,
+        "partial_cloud_text_discarded": true,
+        "real_provider_calls": 0,
+        "result_provider": "Local Whisper"
+      }
+    }
+  ],
+  "input_pacing": "accelerated two-part public fixture, not realtime capture",
+  "physical_wifi_failure": false,
+  "physical_capture_or_insertion": false,
+  "paired_provider_accuracy": false,
+  "concurrent_apps": false,
+  "owned_runtime_stopped": true,
+  "temporary_control_state_removed": true
+}
