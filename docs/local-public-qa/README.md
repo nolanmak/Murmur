@@ -108,15 +108,15 @@ observed cancellation is rejected as an invalid measurement, not called a pass.
 Cancelled requests print only non-text metadata on stderr and no transcript.
 
 The [retained report](m4-cancellation.json) records clean measured source
-`cb6bbd296b9a632ed12677bc04449155c3a6e42c`, the executed adapter/server checksums,
+`c663d47de4fdabf03858c98eae130c53bd950aea`, the executed adapter/server checksums,
 and the same approved public model/WAV hashes. Hardware is Mac16,10, 16 GiB,
 macOS 26.4. The external-network-denied runtime used automatic GPU selection.
 
 | Trial | Signal after adapter start | Cancellation to adapter return | Slot free after adapter process exit | Next full request |
 | --- | ---: | ---: | ---: | ---: |
-| 1 | 52.25 ms | 0.043 ms | 300.7 ms | 364.2 ms |
-| 2 | 53.05 ms | 0.056 ms | 304.6 ms | 361.8 ms |
-| 3 | 52.80 ms | 0.061 ms | 306.2 ms | 365.3 ms |
+| 1 | 53.03 ms | 7.605 ms | 302.5 ms | 376.3 ms |
+| 2 | 52.50 ms | 8.880 ms | 289.1 ms | 369.6 ms |
+| 3 | 51.76 ms | 8.864 ms | 305.6 ms | 375.2 ms |
 
 Every cancelled request returned no text. Each next request matched all 22
 reference words using the same engine process; start identity was checked
@@ -125,19 +125,20 @@ stopped its owned runtime and removed temporary model copies/control state.
 
 Capacity probes send an empty POST with the bound instance/model headers. The
 gateway returns 429 while its single inference slot is occupied and 413 once
-free; these probes cannot start inference. There were 11–12 observed busy replies
+free; these probes cannot start inference. There were 10–11 observed busy replies
 per trial before recovery. The recovery times are sampled observations after
 **adapter process exit**, with 20 ms polling plus HTTP overhead; they do not time
 the exact engine completion or GPU kernel interruption. This demonstrates that
 HTTP cancellation does not immediately make this managed runtime available for
 another request. No engine kill/restart is used to force recovery. The measured
-sub-millisecond acknowledgement is three timer-aligned observations, not a
-latency guarantee: the adapter's cancellation polling interval remains 10 ms.
+7.6–8.9 ms acknowledgement reflects three observations with completed inference
+prioritized over cancellation, not a latency guarantee. The adapter's
+cancellation polling interval remains 10 ms.
 
-Fresh-process readiness was 0.863 s with uncontrolled filesystem cache, not a
-cold-start measurement. The first normal direct request took 0.760 s; later
-direct requests took 0.364–0.368 s. Post-readiness sampled RSS peaks were 697.8 MiB
-for the engine and 25.7 MiB for the gateway; unique physical/GPU allocation was
+Fresh-process readiness was 0.874 s with uncontrolled filesystem cache, not a
+cold-start measurement. The first normal direct request took 0.698 s; later
+direct requests took 0.374–0.379 s. Post-readiness sampled RSS peaks were 697.9 MiB
+for the engine and 25.8 MiB for the gateway; unique physical/GPU allocation was
 not measured. No microphone, insertion, clipboard, global input, user library,
 provider credential or paid request was used.
 
@@ -154,9 +155,9 @@ race (`cancellation timing must start after the complete request is received`).
 The synthetic test now waits for a complete-body acknowledgement before starting
 its cancellation timer, and releases the late response only after cancellation
 returns. Neither slow request receipt nor two elapsed timers can decide the test
-outcome. The CLI still times cancellation from adapter start; the retained native
-measurement above identifies its original executed commit/binary, separately
-from this test synchronization change.
+outcome. The CLI still times cancellation from adapter start. The retained native
+measurement above was rerun after both review fixes and identifies its exact
+executed commit and binary.
 
 A second review regression made silence completion and the signal ready in the
 same poll, reproducing a false cancellation report. Biased selection now polls
