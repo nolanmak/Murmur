@@ -176,6 +176,10 @@ impl<T: Eq> Episode<T> {
             return;
         }
         self.pending = None;
+        // Space completed observations too: a slow first probe must not spend
+        // the three-attempt budget before the sustained-health window elapses.
+        // This only lengthens backoff; start spacing and health stay unchanged.
+        self.next = self.next.max(now.saturating_add(INTERVAL));
         let result = result.filter(|_| now < deadline);
         self.healthy = match (result, self.healthy.take()) {
             (Some(value), Some((previous, since, last)))
