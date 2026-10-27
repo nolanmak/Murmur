@@ -171,6 +171,32 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.infer(port, old)[0], 409)
         self.assertEqual(self.infer(port, new, "fr")[0], 200)
 
+    def test_gateway_releases_inference_before_a_completed_response_handler_returns(self):
+        for language, expected in (("en", 200), ("fr", 422)):
+            with self.subTest(language=language):
+                gateway = runtime.Gateway(0, 1, "/unused", {"language_count": 1}, "b" * 64, lambda: True)
+                paused, release, returned = threading.Event(), threading.Event(), threading.Event()
+                handler = gateway.server.RequestHandlerClass
+                reply = handler.reply
+                def delayed_reply(request, status, body, bound=False):
+                    reply(request, status, body, bound)
+                    if status == expected and not paused.is_set():
+                        paused.set()
+                        release.wait(5)
+                        returned.set()
+                try:
+                    with patch.object(handler, "reply", delayed_reply), patch.object(gateway, "transcribe", return_value={"text": "fixture en"}):
+                        port, caps = gateway.server.server_port, gateway.capabilities
+                        self.assertEqual(self.infer(port, caps, language)[0], expected)
+                        self.assertTrue(paused.wait(2), "first response was not held after delivery")
+                        self.assertEqual(self.infer(port, caps)[0], 200,
+                                         "a fully received response must release inference admission")
+                finally:
+                    release.set()
+                    if paused.is_set():
+                        self.assertTrue(returned.wait(2))
+                    gateway.close()
+
     def test_gateway_busy_refuses_queue_and_stop_discards_inflight_result(self):
         port = self.start_fixture_engine()
         caps = self.health(port)["murmur_capabilities"]

@@ -194,15 +194,18 @@ class Gateway:
                     result = gateway.transcribe(language, audio)
                     if gateway.closed.is_set() or not gateway.is_ready():
                         raise Refused(503, "Local model stopped; result discarded")
-                    self.reply(200, result, bound=True)
+                    response = (200, result, True)
                 except Refused as error:
-                    self.reply(error.status, {"error": error.message})
+                    response = (error.status, {"error": error.message}, False)
                 except (ValueError, UnicodeError, EOFError, wave.Error, RecursionError):
-                    self.reply(400, {"error": "Malformed inference request"})
+                    response = (400, {"error": "Malformed inference request"}, False)
                 except (OSError, http.client.HTTPException):
-                    self.reply(502, {"error": "Local inference failed or timed out"})
+                    response = (502, {"error": "Local inference failed or timed out"}, False)
                 finally:
                     gateway.inference.release()
+                # Completion frees inference admission before any response bytes
+                # become observable. Slow delivery cannot make the next request busy.
+                self.reply(*response)
 
             def log_message(self, *args):
                 pass
