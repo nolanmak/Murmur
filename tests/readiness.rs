@@ -159,3 +159,48 @@ fn timed_out_cancelled_worker_cannot_multiply_or_heal_a_new_episode() {
     assert_eq!(monitor.status(), Status::Ready);
     assert_eq!(startup.state(), MicrophoneState::Idle);
 }
+
+#[test]
+fn varying_probe_latency_cannot_exhaust_healthy_checks_before_the_full_health_window() {
+    for latency_ms in [[3000, 100, 100], [3900, 1, 3900], [100, 200, 300]] {
+        let mut recovery = Episode::new(s(30));
+        recovery.fault(Duration::ZERO);
+        let mut now = Duration::ZERO;
+        let mut first_observation = None;
+        let mut previous_start = None;
+        for latency in latency_ms {
+            let ticket = loop {
+                if let Some(ticket) = recovery.next(now) {
+                    break ticket;
+                }
+                now += Duration::from_millis(1);
+                assert!(
+                    now < s(60),
+                    "healthy recovery never scheduled its next check"
+                );
+            };
+            if let Some(previous) = previous_start {
+                assert!(
+                    now.saturating_sub(previous) >= s(15),
+                    "probe spacing was shortened"
+                );
+            }
+            previous_start = Some(now);
+            now += Duration::from_millis(latency);
+            let since = *first_observation.get_or_insert(now);
+            recovery.observe(ticket, now, Some("same-valid-input"));
+            if recovery.status() == Status::Ready {
+                assert!(
+                    now.saturating_sub(since) >= s(30),
+                    "health threshold was weakened"
+                );
+            }
+        }
+        assert_eq!(recovery.attempts(), 3);
+        assert_eq!(
+            recovery.status(),
+            Status::Ready,
+            "healthy checks exhausted for latency {latency_ms:?}"
+        );
+    }
+}
