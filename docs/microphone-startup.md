@@ -1,268 +1,130 @@
-# Bounded microphone startup
+# Microphone ownership and recovery
 
-The capture coordinator adapts PR #53 (97fe25cf43cc94734d45a4b33e879e259c97e10f)
-to the current local/cloud pipeline. The native shell defers device-watcher
-registration, default-device selection/open and `AudioTap::start` to one owned
-worker, after profile/provider preflight. All these native preparation calls
-share a four-second deadline; Escape and release before samples arrive stop waiting.
-A release after samples arrive still drains captured audio normally.
+Murmur cancels interrupted dictation and can check whether the default input is
+available again. Recovery never resumes recording or inserts an old transcript.
+Start a new dictation deliberately after the microphone becomes available.
+Physical USB/Bluetooth, sleep/wake and next-field acceptance remain pending in
+[#61](https://github.com/nolanmak/Murmur/issues/61) and [native QA](QA.md).
 
-The native shell retains one `MicrophoneStartup` across attempts. If CoreAudio
-stays blocked after timeout/cancellation, subsequent attempts refuse to spawn
-another preparer until the old one returns and its abandoned tap and watcher
-are cleaned up. The lease stays with the owned capture guard through Stop and
-watcher destruction, so slow cleanup cannot multiply native operations either.
-A preparation that returns after cancellation/release/timeout is closed without
-starting late capture. This cannot forcibly interrupt an OS call. A permanently blocked OS call may require reconnecting the device or
-reopening Murmur. The native owner retains the tap and watcher throughout
-capture and teardown. The async handle contains only channels: abandoning it
-requests cleanup without running native destructors on its executor. No late
-transcript is inserted by startup recovery.
+## Bounded startup and teardown
 
-A fresh preparation regression observed Escape waiting 2.01 seconds for an
-injected blocked open before the coordinator was reached. It now returns promptly.
-All 29 capture tests pass, covering preparation timeout, Escape/release, no late
-start, repeated-attempt backpressure, lease retention through blocked Stop or
-watcher destruction, preflight rejection before preparation, and fresh reuse.
-A second fresh RED started a device once after preparation had already reported
-an input-route change; the worker now checks that signal before native start,
-without waiting for an async observer tick. Existing capture faults, stereo
-conversion, route/stop boundaries, vocabulary snapshots and fallback remain covered.
-The fixture has no physical microphone or cloud access. Native unplug/replug,
-Bluetooth and sleep/wake acceptance for #61 remain required; this change does
-not implement the whole device-recovery state machine or claim that OS stop
-calls can be interrupted.
+The macOS shell retains one `MicrophoneStartup` across attempts. After
+profile/provider preflight, one native owner registers the device watcher,
+selects/opens the default input and starts the tap. Preparation shares a
+four-second handoff deadline. Escape or release before samples arrive stops
+waiting; release after samples arrive drains captured audio normally.
+These bounds cover the shell's deferred preparation; native work a caller does
+before invoking a prebuilt-tap API is outside the coordinator's deadline.
 
+A late preparation closes its abandoned tap and watcher without starting capture.
+A blocked OS call keeps its lease until it returns and cleanup finishes. Repeated
+activations cannot create another preparer or compete with that owner. The async
+handle owns channels, so abandoning it requests cleanup without running native
+destructors on its executor. Native calls cannot be forcibly interrupted; a
+permanently blocked call can require reconnecting the device or reopening Murmur.
 
-## Capture faults cannot become completed dictation
+Key release waits at most four seconds for Stop and resource destruction. Escape
+allows a 20 ms cleanup grace period, then returns Cancelled while the native owner
+retains its resources. Aborting the async task also requests cleanup. A provider
+result cannot be inserted after a capture fault or cleanup timeout/error.
 
-The callback now latches its first fault: queue overflow, device disappearance,
-explicit discontinuity, non-finite samples, changed stream layout or a generic
-tap error. Later
-callbacks cannot clear the fault or append more audio. Valid silent buffers
-still count as delivery. Invalid samples are rejected before the resampler;
-otherwise NaN input can panic in its FFT processing.
+## Capture faults and device changes
 
-Startup completion, the capture loop, stop and provider completion all check
-that fault. Escape wins over a provider result too. A successful provider
-result before capture has stopped is refused, rather than inserting while the
-microphone is still open. The returned error names the failure without exposing
-speech. Dropping the attempt closes its owned tap and provider future; a new
-deliberate attempt receives fresh state.
+The callback latches the first queue overflow, missing device, discontinuity,
+non-finite sample, changed layout or tap error. Later callbacks cannot clear it
+or append more audio. Valid silent buffers still count as delivery. Unsupported
+formats fail explicitly; stereo frames split across ring drains are preserved.
+Missing callbacks trigger the three-second capture-stall deadline.
 
-Three behavioral tests failed before the fix: discontinuous audio incorrectly
-returned a complete transcript, a device error during stop lost to a fast
-provider completion, and non-finite samples panicked inside the resampler.
-All 16 capture tests now pass, including those regressions, valid silent buffers
-and a successful fresh attempt after a discontinuity. Fixtures use local fake
-providers and taps, with no physical microphone or cloud credentials.
+A fresh per-attempt device watcher is registered before opening the microphone.
+Default-input changes cancel preparation or active capture; output-only and
+general device-list notifications do not. A route change after confirmed Stop
+does not discard complete captured audio while transcription drains. Callback
+faults discovered during Stop still reject the result, including the shared
+backend's `FormatChangedAfterStop` fault. New attempts use fresh capture,
+resampler, notification and original-field state.
 
-This is part of #61, not the full recovery implementation. Native route-change
-notifications, sleep-aware stall detection, bounded background readiness retries,
-sustained-health reset and physical unplug/Bluetooth/sleep testing remain open.
-The native tap must actually report a fault for this callback path to observe it;
-missing callbacks still use the existing three-second stall timeout. No partial
-transcript is automatically inserted and no background recording is started.
+The shell owns real `NSWorkspace` sleep/wake observers. A notification immediately
+cancels the active control flag and invalidates pending hold/review/focus work.
+The shell discards stale commands/completions while preserving an explicit Quit.
+Wake never replays a shortcut or starts recording. Sleep cancellation does not
+release a blocked Stop or bypass native ownership.
 
-The shared backend's typed `StreamFormatChanged` fault now asks for a new
-dictation instead of reporting a generic failure. Its added regression failed
-with “Microphone failure; no text inserted” before that mapping, then passed with
-the format-specific instruction. Full workspace (207 tests), strict Clippy,
-repository boundaries, managed-engine lifecycle tests and the stable-identity
-signed development bundle passed locally at this extraction.
+## Stop evidence and persistent indicators
 
+Successful Stop is distinct from complete resource release. The native owner
+records Stop before waiting for callback unregistration, aggregate/process-tap
+release and watcher removal. Only confirmed release makes admission available.
 
-## Per-attempt device notifications
-
-The macOS shell now registers the shared CoreAudio device watcher before opening
-the microphone and holds it until the attempt completes. Registration failure
-refuses capture with a retry message. Each attempt owns a fresh notification
-signal; an old watcher or delayed callback cannot invalidate a later attempt.
-
-Default-input changes cancel pending startup or active capture. The startup
-worker retains its existing cleanup/lease guarantees if the OS call returns
-late. Output-only and general device-list notifications do not cancel microphone
-dictation. A route change after capture has stopped does not discard a complete
-utterance while transcription drains. No automatic recording restart occurs.
-
-The original default-input test returned a successful transcript and failed its
-cancellation assertion. After wiring, a separate boundary test exposed excessive
-cancellation after stop; restricting notification checks to active capture fixed
-it. All 20 capture tests now pass, including input/output distinction, a fresh
-attempt after a stale notification, completed-audio preservation and prompt
-startup cancellation with late-tap cleanup.
-
-The policy also recognizes explicit StreamFormat/WillSleep/DidWake events, but
-the shared native watcher currently publishes only default-device/device-list
-changes. Native format and sleep event sources, sleep-aware stall clocks,
-background readiness recovery and physical device QA remain unfinished under
-#61. Synthetic event tests do not establish those native acceptance gates.
-
-The route change extraction retains the five-argument startup API, independent
-progress/startup state, panic containment and stereo frame preservation already
-on main. Device-watcher creation, default-device selection/open, tap start,
-Stop and resource destruction all run on the same native owner. Native calls
-remain synchronous there; the async handoff has deadlines and cancellation.
-Native sleep/format event publication, readiness recovery and physical acceptance
-remain required before closing #61.
-
-
-## Bounded teardown and persistent ownership state
-
-Key release requests cleanup from the existing native owner and waits at most
-four seconds for Stop, tap destruction and watcher removal. Escape waits only a
-20 ms grace period for quick cleanup, then returns Cancelled while the owner
-keeps its resources and lease. Aborting the async task also disconnects that
-handle and requests cleanup. The active handle itself performs no native
-destruction on the async executor. The native shell uses deferred preparation,
-so it creates no native objects before ownership moves to that worker. Existing
-prebuilt-tap entry points remain compatible; work a caller performs before
-invoking those APIs cannot be bounded by the coordinator.
-A blocked native call is not forcibly interrupted and cannot multiply into new
-microphone workers through repeated activations.
-
-Only successful Stop followed by resource destruction releases the lease and
-returns the operation to Idle. Stop failure leaves capture ownership unconfirmed,
-refuses another input and asks the user to reopen Murmur. If Stop succeeded but
-watcher cleanup failed, that positive Stop evidence remains distinct: audio is
-stopped, cleanup is failed, and another input is still refused until reopening.
-This is deliberate: an unconfirmed stop is not permission to claim recording
-ended. A timeout whose native cleanup later succeeds clears automatically, but
-recording resumes only on a new deliberate activation. A fresh fixture dictation
-succeeds after both Stop and watcher-cleanup timeouts resolve.
-
-The native menu and persistent pill distinguish:
-
-| State | Pill / behavior |
+| Native state | Persistent indicator / next action |
 | --- | --- |
-| Cancelled/timed-out Stop remains pending | Microphone may still be recording; further input preparation is blocked |
-| Stop succeeded, watcher removal remains pending | Microphone stopped — finishing cleanup |
-| Stop could not be confirmed | Mic may still be recording · reopen Murmur |
+| Stop remains pending | Microphone may still be recording; further preparation is blocked |
+| Stop confirmed, cleanup pending | Microphone stopped — finishing cleanup |
+| Stop unconfirmed | Mic may still be recording · reopen Murmur |
 | Stop confirmed, cleanup failed | Mic stopped — cleanup failed; reopen Murmur |
 | Cleanup confirmed | Normal ready/processing indicator resumes |
 
-These messages outlive normal notice expiry and take priority over transient
-results and permission messages. New input, prewarming and permission onboarding
-do not bypass unresolved native ownership. A successful Stop is recorded before
-watcher destruction, so a subsequent input-route event cannot discard audio that
-was already stopped. Callback faults during Stop still reject the result.
-A successful provider result cannot be inserted after a cleanup timeout/error.
+These states outlive transient notices and take priority over readiness and
+permission messages. New input, prewarming and onboarding cannot bypass retained
+ownership. A timeout whose cleanup later succeeds clears automatically; recording
+still requires a new activation. A teardown error with the shared backend's
+`Released` evidence rejects that utterance but permits a fresh attempt after the
+owned objects drop. `Stopped` or `Unconfirmed` evidence retains ownership and
+keeps admission blocked.
 
-Fresh behavioral REDs observed Escape waiting 2.02 seconds for injected native
-Stop, pending ownership looking Idle after cancellation, and the shortened pill
-losing its reopen action. Another RED showed a watcher-cleanup failure discarding
-positive Stop evidence. GREEN evidence: 35 capture tests and 14 indicator tests
-cover Stop/watcher deadlines, Escape and async task abort, bounded ownership,
-no insertion on unconfirmed cleanup, post-Stop route changes, fresh speech after
-cleanup, and persistent/clearable honest UI states. Workspace, strict Clippy,
-repository, managed-model lifecycle and signed-app build checks pass locally.
-All audio/providers/devices here are synthetic fixtures.
+## Bounded background readiness
 
-### Owned AppKit rendering evidence
+After a current dictation reports a microphone setup, callback, route, format,
+stall or cleanup fault, the idle native shell may inspect input metadata.
+Provider/configuration failures and cancelled/stale dictations do not start an
+episode. The check creates no tap, IOProc or audio buffer and never records.
 
-The opt-in `microphone_cleanup_preview` example renders the production Pill's
-own AppKit views without constructing Shell, registering input hooks, opening a
-microphone, checking permissions or reading another app/window. Its temporary
-window is nonactivating and invisible to the desktop while its content view is
-cached. The process exits after rendering. These images are native view output,
-not an image edit or a physical-device recording test:
+An episode permits at most three probes, at least fifteen seconds apart. Each
+probe has a four-second handoff deadline; the next start is also spaced at least
+fifteen seconds after the previous observation. A blocked metadata read retains
+the same microphone-operation lease until its thread returns. Timeout,
+cancellation and repeated shortcuts cannot multiply workers or start capture
+beside one. Recovery waits for existing capture cleanup before probing.
 
-![Stop remains pending](microphone-cleanup/pending.png)
+Successful observations must report the same input UID and validated format
+across the shell's thirty-second health window. A failure, changed route or gap
+over nineteen seconds restarts health without refilling the three-attempt budget.
+One success cannot heal an episode. Exhaustion leaves an explicit user-retry
+notice. Metadata availability does not prove live audio, permissions or a locked
+route; the ready message asks for a new dictation.
 
-![Audio stopped, resource cleanup remains pending](microphone-cleanup/stopped.png)
+Escape, new activation, key release, sleep/wake, permission/modal work and a
+frontmost-app change revoke pending readiness results. A pending OS read still
+owns admission. New dictation runs fresh permission/focus checks. Readiness
+completions can change only idle status, never recording control, focus,
+provider selection or insertion.
 
-![Unconfirmed Stop retains its recovery action](microphone-cleanup/unconfirmed.png)
+## Evidence and remaining acceptance
 
-![Positive Stop evidence survives cleanup failure](microphone-cleanup/cleanup-failed.png)
+The [capture tests](../tests/capture.rs) cover preparation/Stop/watcher deadlines,
+Escape and task abort, retained ownership, stale notifications, fault/result
+ordering and fresh attempts after cleanup. Split-frame preservation is covered by
+`stereo_conversion_preserves_frames_split_across_ring_drains` in
+[the capture module's unit tests](../src/capture.rs). The
+[readiness tests](../tests/readiness.rs) exercise stable health, flapping,
+observation latency, exhaustion, stale completions and blocked-worker admission.
+The native sleep bridge posts notifications on an owned private Foundation center
+in [its tests](../src/platform/macos_sleep.rs), without actual system sleep.
+These synthetic/loopback fixtures prove policy and native bridge behavior, not
+physical input, permission, Bluetooth or keyboard behavior.
+
+The opt-in `microphone_cleanup_preview` renders the production Pill's AppKit
+views in an owned nonactivating fixture, without creating Shell, input hooks,
+permission requests, capture or another app's clipboard/window:
 
 ```sh
 cargo run --example microphone_cleanup_preview -- /tmp/murmur-cleanup-preview
 ```
 
-The stopped label reflects the backend's successful `AudioTap::stop`; physical
-microphone LED/callback quiescence, USB/Bluetooth recovery and sleep/wake behavior
-still require signed-app acceptance. These component renders do not establish
-those gates or close #61.
-
-
-### Native Stop evidence and resource release
-
-The shared capture backend reports confirmed capture cessation separately from
-complete resource release. Murmur observes Stop before waiting for callback
-unregistration and aggregate/process-tap cleanup, keeping the microphone pill
-honest throughout slow teardown. The startup lease remains held until both native
-cleanup and watcher destruction finish.
-
-A teardown error with `Released` evidence still rejects insertion for that
-utterance, but permits a fresh attempt after the owned objects drop. `Stopped`
-evidence retains the lease and shows the stopped/cleanup-failed notice;
-`Unconfirmed` retains the lease and shows that recording may still be active.
-Neither incomplete state permits microphone preparation. The backend also fences
-new native source instances in the same process after retained cleanup.
-
-The synthetic capture suite exercises all three error states, real next-attempt
-admission, and a blocked resource release after an early Stop observation. It
-does not prove physical device or permission behavior, and native calls can
-still block on their owner thread.
-
-## Native sleep and wake cancellation
-
-The macOS shell now owns observers on `NSWorkspace`'s sleep/wake notification
-center. The callback cancels the active attempt immediately through its shared
-control flag, without touching UI objects. A generation tracked while an event
-is pending starts cancelled too. The shell consumes the pending event before
-handling shortcuts or completed transcripts, cancels the old generation/review,
-clears its focus target and pending hold-to-dictate work, and discards queued
-commands. Monitor-disable recovery is preserved, and an explicit queued Quit
-still wins. Wake never starts capture or replays a shortcut automatically.
-
-The existing native microphone lease remains authoritative: cancellation does
-not free a blocked Stop or watcher cleanup, and another attempt still requires
-confirmed release. The existing microphone-state indicator continues to report
-retained or unconfirmed native ownership independently of dictation phase.
-
-A fresh runtime RED posted a real Foundation notification on a private center
-and observed that the tracked attempt was not cancelled. The observer bridge
-now passes both sleep/wake cancellation, tracking during a pending event,
-coalesced event consumption and observer removal on drop. Hotkey/hold tests
-cover stale completion rejection and fresh deliberate activation after release.
-These tests use no microphone, global input, system sleep or user clipboard.
-They prove the native notification bridge and cancellation policy, not physical
-sleep/wake, USB/Bluetooth route changes or next-attempt insertion. Those signed-app
-acceptance gates, format-change publication and background readiness recovery
-remain unfinished under #61.
-# Bounded background readiness
-
-After a current dictation reports a microphone setup, callback, route, format,
-stall or cleanup fault, the native shell may inspect input metadata while idle.
-Provider/configuration failures and cancelled or stale dictations do not start
-this episode. Nothing records, resumes an old generation or inserts text.
-
-An episode permits at most three starts, at least fifteen seconds apart. Each
-probe has a four-second handoff deadline. A blocked property read retains the
-same microphone-operation lease until its thread returns; timeout, cancellation,
-provider changes and repeated shortcuts cannot multiply it or start capture
-beside it. The persistent notice explicitly says no recording is taking place.
-Existing unconfirmed Stop/resource-release notices retain priority, and recovery
-waits for actual native cleanup before probing.
-
-Readiness uses the shared backend's real input UID and validated format, with no
-tap, IOProc or audio buffer. All successful observations must match across a
-thirty-second health window (configurable through `Monitor::new`). A failure,
-changed route or observation gap over nineteen seconds restarts that window
-without refilling the three-attempt budget. One success cannot heal an episode.
-Three unsuccessful or insufficiently stable attempts leave an explicit user-retry
-notice. Metadata availability is not proof of live audio or a locked route.
-
-Escape, a deliberate new activation, key release, sleep/wake, permission/modal
-work and a frontmost-app change revoke pending readiness results. A pending OS
-read still owns admission; the user retries after it returns. New dictation
-always runs fresh permission/focus checks and constructs its own capture state
-and resampler. Readiness completions can update only idle status, never focus,
-recording control, provider selection or insertion.
-
-Device-free clock/worker tests exercise flapping, deadlines, stale completions,
-exhaustion, stable health and retained ownership. A loopback provider test proves
-capture is refused during a stuck metadata read and a new deliberate dictation
-returns speech after release. They do not establish signed-app USB/Bluetooth,
-physical sleep/wake or real next-field insertion; those gates remain unchecked.
+[Pending Stop](microphone-cleanup/pending.png),
+[stopped / cleanup pending](microphone-cleanup/stopped.png),
+[unconfirmed Stop](microphone-cleanup/unconfirmed.png), and
+[cleanup failure](microphone-cleanup/cleanup-failed.png) are retained native
+component renders. They do not establish microphone LED/callback quiescence.
+Keep physical USB/Bluetooth/format-change, sleep/wake, actual next-field insertion
+and signed-app permission checks unchecked until observed through the app.

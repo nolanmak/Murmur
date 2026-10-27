@@ -110,8 +110,10 @@ cargo run -- doctor  # shows credential source, never the value
   Multiline/control-character output requires manual copying; no Enter key is synthesized.
 - Changing apps or fields blocks automatic insertion. Cancelling invalidates late results.
 - Optional Deepgram-to-local fallback is explicit; Local Whisper never falls back to cloud. LLM cleanup is separately opt-in; Offline-all selects local speech and disables cleanup. No screen context, analytics or vendor relay.
-- Current microphone adapter uses the default device. Unplugging a device cancels;
-  automatic device recovery is not yet implemented.
+- The microphone adapter uses the default device. Device faults cancel the current
+  dictation; bounded background checks can report when input metadata is stable
+  again. Start a new dictation deliberately. See [microphone recovery](docs/microphone-startup.md)
+  for ownership limits and the physical-device checks still pending.
 - Experimental [RustDesk review mode](docs/rustdesk.md) keeps the transcript for
   explicit review and manual clipboard paste. Automatic remote insertion and the
   macOS/Linux acceptance matrix are not yet verified.
