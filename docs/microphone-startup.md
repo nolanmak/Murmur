@@ -69,7 +69,8 @@ permission messages. New input, prewarming and onboarding cannot bypass retained
 ownership. A timeout whose cleanup later succeeds clears automatically; recording
 still requires a new activation. A teardown error with the shared backend's
 `Released` evidence rejects that utterance but permits a fresh attempt after the
-owned objects drop. `Stopped` or `Unconfirmed` evidence retains admission.
+owned objects drop. `Stopped` or `Unconfirmed` evidence retains ownership and
+keeps admission blocked.
 
 ## Bounded background readiness
 
@@ -102,7 +103,9 @@ provider selection or insertion.
 
 The [capture tests](../tests/capture.rs) cover preparation/Stop/watcher deadlines,
 Escape and task abort, retained ownership, stale notifications, fault/result
-ordering, split stereo frames and fresh attempts after cleanup. The
+ordering and fresh attempts after cleanup. Split-frame preservation is covered by
+`stereo_conversion_preserves_frames_split_across_ring_drains` in
+[the capture module's unit tests](../src/capture.rs). The
 [readiness tests](../tests/readiness.rs) exercise stable health, flapping,
 observation latency, exhaustion, stale completions and blocked-worker admission.
 The native sleep bridge posts notifications on an owned private Foundation center
