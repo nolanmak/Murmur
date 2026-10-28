@@ -4,7 +4,7 @@ fn main() {
     let result = match command.as_str() {
         "--help" | "help" => {
             println!(
-                "Murmur — macOS hold-Control dictation\n\nrun     Launch the menu-bar app (use the .app bundle)\ndoctor  Report provider configuration without printing secrets\nspeech  Select parakeet, whisper [URL], local [URL], deepgram or fallback [parakeet|whisper] [URL];\n        speech install-parakeet [--parakeet-from DIR] [--vad-from DIR] installs the Parakeet model\nlanguage CODE  Select an explicit transcription language (default en)\nvocabulary  Import/export/validate a versioned vocabulary profile\ncleanup  Configure a provider, then explicitly turn text cleanup on/off\nprivacy  Choose offline-all (local speech, no cleanup) or configured providers\n\nHold Control to dictate; release to insert; Esc cancels.\nRun scripts/build-app.sh and launch the resulting .app for capture."
+                "Murmur — macOS hold-Control dictation\n\nrun     Launch the menu-bar app (use the .app bundle)\ndoctor  Report provider configuration without printing secrets\nspeech  Select parakeet, whisper [URL], local [URL], streaming, deepgram or fallback [parakeet|whisper] [URL];\n        speech install-parakeet [--parakeet-from DIR] [--vad-from DIR] installs the Parakeet model;\n        speech install-streaming [--from DIR] installs the streaming (Nemotron 3.5) model\nlanguage CODE  Select an explicit transcription language (default en)\nvocabulary  Import/export/validate a versioned vocabulary profile\ncleanup  Configure a provider, then explicitly turn text cleanup on/off\nprivacy  Choose offline-all (local speech, no cleanup) or configured providers\n\nHold Control to dictate; release to insert; Esc cancels.\nRun scripts/build-app.sh and launch the resulting .app for capture."
             );
             Ok(())
         }
@@ -57,11 +57,14 @@ fn configure_cleanup(privacy: bool) -> Result<(), String> {
     Ok(())
 }
 
-const SPEECH_USAGE: &str = "Usage: murmur speech parakeet | whisper [http://127.0.0.1:17863] | local [URL] | deepgram | fallback [parakeet|whisper] [URL] | install-parakeet [--parakeet-from DIR] [--vad-from DIR]";
+const SPEECH_USAGE: &str = "Usage: murmur speech parakeet | whisper [http://127.0.0.1:17863] | local [URL] | deepgram | fallback [parakeet|whisper] [URL] | install-parakeet [--parakeet-from DIR] [--vad-from DIR] | streaming | install-streaming [--from DIR]";
 
 fn configure_speech() -> Result<(), String> {
     use murmur::speech::{LocalEngine, Provider};
     let args: Vec<String> = std::env::args().skip(2).collect();
+    if args.first().map(String::as_str) == Some("install-streaming") {
+        return install_streaming(&args[1..]);
+    }
     if args.first().map(String::as_str) == Some("install-parakeet") {
         return install_parakeet(&args[1..]);
     }
@@ -84,6 +87,7 @@ fn configure_speech() -> Result<(), String> {
     let provider = match args.first().map(String::as_str) {
         Some("parakeet") if args.len() == 1 => Provider::LocalParakeet,
         Some("whisper") => Provider::LocalWhisper,
+        Some("streaming") if args.len() == 1 => Provider::LocalStreaming,
         Some("local") => Provider::local(engine),
         Some("deepgram") if args.len() == 1 => Provider::Deepgram,
         Some("fallback") => Provider::backup(engine),
@@ -209,6 +213,12 @@ fn doctor() -> Result<(), String> {
     }
     if privacy.offline_all {
         println!("Offline-all: local speech only, cleanup disabled; cloud credentials not read.");
+        if settings.provider == murmur::speech::Provider::LocalStreaming {
+            println!(
+                "Dictation uses Local streaming (Nemotron 3.5), falling back to {}.",
+                local.label()
+            );
+        }
         return Ok(());
     }
     match settings.provider {
@@ -237,5 +247,33 @@ fn doctor() -> Result<(), String> {
             );
             Ok(())
         }
+        murmur::speech::Provider::LocalStreaming => {
+            println!(
+                "Local streaming (Nemotron 3.5 through fotw-speechd), falling back to {}. No cloud credentials required. Install the model with `murmur speech install-streaming`.",
+                local.label()
+            );
+            Ok(())
+        }
     }
+}
+
+/// Explicit setup: the only path that downloads the streaming model.
+fn install_streaming(args: &[String]) -> Result<(), String> {
+    let from = match args {
+        [] => None,
+        [flag, dir] if flag == "--from" => Some(std::path::PathBuf::from(dir)),
+        _ => return Err("Usage: murmur speech install-streaming [--from DIR]".into()),
+    };
+    let endpoint = murmur::local_streaming::Endpoint::shared();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| "Cannot start runtime".to_string())?;
+    println!("Installing the streaming model (about 1.2 GB unless --from is given)…");
+    runtime.block_on(endpoint.service().install(from))?;
+    println!("Installed. {}", murmur::local_streaming::ATTRIBUTION);
+    println!(
+        "If Murmur is running with this model already loaded, restart it to use the new copy."
+    );
+    Ok(())
 }

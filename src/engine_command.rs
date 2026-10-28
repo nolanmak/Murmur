@@ -23,6 +23,8 @@ pub enum Target {
     Deepgram,
     /// Deepgram with the default local engine as backup.
     Backup,
+    /// Local streaming dictation (#100).
+    Streaming,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +74,9 @@ pub fn parse(raw: &str) -> Option<Command> {
     let phrase = rest.join(" ").replace("deep gram", "deepgram");
     Some(match phrase.as_str() {
         "use local" | "switch to local" | "go local" => Command::Use(Target::Local),
+        "use streaming" | "switch to streaming" | "use local streaming" => {
+            Command::Use(Target::Streaming)
+        }
         "use parakeet" | "switch to parakeet" | "use local parakeet" => {
             Command::Use(Target::Parakeet)
         }
@@ -95,6 +100,7 @@ pub fn label(provider: &Provider) -> &'static str {
         Provider::Deepgram => "Deepgram",
         Provider::LocalParakeet => "Local Parakeet",
         Provider::LocalWhisper => "Local Whisper",
+        Provider::LocalStreaming => "Local streaming",
         Provider::DeepgramThenParakeet => "Deepgram with Parakeet backup",
         Provider::DeepgramThenWhisper => "Deepgram with Whisper backup",
     }
@@ -107,6 +113,7 @@ fn provider(target: Target, default_local: LocalEngine) -> Provider {
         Target::Whisper => Provider::LocalWhisper,
         Target::Deepgram => Provider::Deepgram,
         Target::Backup => Provider::backup(default_local),
+        Target::Streaming => Provider::LocalStreaming,
     }
 }
 
@@ -140,6 +147,9 @@ pub fn decide(
     let Some(target) = target(command, previous, default_local) else {
         return Decision::Report(match command {
             // Offline-all overrides the saved engine for every dictation.
+            Command::Which if offline_all && current == Some(&Provider::LocalStreaming) => {
+                "Using Local streaming · Offline-all is on".into()
+            }
             Command::Which if offline_all => format!(
                 "Using {} · Offline-all is on",
                 current
@@ -167,7 +177,9 @@ pub fn decide(
             "{reason} — add a Deepgram key first; staying on {current_label}"
         ));
     }
-    if target.local_engine().is_some()
+    // `local` probes the engine the target needs: the streaming engine for
+    // Local streaming, otherwise its batch engine.
+    if (target.local_engine().is_some() || target == Provider::LocalStreaming)
         && let Err(reason) = local
     {
         return Decision::Refuse(format!("{reason} — staying on {current_label}"));

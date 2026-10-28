@@ -161,3 +161,25 @@ async fn a_build_without_the_helper_explains_how_to_get_it() {
         .unwrap_err();
     assert!(error.contains("no helper in this build"), "{error}");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_model_installed_while_the_helper_runs_loads_without_a_restart() {
+    // Installed from the CLI (another process) after the app's helper
+    // started: the helper's startup capabilities still say "not installed",
+    // so the load must ask the helper, which reads the models on disk.
+    let models = tempfile::tempdir().unwrap();
+    let config = fotw_speechd_client::SpeechdConfig::new(fake_helper(), models.path())
+        .arg("--fake-engines")
+        .arg("--pinned")
+        .arg("parakeet-unified@r1");
+    let backend = SpeechdBackend::new(Ok(config), "parakeet-unified", Some("fake-vad"));
+    let service = Service::new(Arc::new(backend)).unwrap();
+    let missing = service.ready(Duration::from_secs(10)).await.unwrap_err();
+    assert!(missing.contains("not installed"), "{missing}");
+    std::fs::create_dir_all(models.path().join("parakeet-unified/r1")).unwrap();
+    let binding = service
+        .ready(Duration::from_secs(10))
+        .await
+        .expect("the running helper loads the newly installed model");
+    assert_eq!(binding.revision, "r1");
+}

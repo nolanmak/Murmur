@@ -149,6 +149,13 @@ impl From<crate::local_parakeet::Endpoint> for LocalTranscriber {
     }
 }
 impl LocalTranscriber {
+    /// Release the engine's model after `idle` without further use; a no-op
+    /// for Local Whisper, whose runtime Murmur does not own.
+    pub fn release_after(&self, idle: Duration) {
+        if let LocalTranscriber::Parakeet(endpoint) = self {
+            endpoint.service().release_after(idle);
+        }
+    }
     pub fn engine(&self) -> crate::speech::LocalEngine {
         match self {
             LocalTranscriber::Whisper(_) => crate::speech::LocalEngine::Whisper,

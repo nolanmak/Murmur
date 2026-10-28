@@ -516,6 +516,15 @@ impl Pill {
         pill.panel.orderFrontRegardless();
         Ok(pill)
     }
+    /// A streaming partial: replace the text where it is. The Live pill has
+    /// one fixed width, so nothing is re-laid out, hidden or eased (#100).
+    fn set_live_text(&mut self, text: &str) {
+        if self.label.stringValue().to_string() == text {
+            return;
+        }
+        self.label.setStringValue(&NSString::from_str(text));
+        self.text_width = self.label.intrinsicContentSize().width;
+    }
     fn set_text(&mut self, text: &str) {
         if self.label.stringValue().to_string() == text {
             return;
@@ -609,7 +618,7 @@ impl Pill {
                     dot.setHidden(false);
                 }
             }
-            Look::Notice => {
+            Look::Notice | Look::Live => {
                 // The label cell insets its text by 2pt on each side.
                 let inset = indicator::NOTICE_PADDING - 2.0;
                 let line = self.label.intrinsicContentSize().height.ceil();
@@ -984,10 +993,17 @@ impl Shell {
     }
     /// Load and warm Parakeet in the background when the next dictation may
     /// use it, so the first utterance pays no model load or Core ML compile.
+    /// With streaming chosen only the streaming engine is warmed (#100): its
+    /// batch fallback loads on demand, so both 0.6B models are not resident
+    /// together just in case.
     fn warm_local_engine(&self) {
         let Some(settings) = self.speech.settings() else {
             return;
         };
+        if settings.provider == crate::speech::Provider::LocalStreaming {
+            crate::local_streaming::Endpoint::shared().service().warm();
+            return;
+        }
         let engine = if self.cleanup_menu.offline_all() {
             Some(settings.effective_local_engine())
         } else {
@@ -1011,6 +1027,7 @@ impl Shell {
                     .and_then(|path| self.speech.choose(provider, &path))
                 {
                     Ok(()) => {
+                        release_streaming_if_left(before.as_ref(), self.speech.provider());
                         if before.as_ref() != self.speech.provider() {
                             self.previous_provider = before;
                         }
@@ -1099,6 +1116,7 @@ impl Shell {
                 match crate::speech::Settings::path().and_then(|path| self.speech.choose(to, &path))
                 {
                     Ok(()) => {
+                        release_streaming_if_left(current.as_ref(), self.speech.provider());
                         self.previous_provider = current;
                         self.refresh_speech_menu();
                         self.warm_local_engine();
@@ -1319,9 +1337,18 @@ impl Shell {
                             command,
                             previous.as_ref(),
                             speech.local_engine(),
-                        )
-                        .and_then(|target| target.local_engine());
+                        );
+                        let streaming =
+                            engine.as_ref() == Some(&crate::speech::Provider::LocalStreaming);
+                        let engine = engine.and_then(|target| target.local_engine());
                         let local = match (engine, speech.settings()) {
+                            // Switching to streaming needs it loaded and warm.
+                            // In the saved language, like every switch probe.
+                            _ if streaming => {
+                                crate::local_streaming::Endpoint::shared()
+                                    .switch_probe(&vocabulary.language)
+                                    .await
+                            }
                             (None, _) => Ok(()),
                             (Some(_), None) => Err("Speech settings are invalid".to_string()),
                             (Some(engine), Some(settings)) => {
@@ -1972,13 +1999,30 @@ impl Shell {
             }
         }
         self.microphone_notice = notice;
-        let look = self.indicator.look_with_microphone(
+        let mut look = self.indicator.look_with_microphone(
             now,
             self.core.phase,
             receiving,
             self.warning.is_some(),
             microphone,
         );
+        // A streaming engine's partial replaces the listening bars while
+        // Control is held (#100). Display only: it is never inserted.
+        if matches!(look, Look::Listening | Look::Starting)
+            && let Some(text) = self.speech_progress.live()
+        {
+            look =
+                self.indicator
+                    .look_live(now, self.core.phase, receiving, self.warning.is_some());
+            if look == Look::Live {
+                if self.pill.look == Look::Live {
+                    self.pill.set_live_text(&indicator::live_text(&text));
+                } else {
+                    // Entering Live: the next render lays the label out.
+                    self.pill.set_text(&indicator::live_text(&text));
+                }
+            }
+        }
         if self.pill.look == Look::Success
             && matches!(look, Look::Idle | Look::Warning | Look::Armed)
         {
@@ -2431,12 +2475,27 @@ pub fn run() -> Result<(), String> {
 const INVALID_SPEECH: &str =
     "Speech settings invalid — choose an engine in the Transcription menu to repair";
 
+/// Moving off local streaming releases its model (~1.1 GB of Neural Engine
+/// memory) instead of keeping it for nothing; choosing it again reloads it.
+fn release_streaming_if_left(
+    before: Option<&crate::speech::Provider>,
+    after: Option<&crate::speech::Provider>,
+) {
+    use crate::speech::Provider;
+    if before == Some(&Provider::LocalStreaming) && after != Some(&Provider::LocalStreaming) {
+        crate::local_streaming::Endpoint::shared()
+            .service()
+            .release();
+    }
+}
+
 fn speech_label(provider: Option<&crate::speech::Provider>) -> &'static str {
     use crate::speech::Provider;
     match provider {
         Some(Provider::Deepgram) => "Transcription: Deepgram",
         Some(Provider::LocalParakeet) => "Transcription: Local Parakeet",
         Some(Provider::LocalWhisper) => "Transcription: Local Whisper",
+        Some(Provider::LocalStreaming) => "Transcription: Local streaming",
         Some(Provider::DeepgramThenParakeet) => "Transcription: Deepgram → Parakeet",
         Some(Provider::DeepgramThenWhisper) => "Transcription: Deepgram → Whisper",
         None => "Transcription: invalid settings — choose an engine",
@@ -2445,6 +2504,10 @@ fn speech_label(provider: Option<&crate::speech::Provider>) -> &'static str {
 
 /// What Offline-all runs instead of the saved choice.
 fn offline_label(settings: Option<&crate::speech::Settings>) -> &'static str {
+    // Offline-all keeps streaming, which is local already.
+    if settings.is_some_and(|s| s.provider == crate::speech::Provider::LocalStreaming) {
+        return "Transcription: Local streaming (Offline-all)";
+    }
     match settings.map(crate::speech::Settings::effective_local_engine) {
         Some(crate::speech::LocalEngine::Whisper) => "Transcription: Local Whisper (Offline-all)",
         _ => "Transcription: Local Parakeet (Offline-all)",

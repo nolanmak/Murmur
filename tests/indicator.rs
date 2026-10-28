@@ -316,3 +316,40 @@ fn confirmed_stop_survives_cleanup_failure_in_the_persistent_ui() {
         Look::Notice
     );
 }
+
+#[test]
+fn streaming_partials_show_their_latest_words_truncated_while_recording() {
+    // #100: the pill shows what the streaming engine hears, newest words last.
+    let long = "the quick brown fox jumps over the lazy dog and then keeps on running far away";
+    let shown = live_text(long);
+    assert!(shown.chars().count() <= NOTICE_CHARS, "{shown}");
+    assert!(
+        shown.starts_with('…') && shown.ends_with("far away"),
+        "{shown}"
+    );
+    assert!(!shown[3..].starts_with(' '), "cut at a word: {shown}");
+    assert_eq!(live_text("  hello world "), "hello world");
+    let indicator = Indicator::default();
+    assert_eq!(
+        indicator.look_live(0, Phase::Recording, true, false),
+        Look::Live
+    );
+    // Only while recording; once released the usual processing look returns.
+    assert_eq!(
+        indicator.look_live(0, Phase::Processing, true, false),
+        Look::Processing
+    );
+    assert_eq!(
+        Look::Live.size(120.0).1,
+        Look::Notice.size(120.0).1,
+        "a text pill"
+    );
+}
+
+#[test]
+fn the_live_pill_keeps_one_width_so_partials_do_not_reflow_it() {
+    // #100 review: a new partial every ~0.56 s must not resize the pill,
+    // or it eases to the new width and hides its text each time.
+    assert_eq!(Look::Live.size(40.0), Look::Live.size(260.0));
+    assert_eq!(Look::Live.size(40.0), (NOTICE_MAX_WIDTH, NOTICE_HEIGHT));
+}

@@ -171,6 +171,13 @@ Two local engines work offline after an explicit model install:
 A settings file from before Parakeet keeps Whisper as its local engine until you
 choose Parakeet.
 
+**Local streaming** (Nemotron 3.5 through the bundled `fotw-speechd` helper)
+shows words in the indicator while Control is held and types the final text
+about 50 ms after release. Run `murmur speech install-streaming` once, then
+choose it in the Transcription menu, run `murmur speech streaming`, or say
+"Murmur, use streaming". It falls back to the default local engine (Local Parakeet on a new install)
+when it isn't ready, and never uses the cloud. See [local streaming](docs/local-streaming.md).
+
 ### Wi-Fi resilience
 
 `murmur speech fallback [parakeet|whisper]` selects Deepgram with a local backup
@@ -198,6 +205,7 @@ Hold Control and say only a command, starting with "Murmur":
 | "Murmur, use local" | The default local engine (Local Parakeet on a new install) |
 | "Murmur, use Parakeet" | Local Parakeet |
 | "Murmur, use Whisper" | Local Whisper |
+| "Murmur, use streaming" | Local streaming |
 | "Murmur, use Deepgram" (or "use cloud") | Deepgram only |
 | "Murmur, use backup" | Deepgram with the default local engine as backup |
 | "Murmur, undo" | The engine before the last switch |

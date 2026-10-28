@@ -9,7 +9,31 @@ use tokio::sync::mpsc;
 /// Per-attempt progress; each capture owns a fresh instance so late updates
 /// cannot overwrite a later dictation's UI.
 #[derive(Clone, Default)]
-pub struct Progress(Arc<AtomicU64>);
+pub struct Progress(Arc<AtomicU64>, Live);
+
+/// A streaming engine's running text for one attempt (#100): display only,
+/// never inserted. Once the attempt's stream is over it takes no more text.
+#[derive(Clone, Default)]
+struct Live(Arc<std::sync::Mutex<(Option<String>, bool)>>);
+
+/// Ends the attempt's live text when dropped.
+pub struct LiveGuard(Live);
+impl Drop for LiveGuard {
+    fn drop(&mut self) {
+        self.0.0.lock().unwrap_or_else(|e| e.into_inner()).1 = true;
+    }
+}
+
+fn engine_bit(engine: crate::speech::LocalEngine) -> u64 {
+    u64::from(engine == crate::speech::LocalEngine::Parakeet)
+}
+fn engine_of(packed: u64) -> crate::speech::LocalEngine {
+    if packed >> 8 & 1 == 1 {
+        crate::speech::LocalEngine::Parakeet
+    } else {
+        crate::speech::LocalEngine::Whisper
+    }
+}
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Stage {
     #[default]
@@ -22,6 +46,19 @@ pub enum Stage {
         engine: crate::speech::LocalEngine,
         corrections: u32,
     },
+    /// Local streaming dictation (#100), whose final gets this many
+    /// vocabulary correction targets.
+    Streaming {
+        corrections: u32,
+    },
+    /// The stream failed mid-utterance; its audio went to this batch engine.
+    StreamingRetried {
+        engine: crate::speech::LocalEngine,
+    },
+    /// Streaming was not ready before recording; this batch engine took it.
+    StreamingUnavailable {
+        engine: crate::speech::LocalEngine,
+    },
 }
 impl Progress {
     pub fn stage(&self) -> Stage {
@@ -30,15 +67,39 @@ impl Progress {
             1 => Stage::Cloud,
             2 => Stage::Retrying,
             3 => Stage::Local {
-                engine: if packed >> 8 & 1 == 1 {
-                    crate::speech::LocalEngine::Parakeet
-                } else {
-                    crate::speech::LocalEngine::Whisper
-                },
+                engine: engine_of(packed),
                 corrections: (packed >> 16) as u32,
+            },
+            4 => Stage::Streaming {
+                corrections: (packed >> 16) as u32,
+            },
+            5 => Stage::StreamingRetried {
+                engine: engine_of(packed),
+            },
+            6 => Stage::StreamingUnavailable {
+                engine: engine_of(packed),
             },
             _ => Stage::Preparing,
         }
+    }
+    /// The streaming engine's latest partial text, while the attempt runs.
+    pub fn live(&self) -> Option<String> {
+        self.1.0.lock().unwrap_or_else(|e| e.into_inner()).0.clone()
+    }
+    pub(crate) fn set_live(&self, text: &str) {
+        let mut live = self.1.0.lock().unwrap_or_else(|e| e.into_inner());
+        if !live.1 {
+            live.0 = Some(text.to_owned());
+        }
+    }
+    /// The stream died: take its last partial off screen now, while the key
+    /// may still be held, and take no more.
+    pub(crate) fn end_live(&self) {
+        *self.1.0.lock().unwrap_or_else(|e| e.into_inner()) = (None, true);
+    }
+    /// Hold while a stream runs; dropping it ends the live text for good.
+    pub(crate) fn live_guard(&self) -> LiveGuard {
+        LiveGuard(self.1.clone())
     }
     pub(crate) fn set(&self, stage: Stage) {
         let packed = match stage {
@@ -48,10 +109,10 @@ impl Progress {
             Stage::Local {
                 engine,
                 corrections,
-            } => {
-                let parakeet = u64::from(engine == crate::speech::LocalEngine::Parakeet);
-                3 | parakeet << 8 | u64::from(corrections) << 16
-            }
+            } => 3 | engine_bit(engine) << 8 | u64::from(corrections) << 16,
+            Stage::Streaming { corrections } => 4 | u64::from(corrections) << 16,
+            Stage::StreamingRetried { engine } => 5 | engine_bit(engine) << 8,
+            Stage::StreamingUnavailable { engine } => 6 | engine_bit(engine) << 8,
         };
         self.0.store(packed, std::sync::atomic::Ordering::Release);
     }
@@ -62,7 +123,10 @@ impl Stage {
     pub fn completion_message(self, message: &str) -> String {
         if let Self::Local {
             corrections: 1.., ..
-        } = self
+        }
+        | Self::Streaming { corrections: 1.. }
+        | Self::StreamingRetried { .. }
+        | Self::StreamingUnavailable { .. } = self
         {
             format!("{message} · {}", self.label())
         } else {
@@ -87,6 +151,18 @@ impl Stage {
                 if corrections == 1 { "" } else { "s" }
             )
             .into(),
+            Self::Streaming { corrections: 0 } => "Local streaming".into(),
+            Self::Streaming { corrections } => format!(
+                "Local streaming: {corrections} vocabulary correction{} available",
+                if corrections == 1 { "" } else { "s" }
+            )
+            .into(),
+            Self::StreamingRetried { engine } => {
+                format!("Streaming failed; retried on {}", engine.label()).into()
+            }
+            Self::StreamingUnavailable { engine } => {
+                format!("Streaming not ready; used {}", engine.label()).into()
+            }
         }
     }
 }

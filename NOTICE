@@ -18,6 +18,12 @@ committed to this repository:
   SHA-256 2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987).
   MIT License, Copyright (c) 2020-present Silero Team
   (https://github.com/snakers4/silero-vad).
+- Nemotron 3.5 ASR Streaming 0.6B, multilingual, by NVIDIA (Core ML
+  conversion FluidInference/Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML,
+  revision 1a41b75758b0337ff67db7d5408280aaaf23074e, `multilingual/560ms` and
+  `multilingual/1120ms`), installed only by `murmur speech install-streaming`
+  and run by the fotw-speechd helper. OpenMDW License 1.1
+  (https://openmdw.ai/license/).
 - Whisper base.en (ggml conversion, Hugging Face ggerganov/whisper.cpp revision
   5359861c739e955e79d9a303bcbc70fb988958b1). MIT License, Copyright (c) 2022
   OpenAI (https://github.com/openai/whisper).

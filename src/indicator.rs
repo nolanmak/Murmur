@@ -29,6 +29,8 @@ pub enum Look {
     Processing,
     Success,
     Notice,
+    /// A streaming engine's partial text while Control is held (#100).
+    Live,
 }
 impl Look {
     /// Target (width, height); `text_width` only sizes the notice pill.
@@ -38,6 +40,9 @@ impl Look {
             Look::Armed | Look::Success => (44.0, 8.0),
             Look::Starting | Look::Processing => (50.0, 20.0),
             Look::Listening => (64.0, 22.0),
+            // A partial changes several times a second; a fixed width keeps
+            // the pill from easing (and hiding its text) on each one.
+            Look::Live => (NOTICE_MAX_WIDTH, NOTICE_HEIGHT),
             Look::Notice => (
                 (text_width + 2.0 * NOTICE_PADDING)
                     .ceil()
@@ -200,7 +205,40 @@ pub fn microphone_notice(
         _ => None,
     }
 }
+/// A streaming partial for the pill: its newest words that fit, cut at a word
+/// and led by "…" when anything was dropped. Display only.
+pub fn live_text(text: &str) -> String {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let whole = words.join(" ");
+    if whole.chars().count() <= NOTICE_CHARS {
+        return whole;
+    }
+    let mut kept: Vec<&str> = Vec::new();
+    let mut length = 1; // the leading "…"
+    for word in words.iter().rev() {
+        let added = word.chars().count() + usize::from(!kept.is_empty());
+        if length + added > NOTICE_CHARS {
+            break;
+        }
+        length += added;
+        kept.push(word);
+    }
+    if kept.is_empty() {
+        let tail: String = whole.chars().rev().take(NOTICE_CHARS - 1).collect();
+        return format!("…{}", tail.chars().rev().collect::<String>());
+    }
+    kept.reverse();
+    format!("…{}", kept.join(" "))
+}
 impl Indicator {
+    /// [`look`](Self::look) when a streaming partial is waiting to be shown:
+    /// while recording it takes the place of the listening bars.
+    pub fn look_live(&self, now: u64, phase: Phase, receiving: bool, warning: bool) -> Look {
+        match self.look(now, phase, receiving, warning) {
+            Look::Listening | Look::Starting => Look::Live,
+            other => other,
+        }
+    }
     pub fn look_with_microphone(
         &self,
         now: u64,

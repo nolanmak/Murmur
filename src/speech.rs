@@ -14,11 +14,15 @@ pub enum Provider {
     #[serde(rename = "deepgram-then-local")]
     DeepgramThenWhisper,
     DeepgramThenParakeet,
+    /// Nemotron 3.5 streaming through the bundled fotw-speechd helper (#100),
+    /// falling back to the default local engine. Never cloud.
+    LocalStreaming,
 }
 impl Provider {
     /// Every choice, in menu order.
-    pub const ALL: [Provider; 5] = [
+    pub const ALL: [Provider; 6] = [
         Provider::Deepgram,
+        Provider::LocalStreaming,
         Provider::LocalParakeet,
         Provider::LocalWhisper,
         Provider::DeepgramThenParakeet,
@@ -27,7 +31,8 @@ impl Provider {
     /// The local engine this choice runs, alone or as the backup.
     pub fn local_engine(&self) -> Option<LocalEngine> {
         match self {
-            Provider::Deepgram => None,
+            // Streaming's batch fallback is the default local engine.
+            Provider::Deepgram | Provider::LocalStreaming => None,
             Provider::LocalParakeet | Provider::DeepgramThenParakeet => Some(LocalEngine::Parakeet),
             Provider::LocalWhisper | Provider::DeepgramThenWhisper => Some(LocalEngine::Whisper),
         }
@@ -47,7 +52,10 @@ impl Provider {
         }
     }
     pub fn uses_cloud(&self) -> bool {
-        !matches!(self, Provider::LocalParakeet | Provider::LocalWhisper)
+        !matches!(
+            self,
+            Provider::LocalParakeet | Provider::LocalWhisper | Provider::LocalStreaming
+        )
     }
 }
 
@@ -148,7 +156,18 @@ impl Settings {
                     self.local_transcriber(self.effective_local_engine())?,
                 ))
             }
+            Provider::LocalStreaming => self.streaming(),
         }
+    }
+
+    fn streaming(&self) -> Result<crate::capture::CaptureProvider, String> {
+        Ok(crate::capture::CaptureProvider::Streaming {
+            stream: crate::local_streaming::Endpoint::shared(),
+            // The batch engine for when streaming isn't ready or fails
+            // mid-utterance: the default local engine (Parakeet on a new
+            // install).
+            fallback: Some(self.local_transcriber(self.effective_local_engine())?),
+        })
     }
 
     pub fn path() -> Result<PathBuf, String> {
@@ -208,6 +227,10 @@ impl Selection {
     ) -> Result<crate::capture::CaptureProvider, String> {
         if offline_all {
             let settings = self.0.as_ref().map_err(Clone::clone)?;
+            // Streaming is local already; everything else runs the local engine.
+            if settings.provider == Provider::LocalStreaming {
+                return settings.streaming();
+            }
             return Ok(crate::capture::CaptureProvider::Local(
                 settings.local_transcriber(settings.effective_local_engine())?,
             ));

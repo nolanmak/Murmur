@@ -20,8 +20,10 @@ pub mod transcript;
 pub mod engine_command;
 pub mod fallback;
 pub mod local_parakeet;
+pub mod local_streaming;
 pub mod local_stt;
 pub mod speech;
+pub mod speechd;
 
 pub mod vocabulary;
 

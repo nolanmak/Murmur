@@ -128,6 +128,10 @@ pub trait Backend: Send + Sync + 'static {
     /// Explicit setup: install both models, downloading unless a local copy
     /// is given, then drop any loaded copy so the next load reads the new one.
     fn install(&self, from: InstallSources, progress: Progress) -> BoxFuture<Result<(), String>>;
+    /// Release both models in the helper. Refused while a stream is open.
+    fn unload(&self) -> BoxFuture<Result<(), String>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 /// Local copies to import instead of downloading.
@@ -158,8 +162,10 @@ impl Drop for Worker {
 pub struct Service {
     backend: Arc<dyn Backend>,
     worker: Worker,
-    load: Mutex<Option<SharedLoad>>,
+    load: Arc<Mutex<Option<SharedLoad>>>,
     installing: AtomicBool,
+    /// Bumped on every use, so a scheduled release can tell it went stale.
+    uses: Arc<std::sync::atomic::AtomicU64>,
 }
 impl std::fmt::Debug for Service {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -187,8 +193,9 @@ impl Service {
         Ok(Self {
             backend,
             worker: Worker(Some(runtime)),
-            load: Mutex::new(None),
+            load: Arc::new(Mutex::new(None)),
             installing: AtomicBool::new(false),
+            uses: Arc::default(),
         })
     }
 
@@ -243,6 +250,23 @@ impl Service {
     }
 
     /// Load and warm in the background, at launch or when Parakeet is chosen.
+    /// Unload the models after `idle` with no further use: Parakeet was only
+    /// a fallback for local streaming, which keeps its own model warm (#100).
+    pub fn release_after(&self, idle: Duration) {
+        let seen = self.uses.load(Ordering::Acquire);
+        let (uses, load, backend) = (self.uses.clone(), self.load.clone(), self.backend.clone());
+        drop(self.handle().spawn(async move {
+            tokio::time::sleep(idle).await;
+            if uses.load(Ordering::Acquire) != seen {
+                return; // Used again since: its own release is scheduled.
+            }
+            // Refused while a stream is open, in which case it stays.
+            if backend.unload().await.is_ok() && uses.load(Ordering::Acquire) == seen {
+                *load.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            }
+        }));
+    }
+
     pub fn warm(&self) {
         if !self.installing.load(Ordering::Acquire) {
             drop(self.load());
@@ -259,6 +283,7 @@ impl Service {
     /// Check before the mic opens: the models are installed, valid, loaded and
     /// warm. Waits at most `deadline` for a load in progress.
     pub async fn ready(&self, deadline: Duration) -> Result<Binding, String> {
+        self.uses.fetch_add(1, Ordering::AcqRel);
         if self.installing.load(Ordering::Acquire) {
             return Err(
                 "Local Parakeet's model is installing; dictate when it finishes. Nothing was recorded"
@@ -505,13 +530,7 @@ use fotw_speechd_client::{ClientError, SpeechdClient, SpeechdConfig, StreamConfi
 
 /// Where Murmur keeps its own copy of the models.
 pub fn models_root() -> Result<PathBuf, String> {
-    if let Some(root) = std::env::var_os("MURMUR_SPEECHD_MODELS").filter(|v| !v.is_empty()) {
-        return Ok(PathBuf::from(root));
-    }
-    Ok(
-        PathBuf::from(std::env::var_os("HOME").ok_or("Cannot locate home directory")?)
-            .join("Library/Application Support/Murmur/models"),
-    )
+    crate::speechd::models_root()
 }
 
 /// `fotw-speechd` through `fotw-speechd-client`.
@@ -520,41 +539,34 @@ pub struct SpeechdBackend {
     inner: Arc<SpeechdInner>,
 }
 struct SpeechdInner {
-    config: Result<SpeechdConfig, String>,
+    helper: Arc<crate::speechd::Helper>,
     asr: String,
     vad: Option<String>,
-    client: tokio::sync::Mutex<Option<SpeechdClient>>,
-    instance: Mutex<Option<SpeechdClient>>,
 }
 
 impl SpeechdBackend {
-    /// The bundled helper (`Contents/Helpers/fotw-speechd`, or
-    /// `FOTW_SPEECHD_PATH`) over Murmur's models root.
+    /// The app's shared helper (`crate::speechd::Helper::shared`), which
+    /// local streaming (#100) uses too.
     pub fn from_environment() -> Self {
-        let config = match (fotw_speechd_client::locate_helper(), models_root()) {
-            (Some(program), Ok(root)) => Ok(SpeechdConfig::new(program, root)),
-            (None, _) => Err(
-                "this build does not include the fotw-speechd helper; rebuild with MURMUR_SPEECHD=1 ./scripts/build-app.sh, or choose Local Whisper"
-                    .to_string(),
-            ),
-            (_, Err(error)) => Err(error),
-        };
-        Self::new(config, ASR_ENGINE, Some(VAD_ENGINE))
+        Self::with_helper(
+            crate::speechd::Helper::shared(),
+            ASR_ENGINE,
+            Some(VAD_ENGINE),
+        )
     }
 
     /// Any helper and engines; tests use the fake helper's engines.
     pub fn new(config: Result<SpeechdConfig, String>, asr: &str, vad: Option<&str>) -> Self {
-        let config = config.map(|mut config| {
-            config.client_name = concat!("murmur/", env!("CARGO_PKG_VERSION")).into();
-            config
-        });
+        Self::with_helper(crate::speechd::Helper::new(config), asr, vad)
+    }
+
+    /// Engines on a helper process another backend may share.
+    pub fn with_helper(helper: Arc<crate::speechd::Helper>, asr: &str, vad: Option<&str>) -> Self {
         Self {
             inner: Arc::new(SpeechdInner {
-                config,
+                helper,
                 asr: asr.into(),
                 vad: vad.map(Into::into),
-                client: tokio::sync::Mutex::new(None),
-                instance: Mutex::new(None),
             }),
         }
     }
@@ -562,28 +574,10 @@ impl SpeechdBackend {
 
 impl SpeechdInner {
     async fn client(&self) -> Result<SpeechdClient, LoadError> {
-        let mut client = self.client.lock().await;
-        if let Some(existing) = client.as_ref() {
-            if !existing.status().failed {
-                return Ok(existing.clone());
-            }
-            // The restart budget is spent; start counting again.
-            existing.reset().await;
-            if !existing.status().failed {
-                return Ok(existing.clone());
-            }
-        }
-        let config = self.config.clone().map_err(LoadError::Unavailable)?;
-        let started = SpeechdClient::start(config).await.map_err(|e| match e {
-            ClientError::Spawn(reason) => LoadError::Unavailable(reason),
-            ClientError::VersionMismatch { .. } => {
-                LoadError::Unavailable(format!("{e}; rebuild Murmur so its helper matches"))
-            }
-            other => LoadError::Failed(other.to_string()),
-        })?;
-        *self.instance.lock().unwrap_or_else(|e| e.into_inner()) = Some(started.clone());
-        *client = Some(started.clone());
-        Ok(started)
+        self.helper.client().await.map_err(|e| match e {
+            crate::speechd::StartError::Unavailable(reason) => LoadError::Unavailable(reason),
+            crate::speechd::StartError::Failed(reason) => LoadError::Failed(reason),
+        })
     }
 
     fn engines(&self) -> impl Iterator<Item = &str> {
@@ -596,15 +590,15 @@ impl SpeechdInner {
             .capabilities()
             .ok_or_else(|| LoadError::Failed("the speech helper is not running".into()))?;
         for engine in self.engines() {
-            let info = capabilities.engine(engine).ok_or_else(|| {
+            capabilities.engine(engine).ok_or_else(|| {
                 LoadError::Unavailable(format!(
                     "the speech helper does not offer {engine}; rebuild Murmur"
                 ))
             })?;
-            if info.model.as_ref().is_some_and(|model| !model.installed) {
-                return Err(LoadError::Missing(engine.into()));
-            }
         }
+        // Not the handshake's `installed`: a model installed since (from the
+        // CLI, another process) must load without restarting the helper. The
+        // helper's own load reads the store and refuses a missing model.
         let map = |engine: &str, error: ClientError| match error.code() {
             ErrorCode::ModelMissing => LoadError::Missing(engine.into()),
             ErrorCode::ModelInvalid => LoadError::Invalid(engine.into()),
@@ -629,12 +623,7 @@ impl SpeechdInner {
     }
 
     fn instance(&self) -> Option<u64> {
-        let client = self.instance.lock().unwrap_or_else(|e| e.into_inner());
-        client
-            .as_ref()
-            .map(SpeechdClient::status)
-            .filter(|status| !status.failed)
-            .map(|status| status.generation)
+        self.helper.instance()
     }
 
     async fn stream(
@@ -770,6 +759,19 @@ impl SpeechdInner {
 }
 
 impl Backend for SpeechdBackend {
+    fn unload(&self) -> BoxFuture<Result<(), String>> {
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            // Nothing is loaded without a running helper.
+            let Some(client) = inner.helper.running() else {
+                return Ok(());
+            };
+            for engine in inner.engines() {
+                client.unload(engine).await.map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        })
+    }
     fn load(&self) -> BoxFuture<Result<Binding, LoadError>> {
         let inner = self.inner.clone();
         Box::pin(async move { inner.load().await })
