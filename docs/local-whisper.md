@@ -39,8 +39,12 @@ separate 180-second inference timeout. At the maximum duration, the accumulator
 keeps exactly the first 120 seconds; late callback samples and synthetic resampler
 drain padding are clipped instead of rejecting the completed recording. Escape, focus validation and generation
 checks reuse the existing delivery protections. Digital silence is skipped
-before inference; this is a conservative amplitude guard, not a speech detector,
-and noisy silence can still produce hallucinations with Whisper.
+before inference; this is a conservative amplitude guard, not a speech detector.
+The managed engine runs Silero VAD before Whisper (#99), so background noise,
+room tone and instrumental music return empty text: Murmur shows "No speech
+detected" and inserts nothing. Sung vocals are still transcribed, because Silero
+treats singing as speech (#104). An external server without VAD can still
+hallucinate text from noise.
 
 Murmur writes neither audio nor transcripts to history or logs. A separately
 configured external server controls its own logs and temporary files. See the

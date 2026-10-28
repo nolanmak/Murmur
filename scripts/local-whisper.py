@@ -28,6 +28,19 @@ MODEL_SHA256 = "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002
 MODEL_URL = (
     f"https://huggingface.co/ggerganov/whisper.cpp/resolve/{REVISION}/ggml-base.en.bin"
 )
+# Silero VAD for whisper.cpp (MIT): https://huggingface.co/ggml-org/whisper-vad
+VAD_REVISION = "9ffd54a1e1ee413ddf265af9913beaf518d1639b"
+VAD_SHA256 = "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987"
+VAD_URL = (
+    f"https://huggingface.co/ggml-org/whisper-vad/resolve/{VAD_REVISION}/ggml-silero-v6.2.0.bin"
+)
+# Silero speech probability needed to decode. 0.8 (upstream default 0.5) drops
+# the short music/noise segments Whisper turned into "Thank you." etc. while
+# keeping speech in music at 10 dB SNR (Murmur #99 corpus sweep).
+VAD_THRESHOLD = "0.8"
+VAD_MISSING = (
+    "missing or corrupt VAD model; run setup --vad-only or import-model --vad explicitly"
+)
 PORTS = {"murmur": 17863, "agentflow": 17864}
 
 
@@ -89,7 +102,32 @@ def model_metadata(path):
     }
 
 
-def install(state, source, expected):
+def vad_metadata(path):
+    """Check the Silero GGML header whisper.cpp v1.9.1 whisper_vad_init reads."""
+    with path.open("rb") as source:
+        header = source.read(30)
+    if len(header) != 30:
+        raise ValueError("truncated Silero VAD model header")
+    magic, name_length = struct.unpack("<2i", header[:8])
+    if magic != 0x67676D6C or name_length != 10 or header[8:18] != b"silero-16k":
+        raise ValueError("unsupported VAD model; expected Silero GGML")
+    return {"format": "silero-ggml", "version": "%d.%d.%d" % struct.unpack("<3i", header[18:])}
+
+
+def selected_vad(state):
+    """Return the verified selected VAD file, or raise before any engine work."""
+    link = state / "vad.bin"
+    try:
+        path = link.resolve(strict=True)
+        if digest(path) != path.stem:
+            raise ValueError(VAD_MISSING)
+        vad_metadata(path)
+    except (OSError, ValueError):
+        raise ValueError(VAD_MISSING) from None
+    return path
+
+
+def install(state, source, expected, vad=False):
     if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
         raise ValueError("sha256 must be 64 lowercase hexadecimal characters")
     fd, name = tempfile.mkstemp(prefix="model-", suffix=".partial", dir=state)
@@ -100,14 +138,14 @@ def install(state, source, expected):
             os.fsync(target.fileno())
         if digest(Path(name)) != expected:
             raise ValueError("model checksum mismatch; existing model preserved")
-        model_metadata(Path(name))
-        models = state / "models"
-        models.mkdir(exist_ok=True, mode=0o700)
-        os.replace(name, models / (expected + ".bin"))
-        link = state / "model.next"
+        (vad_metadata if vad else model_metadata)(Path(name))
+        folder, selected = ("vad", "vad.bin") if vad else ("models", "model.bin")
+        (state / folder).mkdir(exist_ok=True, mode=0o700)
+        os.replace(name, state / folder / (expected + ".bin"))
+        link = state / (selected + ".next")
         link.unlink(missing_ok=True)
-        link.symlink_to(Path("models") / (expected + ".bin"))
-        os.replace(link, state / "model.bin")
+        link.symlink_to(Path(folder) / (expected + ".bin"))
+        os.replace(link, state / selected)
     finally:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(name)
@@ -184,12 +222,14 @@ def supervise(state, binary, port, token, timeout):
     if model_sha256 != model.stem:
         raise ValueError("corrupt model before engine startup")
     metadata = model_metadata(model)
+    vad = selected_vad(state)
     # Upstream has no inherited-listener option. A random private port/path,
     # owned child liveness and readiness prevent adopting a public endpoint.
     engine_port = 0
     prefix = "/" + secrets.token_hex(24)
     gateway = Gateway(port, engine_port, prefix, metadata, model_sha256,
-                      lambda: bool(child and child.poll() is None and ready(engine_port, prefix)))
+                      lambda: bool(child and child.poll() is None and ready(engine_port, prefix)),
+                      vad=True)
     port = gateway.server.server_port
     try:
         with socket.socket() as probe:
@@ -251,6 +291,11 @@ def supervise(state, binary, port, token, timeout):
                 str(state / "unused-public"),
                 "-m",
                 str(model),
+                "--vad",
+                "--vad-model",
+                str(vad),
+                "--vad-threshold",
+                VAD_THRESHOLD,
             ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -288,12 +333,16 @@ def main():
     parser.add_argument("--app", choices=PORTS, required=True)
     parser.add_argument("--state-dir", type=Path)
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser(
-        "setup", help="explicitly download and verify pinned base.en model"
+    setup = commands.add_parser(
+        "setup", help="explicitly download and verify pinned base.en and Silero VAD models"
+    )
+    setup.add_argument(
+        "--vad-only", action="store_true", help="install only the pinned VAD model"
     )
     imp = commands.add_parser("import-model")
     imp.add_argument("path", type=Path)
     imp.add_argument("--sha256", required=True)
+    imp.add_argument("--vad", action="store_true", help="import a Silero VAD model")
     start = commands.add_parser("start")
     start.add_argument("--binary", default="whisper-server")
     start.add_argument("--port", type=int)
@@ -343,8 +392,19 @@ def main():
                 except ValueError:
                     reason = "unsupported_model"
                 else:
-                    if not shutil.which("whisper-server"):
+                    if not (state / "vad.bin").exists():
+                        reason = "missing_vad_model"
+                    elif not shutil.which("whisper-server"):
                         reason = "missing_binary"
+            vad = None
+            try:
+                vad = vad_metadata(selected_vad(state))
+                vad["sha256"] = (state / "vad.bin").resolve().stem
+                vad["license"] = "MIT (Silero VAD)" if vad["sha256"] == VAD_SHA256 else "unknown"
+            except ValueError:
+                if reason not in ("missing_model", "corrupt_model", "unsupported_model",
+                                  "missing_vad_model"):
+                    reason = "corrupt_vad_model"
             public = {k: v for k, v in (result or {}).items() if k != "token"}
             public.update(
                 {
@@ -356,6 +416,7 @@ def main():
                     "tested_runtime": "whisper.cpp 1.9.1",
                     "model": str(model),
                     "selected_model_metadata": metadata,
+                    "selected_vad_metadata": vad,
                 }
             )
             emit(public)
@@ -375,18 +436,27 @@ def main():
             if control(record, "status"):
                 raise ValueError("stop owned runtime before replacing model")
             if args.command == "setup":
-                with urllib.request.urlopen(MODEL_URL, timeout=60) as source:
-                    install(state, source, MODEL_SHA256)
+                if not args.vad_only:
+                    with urllib.request.urlopen(MODEL_URL, timeout=60) as source:
+                        install(state, source, MODEL_SHA256)
+                with urllib.request.urlopen(VAD_URL, timeout=60) as source:
+                    install(state, source, VAD_SHA256, vad=True)
             else:
                 with args.path.open("rb") as source:
-                    install(state, source, args.sha256)
-            emit(
-                {
-                    "model": str(state / "model.bin"),
-                    "sha256": digest(state / "model.bin"),
-                }
-            )
+                    install(state, source, args.sha256, vad=args.vad)
+            result = {}
+            for key, name in (("model", "model.bin"), ("vad_model", "vad.bin")):
+                if (state / name).is_file():
+                    result[key] = str(state / name)
+                    result[key + "_sha256"] = digest(state / name)
+            if "model_sha256" in result:
+                # Pre-VAD key for the speech model, read by existing consumers.
+                result["sha256"] = result["model_sha256"]
+            emit(result)
         elif args.command == "start":
+            # Checked before adopting a running instance: a refused start never
+            # touches the runtime, selection or state already in place.
+            selected_vad(state)
             existing = control(record, "status")
             if existing:
                 emit({k: v for k, v in existing.items() if k != "token"})

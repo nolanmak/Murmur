@@ -22,13 +22,19 @@ cargo build --locked --example local_transcribe
 python3 scripts/qa-public-local.py \
   --model /absolute/path/to/ggml-small.en.bin \
   --wav /absolute/path/to/jfk.wav \
+  --vad-model /absolute/path/to/ggml-silero-v6.2.0.bin \
   --server /absolute/path/to/whisper-server \
   --adapter /absolute/path/to/target/debug/examples/local_transcribe \
   --runtime-version 'whisper.cpp 1.9.1' \
   --output /absolute/path/to/report.json
 ```
 
-The runner imports the model into temporary owned state, starts the existing
+The runner also verifies the pinned Silero VAD model (885,098 bytes, SHA-256
+`2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987`; see
+[runtime docs](../local-whisper-runtime.md#silero-vad-murmur-99)), because the
+managed runtime refuses to start without it.
+
+The runner imports both models into temporary owned state, starts the existing
 managed gateway, performs three direct and three cloud-loss requests, stops via
 the authenticated helper, and removes temporary state. If control state still
 identifies an active runtime, it is retained for recovery. Existing model/audio
