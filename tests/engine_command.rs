@@ -201,20 +201,19 @@ fn which_and_already_selected_only_report() {
 #[test]
 fn a_cloud_switch_without_credentials_is_refused() {
     let missing: Result<(), String> = Err("No Deepgram key".into());
-    for command in [Command::Use(Target::Deepgram)] {
-        let d = decide(
-            command,
-            Some(&Provider::LocalWhisper),
-            None,
-            false,
-            &ready(),
-            &missing,
-        );
-        assert!(
-            matches!(d, Decision::Refuse(ref m) if m.contains("Deepgram key") && m.contains("staying on Local Whisper")),
-            "{d:?}"
-        );
-    }
+    let d = decide(
+        Command::Use(Target::Deepgram),
+        Some(&Provider::LocalWhisper),
+        None,
+        false,
+        &ready(),
+        &missing,
+    );
+    assert!(
+        matches!(d, Decision::Refuse(ref m) if m.contains("Deepgram key") && m.contains("staying on Local Whisper")),
+        "{d:?}"
+    );
+
     // Undo back to Deepgram obeys the same rule.
     let d = decide(
         Command::Undo,
