@@ -114,6 +114,9 @@ impl Selection {
     pub fn provider(&self) -> Option<&Provider> {
         self.0.as_ref().ok().map(|s| &s.provider)
     }
+    pub fn local_endpoint(&self) -> Option<&str> {
+        self.0.as_ref().ok().map(|s| s.local_endpoint.as_str())
+    }
     pub fn capture_provider(
         &self,
         credentials: impl FnOnce() -> Result<crate::config::Credentials, String>,
