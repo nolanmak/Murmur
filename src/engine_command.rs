@@ -177,3 +177,20 @@ pub fn decide(
         to: target,
     }
 }
+
+/// Probe the local engine a spoken switch would land on, in the profile's
+/// language, so the switch is refused rather than saved when that engine
+/// could not take the next dictation.
+pub async fn probe_local(
+    settings: &crate::speech::Settings,
+    engine: LocalEngine,
+    language: &str,
+) -> Result<(), String> {
+    // The saved language, as the next dictation will use it: Parakeet is
+    // English only, and a Whisper model may lack the language.
+    settings
+        .local_transcriber(engine)?
+        .prepare(language, std::time::Duration::from_secs(2))
+        .await
+        .map(|_| ())
+}

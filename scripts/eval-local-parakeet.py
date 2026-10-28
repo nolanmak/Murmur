@@ -189,14 +189,17 @@ def main():
         "latency_p95_le_800ms": bool(latency) and len(latency) >= 20 and report["latency_ms"]["p95"] <= 800,
         "wer_clean_le_2.5pct": report["wer_clean"] is not None and report["wer_clean"] <= 0.025,
         "wer_noise_10db_le_5pct": report["wer_noise"][10] is not None and report["wer_noise"][10] <= 0.05,
-        "silence_and_noise_insert_0_words": ns["silence"]["words"] == 0 and ns["noise"]["words"] == 0,
-        "instrumental_music_inserts_0_words": ns["music_instrumental"]["words"] == 0,
+        # A category with no clips must fail, not pass vacuously.
+        "silence_and_noise_insert_0_words": all(
+            ns[k]["clips"] > 0 and ns[k]["words"] == 0 for k in ("silence", "noise")),
+        "instrumental_music_inserts_0_words": (
+            ns["music_instrumental"]["clips"] > 0 and ns["music_instrumental"]["words"] == 0),
         # Sung vocals are tracked in Murmur #104; reported, not gated here.
     }
     if short:
         # The gate must pass every short or quiet real utterance. ("empty" in
         # the rows also counts the recognizer's own misses; it is reported.)
-        gates["short_and_quiet_speech_passes_the_gate"] = not short["below_speech_gate"]
+        gates["short_and_quiet_speech_passes_the_gate"] = bool(peaks) and not short["below_speech_gate"]
     report["gates"] = gates
     print(json.dumps(report, indent=2, default=str))
     sys.exit(0 if all(gates.values()) else 1)

@@ -1218,6 +1218,17 @@ impl Shell {
             self.show(&self.ready());
             return;
         }
+        // The install menu item promises dictation waits for it, whatever the
+        // engine. The hotkey path has already entered Recording, so cancel.
+        if let Some(hold) = crate::local_parakeet::Endpoint::shared()
+            .service()
+            .dictation_hold()
+        {
+            self.last.begin();
+            self.cancel();
+            self.show(hold);
+            return;
+        }
         self.recording_remote_target = RustDeskWindow::selected();
         self.recording_remote = crate::remote_review::recording_destination(
             self.remote_mode,
@@ -1314,13 +1325,12 @@ impl Shell {
                             (None, _) => Ok(()),
                             (Some(_), None) => Err("Speech settings are invalid".to_string()),
                             (Some(engine), Some(settings)) => {
-                                match settings.local_transcriber(engine) {
-                                    Ok(local) => local
-                                        .prepare("en", Duration::from_secs(2))
-                                        .await
-                                        .map(|_| ()),
-                                    Err(error) => Err(error),
-                                }
+                                crate::engine_command::probe_local(
+                                    settings,
+                                    engine,
+                                    &vocabulary.language,
+                                )
+                                .await
                             }
                         };
                         let cloud = if command.may_need_cloud() {

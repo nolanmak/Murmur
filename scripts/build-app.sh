@@ -10,6 +10,7 @@ mkdir -p "$TTS_STAGE/Contents/MacOS" "$TTS_STAGE/Contents/Resources"
 cp target/debug/murmur "$TTS_STAGE/Contents/MacOS/murmur"
 cp packaging/Info.plist "$TTS_STAGE/Contents/Info.plist"
 cp README.md "$TTS_STAGE/Contents/Resources/README.md"
+cp LICENSE "$TTS_STAGE/Contents/Resources/LICENSE"
 cp NOTICE "$TTS_STAGE/Contents/Resources/NOTICE"
 cp THIRD_PARTY_NOTICES.md "$TTS_STAGE/Contents/Resources/THIRD_PARTY_NOTICES.md"
 # Opt-in: MURMUR_SPEECHD=1 bundles the fotw-speechd helper that runs Local

@@ -12,6 +12,8 @@ requirement or moving-branch dependency:
 - `fotw-stt`: transcript types, Deepgram wire parameters/normalization and the versioned vocabulary schema.
 - `fotw-secrets`: credential namespace, redacted values and platform stores.
 - `fotw-dsp`: resampling and PCM conversion, re-exported by `src/resample.rs`.
+- `fotw-speechd-client`: the protocol client that spawns and owns the
+  `fotw-speechd` helper for Local Parakeet (#101); runtime only, no dev pin.
 
 The former vendor snapshot was `5cfe8562877823fa5403a3e9cd340996d575ce33`.
 Those frozen source copies are removed. The extracted DSP implementation is
@@ -44,7 +46,7 @@ real credentials or microphone. Murmur's capture, insertion, configuration and
 transport regressions remain in this repository. The producer separately tests
 its crates and an immutable migration-consumer revision on macOS and Linux.
 
-Upgrade all eight manifest revision fields and Cargo.lock together after
+Upgrade all nine manifest revision fields (five runtime, four dev-dependency) and Cargo.lock together after
 reviewing the producer change. Run both repositories' required checks and the
 consumer conformance suite. Roll back manifest and lockfile changes together.
 A dependency version change does not imply automatic fallback, device recovery
@@ -143,6 +145,6 @@ Murmur still owns short-dictation policy: actual discontinuities cancel capture
 and block automatic insertion. It does not use the meeting pipeline's timing
 mailbox or AEC and does not adopt a meeting recovery supervisor through this pin.
 The other three shared crates are unchanged from the previous producer pin.
-All eight manifest pins and the lockfile move together. Producer arithmetic and
+All nine manifest pins and the lockfile move together. Producer arithmetic and
 native-callback fixtures are synthetic; physical timestamp availability, device
 latency, USB/Bluetooth and sleep/wake acceptance remain unverified in #61/#58.
