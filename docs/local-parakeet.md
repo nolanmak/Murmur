@@ -14,7 +14,9 @@ selectable and is still needed for languages other than English.
    recorded. A load still in progress (a first load compiles Core ML models and
    can take tens of seconds) is refused with "still loading".
 2. That check **binds the utterance** to the helper instance and the model
-   revision it saw. If the helper restarts, or a final names another model or
+   revision it saw. A load counts only for the helper instance it loaded into:
+   after a helper restart Murmur loads again rather than trusting the client's
+   replay, which may have failed or read a newly installed revision. If the helper restarts, or a final names another model or
    revision, the text is dropped ("no text inserted"), as with the Whisper
    gateway's instance/model headers.
 3. **After release** the whole utterance (at most 120 s) goes through one
@@ -45,8 +47,10 @@ carries no entitlements; Murmur sends it PCM over a pipe.
 Settings (`~/Library/Application Support/Murmur/speech.json`) have a
 `local_engine` field: the engine "use local", "use backup" and Offline-all
 mean. New installs get `parakeet`. A file written before this field existed
-keeps `whisper`, so nobody is moved off Whisper until they choose Parakeet;
-naming either engine makes it the default.
+keeps `whisper`, and so does a machine with no `speech.json` that has the
+managed Whisper runtime installed (`~/Library/Application Support/murmur/local-whisper/model.bin`),
+so nobody is moved off Whisper until they choose Parakeet; naming either
+engine makes it the default.
 
 ## Installing the model
 
@@ -95,3 +99,7 @@ checkout instead, for local work on the helper only.
   `python3 scripts/eval-local-parakeet.py --helper PATH --models DIR --corpus DIR`
   runs `examples/parakeet_eval` with the network denied over the shared
   corpus (FlyOnTheWall #247 corpus-v2) and gates latency, WER and non-speech.
+  `--short-set DIR` (built by `scripts/make-short-speech-set.py`: one-word
+  TTS and LibriSpeech utterances, the thank-you and speech clips, each at 0,
+  -12 and -20 dB) adds recall for short and quiet speech, and gates that every
+  such clip passes the speech gate (`scripts/speechd-vad-peaks.py`).

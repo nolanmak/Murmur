@@ -4,6 +4,10 @@
 //! denies the network and scores the output.
 //!
 //! parakeet_eval --helper PATH --models DIR --corpus DIR [--trials N]
+//!     [--categories A,B,...]
+//!
+//! `--categories` replaces the corpus-v2 folders with others under `--corpus`
+//! (the short and quiet speech set); `--trials 0` skips the latency trials.
 //!
 //! Prints one JSON object per line:
 //! - `{"kind":"load", ...}`: helper start, load and warmup time;
@@ -36,11 +40,15 @@ fn main() -> Result<(), String> {
             .and_then(|i| args.get(i + 1))
             .cloned()
     };
-    let usage = "Usage: parakeet_eval --helper PATH --models DIR --corpus DIR [--trials N]";
+    let usage = "Usage: parakeet_eval --helper PATH --models DIR --corpus DIR [--trials N] [--categories A,B]";
     let helper = PathBuf::from(value("--helper").ok_or(usage)?);
     let models = PathBuf::from(value("--models").ok_or(usage)?);
     let corpus = PathBuf::from(value("--corpus").ok_or(usage)?);
     let trials: usize = value("--trials").map_or(Ok(20), |v| v.parse().map_err(|_| usage))?;
+    let categories: Vec<String> = value("--categories").map_or_else(
+        || CATEGORIES.iter().map(|c| c.to_string()).collect(),
+        |list| list.split(',').map(str::to_owned).collect(),
+    );
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -62,7 +70,8 @@ fn main() -> Result<(), String> {
         }));
         let local = LocalTranscriber::Parakeet(ready.clone());
 
-        for category in CATEGORIES {
+        for category in &categories {
+            let category = category.as_str();
             let mut clips: Vec<PathBuf> = std::fs::read_dir(corpus.join(category))
                 .map_err(|e| format!("{category}: {e}"))?
                 .filter_map(Result::ok)
@@ -88,6 +97,9 @@ fn main() -> Result<(), String> {
             }
         }
 
+        if trials == 0 {
+            return Ok(());
+        }
         let utterance = ten_seconds(&corpus)?;
         for trial in 0..trials + 2 {
             let ms = release_to_text(&endpoint, &utterance).await?;

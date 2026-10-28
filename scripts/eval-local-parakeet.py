@@ -6,7 +6,12 @@ Builds examples/parakeet_eval, runs it with the network denied
 against the shared corpus manifest (nolanmak/FlyOnTheWall#247 corpus-v2).
 
     python3 scripts/eval-local-parakeet.py --helper PATH --models DIR \\
-        --corpus DIR [--trials 20] [--raw OUT.jsonl]
+        --corpus DIR [--trials 20] [--raw OUT.jsonl] [--short-set DIR]
+
+`--short-set` adds the short and quiet speech set from
+scripts/make-short-speech-set.py: one-word utterances and quiet (-12, -20 dB)
+speech, scored as recall (every reference word typed) per gain, so the speech
+gate's cost to real speech is measured, not assumed.
 
 `--models` must already hold installed parakeet-unified and silero-vad
 (`murmur speech install-parakeet`, or `fotw-speechd install ... --from`);
@@ -57,6 +62,43 @@ def percentile(values, p):
     return ordered[rank - 1]
 
 
+# src/local_parakeet.rs SPEECH_PEAK.
+SPEECH_GATE = 0.9
+
+# Spellings that are the same word for recall.
+SAME = {"okay": "ok", "o.k": "ok", "thank": "thanks"}
+
+
+def words(text):
+    return [SAME.get(w, w) for w in tokenize(text)]
+
+
+def short_report(folder, lines):
+    manifest = {f["path"]: f for f in json.load(open(os.path.join(folder, "manifest.json")))["files"]}
+    rows = {}
+    for line in (l for l in lines if l["kind"] == "clip"):
+        meta = manifest[line["path"]]
+        row = rows.setdefault((meta["category"], meta["gain_db"]), {
+            "kind": meta["category"], "gain_db": meta["gain_db"], "clips": 0, "empty": 0,
+            "recalled": 0, "missed": [], "_rows": []})
+        row["clips"] += 1
+        hypothesis = words(line["text"])
+        if not hypothesis:
+            row["empty"] += 1
+        if all(w in hypothesis for w in words(meta["reference"])):
+            row["recalled"] += 1
+        else:
+            row["missed"].append({"path": line["path"], "reference": meta["reference"], "text": line["text"]})
+        row["_rows"].append({"reference": meta["reference"], "text": line["text"]})
+    out = []
+    for key in sorted(rows, key=lambda k: (k[0], -k[1])):
+        row = rows[key]
+        row["recall"] = row["recalled"] / row["clips"]
+        row["wer"] = pooled_wer(row.pop("_rows"))
+        out.append(row)
+    return {"rows": out}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--helper", required=True)
@@ -65,20 +107,39 @@ def main():
     parser.add_argument("--trials", type=int, default=20)
     parser.add_argument("--raw")
     parser.add_argument("--no-sandbox", action="store_true", help="skip the network-deny sandbox")
+    parser.add_argument("--short-set", help="directory from scripts/make-short-speech-set.py")
     args = parser.parse_args()
 
     subprocess.run(["cargo", "build", "--release", "--locked", "--example", "parakeet_eval"],
                    cwd=ROOT, check=True)
     target = os.environ.get("CARGO_TARGET_DIR", os.path.join(ROOT, "target"))
-    command = [os.path.join(target, "release/examples/parakeet_eval"), "--helper", args.helper,
-               "--models", args.models, "--corpus", args.corpus, "--trials", str(args.trials)]
-    if not args.no_sandbox:
-        command = ["sandbox-exec", "-f", os.path.join(ROOT, "scripts/local-whisper-offline.sb")] + command
-    run = subprocess.run(command, capture_output=True, text=True)
-    if run.returncode != 0:
-        sys.stderr.write(run.stderr)
-        sys.exit(f"parakeet_eval failed ({run.returncode})")
-    lines = [json.loads(line) for line in run.stdout.splitlines() if line.startswith("{")]
+    def evaluate(corpus, trials, categories=None):
+        command = [os.path.join(target, "release/examples/parakeet_eval"), "--helper", args.helper,
+                   "--models", args.models, "--corpus", corpus, "--trials", str(trials)]
+        if categories:
+            command += ["--categories", ",".join(categories)]
+        if not args.no_sandbox:
+            command = ["sandbox-exec", "-f", os.path.join(ROOT, "scripts/local-whisper-offline.sb")] + command
+        run = subprocess.run(command, capture_output=True, text=True)
+        if run.returncode != 0:
+            sys.stderr.write(run.stderr)
+            sys.exit(f"parakeet_eval failed ({run.returncode})")
+        return [json.loads(line) for line in run.stdout.splitlines() if line.startswith("{")]
+
+    lines = evaluate(args.corpus, args.trials)
+    short_lines = []
+    peaks = {}
+    if args.short_set:
+        short_lines = evaluate(args.short_set, 0, ["short/g00", "short/g12", "short/g20"])
+        lines += [dict(line, short_set=True) for line in short_lines if line["kind"] == "clip"]
+        # The gate's own decision per clip, without the recognizer in the way.
+        probe = [sys.executable, "-I", os.path.join(ROOT, "scripts/speechd-vad-peaks.py"),
+                 args.helper, args.models, args.short_set] + [l["path"] for l in short_lines if l["kind"] == "clip"]
+        if not args.no_sandbox:
+            probe = ["sandbox-exec", "-f", os.path.join(ROOT, "scripts/local-whisper-offline.sb")] + probe
+        peaks = {path: max(steps, default=0.0)
+                 for path, steps in json.loads(subprocess.run(probe, capture_output=True, text=True,
+                                                              check=True).stdout).items()}
     if args.raw:
         with open(args.raw, "w") as out:
             out.writelines(json.dumps(line) + "\n" for line in lines)
@@ -86,7 +147,7 @@ def main():
     manifest = {f["path"]: f for f in json.load(open(os.path.join(args.corpus, "manifest.json")))["files"]}
     clips = [dict(line, **{"reference": manifest[line["path"]].get("reference", ""),
                            "meta": manifest[line["path"]]})
-             for line in lines if line["kind"] == "clip"]
+             for line in lines if line["kind"] == "clip" and not line.get("short_set")]
 
     def subset(prefix, snr=None):
         return [c for c in clips if c["path"].startswith(prefix)
@@ -118,7 +179,12 @@ def main():
                        "loadavg": sorted({line["loadavg"] for line in lines if line["kind"] == "latency"})},
         "offline": not args.no_sandbox,
     }
+    if args.short_set:
+        report["short_and_quiet"] = short_report(args.short_set, short_lines)
+        report["short_and_quiet"]["vad_peak_min"] = min(peaks.values())
+        report["short_and_quiet"]["below_speech_gate"] = sorted(p for p, v in peaks.items() if v < SPEECH_GATE)
     ns = report["non_speech"]
+    short = report.get("short_and_quiet", {})
     gates = {
         "latency_p95_le_800ms": bool(latency) and len(latency) >= 20 and report["latency_ms"]["p95"] <= 800,
         "wer_clean_le_2.5pct": report["wer_clean"] is not None and report["wer_clean"] <= 0.025,
@@ -127,6 +193,10 @@ def main():
         "instrumental_music_inserts_0_words": ns["music_instrumental"]["words"] == 0,
         # Sung vocals are tracked in Murmur #104; reported, not gated here.
     }
+    if short:
+        # The gate must pass every short or quiet real utterance. ("empty" in
+        # the rows also counts the recognizer's own misses; it is reported.)
+        gates["short_and_quiet_speech_passes_the_gate"] = not short["below_speech_gate"]
     report["gates"] = gates
     print(json.dumps(report, indent=2, default=str))
     sys.exit(0 if all(gates.values()) else 1)
