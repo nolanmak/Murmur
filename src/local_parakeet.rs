@@ -287,6 +287,14 @@ impl Service {
         Ok(binding)
     }
 
+    /// Why no dictation may start now, with any engine: the model install
+    /// the menu promised dictation would wait for.
+    pub fn dictation_hold(&self) -> Option<&'static str> {
+        self.installing.load(Ordering::Acquire).then_some(
+            "The Parakeet model install is running; dictate when it finishes. Nothing was recorded",
+        )
+    }
+
     /// Explicit setup only; never called during dictation.
     pub async fn install(&self, from: InstallSources, progress: Progress) -> Result<(), String> {
         if self.installing.swap(true, Ordering::AcqRel) {

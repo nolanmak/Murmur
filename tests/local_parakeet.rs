@@ -606,3 +606,76 @@ async fn parakeet_text_is_corrected_from_vocabulary_before_snippets_expand() {
         "Local Parakeet: 1 vocabulary correction available"
     );
 }
+
+/// An install that runs until the test lets it finish.
+struct SlowInstall {
+    fake: Arc<Fake>,
+    entered: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+}
+impl Backend for SlowInstall {
+    fn load(&self) -> BoxFuture<Result<Binding, LoadError>> {
+        Handle(self.fake.clone()).load()
+    }
+    fn instance(&self) -> Option<u64> {
+        Handle(self.fake.clone()).instance()
+    }
+    fn speech(&self, pcm: Arc<[i16]>) -> BoxFuture<Result<Detected, String>> {
+        Handle(self.fake.clone()).speech(pcm)
+    }
+    fn recognize(&self, pcm: Arc<[i16]>) -> BoxFuture<Result<Recognized, String>> {
+        Handle(self.fake.clone()).recognize(pcm)
+    }
+    fn install(&self, _: InstallSources, _: Progress) -> BoxFuture<Result<(), String>> {
+        let (entered, release) = (self.entered.clone(), self.release.clone());
+        Box::pin(async move {
+            entered.notify_one();
+            release.notified().await;
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn every_dictation_waits_while_the_parakeet_install_runs() {
+    // The menu says dictation waits for the install; that holds for Deepgram
+    // and Whisper too, not only for Parakeet's own preflight.
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let service = Arc::new(
+        Service::new(Arc::new(SlowInstall {
+            fake: Fake::new(),
+            entered: entered.clone(),
+            release: release.clone(),
+        }))
+        .unwrap(),
+    );
+    assert_eq!(service.dictation_hold(), None);
+    let installing = service.clone();
+    let install = tokio::spawn(async move {
+        installing
+            .install(InstallSources::default(), Arc::new(|_| {}))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), entered.notified())
+        .await
+        .expect("the install started");
+    let hold = service.dictation_hold();
+    release.notify_one();
+    let hold = hold.expect("every dictation is held while the install runs");
+    assert!(hold.contains("install"), "{hold}");
+    install.await.unwrap().unwrap();
+    assert_eq!(service.dictation_hold(), None);
+}
+
+#[tokio::test]
+async fn a_spoken_switch_to_parakeet_is_refused_for_a_non_english_profile() {
+    // The next dictation would use the saved language, so the switch is
+    // probed with it, not with English.
+    let settings = Settings::default();
+    let error =
+        murmur::engine_command::probe_local(&settings, murmur::speech::LocalEngine::Parakeet, "fr")
+            .await
+            .unwrap_err();
+    assert!(error.contains("English only"), "{error}");
+}
