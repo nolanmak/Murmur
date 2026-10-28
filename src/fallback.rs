@@ -16,9 +16,12 @@ pub enum Stage {
     Preparing,
     Cloud,
     Retrying,
-    Local,
-    /// Local engine text gets this many vocabulary correction targets (#102).
-    LocalCorrections(u32),
+    /// A local engine, whose text gets this many vocabulary correction
+    /// targets (#102).
+    Local {
+        engine: crate::speech::LocalEngine,
+        corrections: u32,
+    },
 }
 impl Progress {
     pub fn stage(&self) -> Stage {
@@ -26,8 +29,14 @@ impl Progress {
         match packed & 0xff {
             1 => Stage::Cloud,
             2 => Stage::Retrying,
-            3 => Stage::Local,
-            4 => Stage::LocalCorrections((packed >> 8) as u32),
+            3 => Stage::Local {
+                engine: if packed >> 8 & 1 == 1 {
+                    crate::speech::LocalEngine::Parakeet
+                } else {
+                    crate::speech::LocalEngine::Whisper
+                },
+                corrections: (packed >> 16) as u32,
+            },
             _ => Stage::Preparing,
         }
     }
@@ -36,8 +45,13 @@ impl Progress {
             Stage::Preparing => 0,
             Stage::Cloud => 1,
             Stage::Retrying => 2,
-            Stage::Local => 3,
-            Stage::LocalCorrections(count) => 4 | u64::from(count) << 8,
+            Stage::Local {
+                engine,
+                corrections,
+            } => {
+                let parakeet = u64::from(engine == crate::speech::LocalEngine::Parakeet);
+                3 | parakeet << 8 | u64::from(corrections) << 16
+            }
         };
         self.0.store(packed, std::sync::atomic::Ordering::Release);
     }
@@ -46,7 +60,10 @@ impl Stage {
     /// Keep local vocabulary behavior visible even when a fast local result
     /// completes between two native UI progress polls.
     pub fn completion_message(self, message: &str) -> String {
-        if let Self::LocalCorrections(_) = self {
+        if let Self::Local {
+            corrections: 1.., ..
+        } = self
+        {
             format!("{message} · {}", self.label())
         } else {
             message.to_owned()
@@ -57,10 +74,17 @@ impl Stage {
             Self::Preparing => "Checking speech engine".into(),
             Self::Cloud => "Deepgram".into(),
             Self::Retrying => "Retrying Deepgram".into(),
-            Self::Local => "Local Whisper".into(),
-            Self::LocalCorrections(count) => format!(
-                "Local: {count} vocabulary correction{} available",
-                if count == 1 { "" } else { "s" }
+            Self::Local {
+                engine,
+                corrections: 0,
+            } => engine.label().into(),
+            Self::Local {
+                engine,
+                corrections,
+            } => format!(
+                "{}: {corrections} vocabulary correction{} available",
+                engine.label(),
+                if corrections == 1 { "" } else { "s" }
             )
             .into(),
         }
@@ -86,7 +110,7 @@ pub async fn transcribe(
     key: String,
     audio: mpsc::Receiver<Vec<i16>>,
     cloud: fotw_stt::DeepgramEndpoint,
-    local: crate::local_stt::LocalEndpoint,
+    local: impl Into<crate::local_stt::LocalTranscriber>,
     control: Arc<AtomicU8>,
     deadlines: Deadlines,
 ) -> Result<String, String> {
@@ -106,7 +130,7 @@ pub async fn transcribe_observed(
     key: String,
     audio: mpsc::Receiver<Vec<i16>>,
     cloud: fotw_stt::DeepgramEndpoint,
-    local: crate::local_stt::LocalEndpoint,
+    local: impl Into<crate::local_stt::LocalTranscriber>,
     control: Arc<AtomicU8>,
     deadlines: Deadlines,
     progress: Progress,
@@ -122,7 +146,7 @@ pub async fn transcribe_with_vocabulary(
     key: String,
     audio: mpsc::Receiver<Vec<i16>>,
     cloud: fotw_stt::DeepgramEndpoint,
-    local: crate::local_stt::LocalEndpoint,
+    local: impl Into<crate::local_stt::LocalTranscriber>,
     control: Arc<AtomicU8>,
     deadlines: Deadlines,
     progress: Progress,
@@ -146,12 +170,13 @@ pub async fn transcribe_with_profile(
     key: String,
     mut audio: mpsc::Receiver<Vec<i16>>,
     cloud: fotw_stt::DeepgramEndpoint,
-    local: crate::local_stt::LocalEndpoint,
+    local: impl Into<crate::local_stt::LocalTranscriber>,
     control: Arc<AtomicU8>,
     deadlines: Deadlines,
     progress: Progress,
     profile: &crate::vocabulary::Profile,
 ) -> Result<String, String> {
+    let local = local.into();
     profile.validate()?;
     crate::language::validate_deepgram(&profile.language)?;
     if local.language() != profile.language {
@@ -181,7 +206,7 @@ pub async fn transcribe_with_profile(
             return Err("Cancelled".into());
         }
         if remote.is_none() && retry_at.is_none() {
-            progress.set(local_vocabulary_stage(&corrections));
+            progress.set(local_vocabulary_stage(&local, &corrections));
             if ended {
                 break;
             }
@@ -254,7 +279,8 @@ pub async fn transcribe_with_profile(
             }
         }
     }
-    crate::local_stt::transcribe(&local, &pcm, control, deadlines.local)
+    local
+        .transcribe(&pcm, control, deadlines.local)
         .await
         .map(|text| corrections.apply(&text))
         .map_err(|e| format!("Cloud transcription unavailable; local fallback: {e}"))
@@ -263,10 +289,12 @@ pub async fn transcribe_with_profile(
 /// Local engines receive no recognition hints; their text is corrected from
 /// the vocabulary afterwards instead. Cloud text never is: Deepgram already
 /// received the hints as keyterms.
-pub(crate) fn local_vocabulary_stage(corrections: &crate::vocabulary::VocabularyMatcher) -> Stage {
-    match u32::try_from(corrections.len()) {
-        Ok(0) => Stage::Local,
-        Ok(count) => Stage::LocalCorrections(count),
-        Err(_) => Stage::LocalCorrections(u32::MAX),
+pub(crate) fn local_vocabulary_stage(
+    endpoint: &crate::local_stt::LocalTranscriber,
+    corrections: &crate::vocabulary::VocabularyMatcher,
+) -> Stage {
+    Stage::Local {
+        engine: endpoint.engine(),
+        corrections: u32::try_from(corrections.len()).unwrap_or(u32::MAX),
     }
 }

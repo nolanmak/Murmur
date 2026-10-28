@@ -131,6 +131,72 @@ impl LocalEndpoint {
         })
     }
 }
+/// The local engine for one utterance (#101): the managed Whisper gateway or
+/// Parakeet through the bundled speech helper.
+#[derive(Clone, Debug)]
+pub enum LocalTranscriber {
+    Whisper(LocalEndpoint),
+    Parakeet(crate::local_parakeet::Endpoint),
+}
+impl From<LocalEndpoint> for LocalTranscriber {
+    fn from(endpoint: LocalEndpoint) -> Self {
+        LocalTranscriber::Whisper(endpoint)
+    }
+}
+impl From<crate::local_parakeet::Endpoint> for LocalTranscriber {
+    fn from(endpoint: crate::local_parakeet::Endpoint) -> Self {
+        LocalTranscriber::Parakeet(endpoint)
+    }
+}
+impl LocalTranscriber {
+    pub fn engine(&self) -> crate::speech::LocalEngine {
+        match self {
+            LocalTranscriber::Whisper(_) => crate::speech::LocalEngine::Whisper,
+            LocalTranscriber::Parakeet(_) => crate::speech::LocalEngine::Parakeet,
+        }
+    }
+    pub fn vocabulary_capability(&self) -> fotw_stt::CustomVocabulary {
+        match self {
+            LocalTranscriber::Whisper(endpoint) => endpoint.vocabulary_capability(),
+            LocalTranscriber::Parakeet(endpoint) => endpoint.vocabulary_capability(),
+        }
+    }
+    /// The language bound at preflight; Parakeet is English only.
+    pub fn language(&self) -> &str {
+        match self {
+            LocalTranscriber::Whisper(endpoint) => endpoint.language(),
+            LocalTranscriber::Parakeet(_) => "en",
+        }
+    }
+    /// Refuse before the microphone opens unless this engine can transcribe
+    /// `language` now, and bind the utterance to what was checked.
+    pub async fn prepare(&self, language: &str, deadline: Duration) -> Result<Self, String> {
+        Ok(match self {
+            LocalTranscriber::Whisper(endpoint) => {
+                LocalTranscriber::Whisper(prepare(endpoint, language, deadline).await?)
+            }
+            LocalTranscriber::Parakeet(endpoint) => {
+                LocalTranscriber::Parakeet(endpoint.prepare(language, deadline).await?)
+            }
+        })
+    }
+    pub async fn transcribe(
+        &self,
+        pcm: &[i16],
+        control: Arc<AtomicU8>,
+        deadline: Duration,
+    ) -> Result<String, String> {
+        match self {
+            LocalTranscriber::Whisper(endpoint) => {
+                transcribe(endpoint, pcm, control, deadline).await
+            }
+            LocalTranscriber::Parakeet(endpoint) => {
+                endpoint.transcribe(pcm, control, deadline).await
+            }
+        }
+    }
+}
+
 /// Verify the installed runtime has a loaded model before opening the microphone.
 /// This is a loopback-only probe, never an automatic install/start/download.
 pub async fn check_ready(endpoint: &LocalEndpoint, deadline: Duration) -> Result<(), String> {

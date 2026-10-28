@@ -48,7 +48,7 @@ separator per hint, at most 64 hints, and 128 bytes per hint; it does not claim
 to reproduce Deepgram's tokenizer. Empty/untrimmed/control-containing or
 case-insensitive duplicate hints are refused.
 
-Local Whisper does not implement Nova-3 keyterms. It receives no hints and never
+Local engines (Parakeet and Whisper) do not implement Nova-3 keyterms. They receive no hints and never
 contacts a hosted model to repair them. Instead (#102), local-engine text is
 corrected after recognition by the shared `fotw-stt` vocabulary matcher, a port
 of Muesli's custom-word matcher. Its targets are each correction and each
@@ -58,9 +58,10 @@ must match), is replaced; adjacent words spelling a camel-case term are joined
 (`Fluid Audio` → `FluidAudio`, but never from only common words such as
 `power point`). Frequent English words, words with digits and
 longer words containing a term are never treated as near misses. The matcher
-runs on pure-local and local-fallback text before snippets and cleanup, and
-never on Deepgram text, which already had the hints as keyterms. The progress
-label and completion message say "Local: N vocabulary corrections available".
+runs on pure-local and local-fallback text from either engine before snippets
+and cleanup, and never on Deepgram text, which already had the hints as
+keyterms. The progress label and completion message name the engine: "Local
+Parakeet: N vocabulary corrections available" (or "Local Whisper: …").
 Deterministic snippets still apply to the winning local transcript afterwards.
 See FlyOnTheWall `docs/VOCABULARY.md` for the exact rules.
 

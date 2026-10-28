@@ -43,6 +43,18 @@ EOF
     identity=-
 fi
 
+# Nested code before the bundle that seals it. The speech helper (#101) gets
+# its own identifier, the hardened runtime and no entitlements: it never opens
+# the microphone, Murmur sends it PCM.
+helper="$stage/Contents/Helpers/fotw-speechd"
+[ "${MURMUR_SPEECHD:-}" != 1 ] || [ -f "$helper" ] ||
+    fail "MURMUR_SPEECHD=1 but the bundle lacks Contents/Helpers/fotw-speechd"
+if [ -f "$helper" ]; then
+    entitlements="$(cd "$(dirname "$0")/.." && pwd)/packaging/speechd-entitlements.plist"
+    codesign --force --options runtime --sign "$identity" --identifier "$bundle_id.speechd" \
+        --entitlements "$entitlements" "$helper" >/dev/null 2>&1 ||
+        fail "codesign failed for the speech helper with \"$identity\""
+fi
 if ! err=$(codesign --force --sign "$identity" --identifier "$bundle_id" "$stage" 2>&1); then
     case $err in
     *errSecInternalComponent*)
@@ -53,6 +65,15 @@ if ! err=$(codesign --force --sign "$identity" --identifier "$bundle_id" "$stage
     esac
 fi
 codesign --verify --deep --strict "$stage" || fail "signature verification failed"
+if [ -f "$helper" ]; then
+    case $(codesign -d --entitlements :- "$helper" 2>/dev/null || true) in
+    *com.apple.security.device.audio-input*) fail "the speech helper carries the microphone entitlement" ;;
+    esac
+    case $(codesign -d --verbose=2 "$helper" 2>&1 || true) in
+    *"(runtime)"*) ;;
+    *) fail "the speech helper is not signed with the hardened runtime" ;;
+    esac
+fi
 requirement=$(codesign -d -r- "$stage" 2>&1)
 if [ "$identity" != - ]; then
     case $requirement in

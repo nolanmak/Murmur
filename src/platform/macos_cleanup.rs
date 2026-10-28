@@ -17,11 +17,12 @@ pub struct CleanupMenu {
     refreshed: Instant,
 }
 impl CleanupMenu {
-    pub fn speech_label<'a>(&self, configured: &'a str) -> &'a str {
+    /// `offline` names the local engine Offline-all runs instead.
+    pub fn speech_label<'a>(&self, configured: &'a str, offline: &'a str) -> &'a str {
         if self.network_error() {
             "Transcription: blocked by privacy settings"
         } else if self.offline_all() {
-            "Transcription: Local Whisper (Offline-all)"
+            offline
         } else {
             configured
         }

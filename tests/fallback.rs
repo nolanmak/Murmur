@@ -465,7 +465,7 @@ async fn fallback_retains_at_most_the_capture_limit() {
     .await
     .unwrap();
     assert_eq!(result, "Complete local utterance.");
-    assert!(matches!(progress.stage(), fallback::Stage::Local));
+    assert!(matches!(progress.stage(), fallback::Stage::Local { .. }));
     let bytes = server.await.unwrap();
     let start = bytes.windows(4).position(|v| v == b"RIFF").unwrap();
     assert_eq!(
@@ -500,7 +500,7 @@ async fn local_fallback_corrects_vocabulary_locally_without_sending_hints_to_the
     assert_eq!(text, "Install FluidAudio with kubectl.");
     assert_eq!(
         progress.stage().completion_message("Inserted"),
-        "Inserted · Local: 3 vocabulary corrections available"
+        "Inserted · Local Whisper: 3 vocabulary corrections available"
     );
     assert!(!progress.stage().label().contains("unavailable"));
     let request = server.await.unwrap();
