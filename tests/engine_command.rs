@@ -2,7 +2,7 @@
 //! whole utterance or nothing, and a switch never lands on an engine that
 //! cannot transcribe.
 use murmur::engine_command::{Command, Decision, Target, decide, parse};
-use murmur::speech::Provider;
+use murmur::speech::{LocalEngine, Provider};
 
 #[test]
 fn whole_utterance_commands_are_recognized_across_transcription_styles() {
@@ -71,8 +71,9 @@ fn down() -> Result<(), String> {
 fn switching_to_a_ready_engine_saves_it_and_says_so() {
     let d = decide(
         Command::Use(Target::Local),
-        Some(&Provider::DeepgramThenLocal),
+        Some(&Provider::DeepgramThenWhisper),
         None,
+        LocalEngine::Whisper,
         false,
         &ready(),
         &ready(),
@@ -93,6 +94,7 @@ fn an_unready_local_engine_is_refused_and_the_current_choice_kept() {
             Command::Use(target),
             Some(&Provider::Deepgram),
             None,
+            LocalEngine::Whisper,
             false,
             &down(),
             &ready(),
@@ -110,6 +112,7 @@ fn an_unready_local_engine_is_refused_and_the_current_choice_kept() {
             Command::Use(Target::Deepgram),
             Some(&Provider::LocalWhisper),
             None,
+            LocalEngine::Whisper,
             false,
             &down(),
             &ready()
@@ -128,6 +131,7 @@ fn offline_all_blocks_voice_switches_to_the_cloud() {
             Command::Use(target),
             Some(&Provider::LocalWhisper),
             None,
+            LocalEngine::Whisper,
             true,
             &ready(),
             &ready(),
@@ -142,6 +146,7 @@ fn offline_all_blocks_voice_switches_to_the_cloud() {
             Command::Use(Target::Local),
             Some(&Provider::Deepgram),
             None,
+            LocalEngine::Whisper,
             true,
             &ready(),
             &ready()
@@ -160,6 +165,7 @@ fn undo_returns_to_the_previous_engine_and_obeys_the_same_rules() {
             Command::Undo,
             Some(&Provider::LocalWhisper),
             Some(&Provider::Deepgram),
+            LocalEngine::Whisper,
             false,
             &ready(),
             &ready()
@@ -170,7 +176,7 @@ fn undo_returns_to_the_previous_engine_and_obeys_the_same_rules() {
         }
     ));
     assert!(matches!(
-        decide(Command::Undo, Some(&Provider::Deepgram), None, false, &ready(),&ready()),
+        decide(Command::Undo, Some(&Provider::Deepgram), None, LocalEngine::Whisper, false, &ready(),&ready()),
         Decision::Report(ref m) if m.contains("Nothing to undo")
     ));
     assert!(matches!(
@@ -178,6 +184,7 @@ fn undo_returns_to_the_previous_engine_and_obeys_the_same_rules() {
             Command::Undo,
             Some(&Provider::Deepgram),
             Some(&Provider::LocalWhisper),
+            LocalEngine::Whisper,
             false,
             &down(),
             &ready()
@@ -189,11 +196,11 @@ fn undo_returns_to_the_previous_engine_and_obeys_the_same_rules() {
 #[test]
 fn which_and_already_selected_only_report() {
     assert!(matches!(
-        decide(Command::Which, Some(&Provider::DeepgramThenLocal), None, false, &ready(),&ready()),
-        Decision::Report(ref m) if m.contains("Deepgram") && m.contains("local")
+        decide(Command::Which, Some(&Provider::DeepgramThenWhisper), None, LocalEngine::Whisper, false, &ready(),&ready()),
+        Decision::Report(ref m) if m.contains("Deepgram") && m.contains("Whisper backup")
     ));
     assert!(matches!(
-        decide(Command::Use(Target::Local), Some(&Provider::LocalWhisper), None, false, &ready(),&ready()),
+        decide(Command::Use(Target::Local), Some(&Provider::LocalWhisper), None, LocalEngine::Whisper, false, &ready(),&ready()),
         Decision::Report(ref m) if m.contains("Already")
     ));
 }
@@ -205,6 +212,7 @@ fn a_cloud_switch_without_credentials_is_refused() {
         Command::Use(Target::Deepgram),
         Some(&Provider::LocalWhisper),
         None,
+        LocalEngine::Whisper,
         false,
         &ready(),
         &missing,
@@ -219,6 +227,7 @@ fn a_cloud_switch_without_credentials_is_refused() {
         Command::Undo,
         Some(&Provider::LocalWhisper),
         Some(&Provider::Deepgram),
+        LocalEngine::Whisper,
         false,
         &ready(),
         &missing,
@@ -230,6 +239,7 @@ fn a_cloud_switch_without_credentials_is_refused() {
             Command::Use(Target::Backup),
             Some(&Provider::LocalWhisper),
             None,
+            LocalEngine::Whisper,
             false,
             &ready(),
             &missing
@@ -244,6 +254,7 @@ fn which_names_local_whisper_while_offline_all_overrides_the_saved_engine() {
         Command::Which,
         Some(&Provider::Deepgram),
         None,
+        LocalEngine::Whisper,
         true,
         &ready(),
         &ready(),

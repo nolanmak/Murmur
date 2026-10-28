@@ -17,3 +17,6 @@ mod macos_sleep;
 
 #[cfg(target_os = "macos")]
 pub mod macos_cleanup;
+
+#[cfg(target_os = "macos")]
+pub mod macos_transcription;

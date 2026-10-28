@@ -5,12 +5,23 @@
 //! same phrase inside a longer sentence, is ordinary dictation. A recognized
 //! command is never inserted, and a switch is refused rather than landing on an
 //! engine that cannot transcribe.
-use crate::speech::Provider;
+//!
+//! Two local engines exist (#101). "Local" and "backup" mean the default local
+//! engine (Parakeet on a new install, Whisper for a settings file from before
+//! Parakeet); "Parakeet" and "Whisper" name one, and choosing either makes it
+//! the default.
+use crate::speech::{LocalEngine, Provider};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
+    /// The default local engine.
     Local,
+    /// Local Parakeet by name.
+    Parakeet,
+    /// Local Whisper by name.
+    Whisper,
     Deepgram,
+    /// Deepgram with the default local engine as backup.
     Backup,
     /// Local streaming dictation (#100).
     Streaming,
@@ -33,11 +44,6 @@ impl Command {
     /// worker checks that a key loads. Backup falls back to local without one.
     pub fn may_need_cloud(self) -> bool {
         matches!(self, Command::Undo | Command::Use(Target::Deepgram))
-    }
-    /// Whether the local engine to probe is the streaming one rather than
-    /// Local Whisper.
-    pub fn needs_streaming(self) -> bool {
-        matches!(self, Command::Use(Target::Streaming))
     }
 }
 
@@ -71,6 +77,10 @@ pub fn parse(raw: &str) -> Option<Command> {
         "use streaming" | "switch to streaming" | "use local streaming" => {
             Command::Use(Target::Streaming)
         }
+        "use parakeet" | "switch to parakeet" | "use local parakeet" => {
+            Command::Use(Target::Parakeet)
+        }
+        "use whisper" | "switch to whisper" | "use local whisper" => Command::Use(Target::Whisper),
         "use deepgram" | "switch to deepgram" | "use cloud" | "switch to cloud" => {
             Command::Use(Target::Deepgram)
         }
@@ -88,56 +98,73 @@ pub fn parse(raw: &str) -> Option<Command> {
 pub fn label(provider: &Provider) -> &'static str {
     match provider {
         Provider::Deepgram => "Deepgram",
+        Provider::LocalParakeet => "Local Parakeet",
         Provider::LocalWhisper => "Local Whisper",
-        Provider::DeepgramThenLocal => "Deepgram with local backup",
         Provider::LocalStreaming => "Local streaming",
+        Provider::DeepgramThenParakeet => "Deepgram with Parakeet backup",
+        Provider::DeepgramThenWhisper => "Deepgram with Whisper backup",
     }
 }
 
-fn provider(target: Target) -> Provider {
+fn provider(target: Target, default_local: LocalEngine) -> Provider {
     match target {
-        Target::Local => Provider::LocalWhisper,
+        Target::Local => Provider::local(default_local),
+        Target::Parakeet => Provider::LocalParakeet,
+        Target::Whisper => Provider::LocalWhisper,
         Target::Deepgram => Provider::Deepgram,
-        Target::Backup => Provider::DeepgramThenLocal,
+        Target::Backup => Provider::backup(default_local),
         Target::Streaming => Provider::LocalStreaming,
     }
 }
 
+/// The engine a command would switch to, so the worker can probe the local
+/// engine that choice needs before the result reaches the UI.
+pub fn target(
+    command: Command,
+    previous: Option<&Provider>,
+    default_local: LocalEngine,
+) -> Option<Provider> {
+    match command {
+        Command::Which => None,
+        Command::Use(target) => Some(provider(target, default_local)),
+        Command::Undo => previous.cloned(),
+    }
+}
+
 /// Decide what a command does, given the saved engine, the engine before the
-/// last voice switch, the Offline-all policy and a fresh local readiness probe.
+/// last voice switch, the default local engine, the Offline-all policy and
+/// fresh probes of the target's local engine and the cloud key.
 pub fn decide(
     command: Command,
     current: Option<&Provider>,
     previous: Option<&Provider>,
+    default_local: LocalEngine,
     offline_all: bool,
     local: &Result<(), String>,
     cloud_key: &Result<(), String>,
 ) -> Decision {
     let current_label = current.map(label).unwrap_or("the current setting");
-    let target = match command {
-        Command::Which => {
+    let Some(target) = target(command, previous, default_local) else {
+        return Decision::Report(match command {
             // Offline-all overrides the saved engine for every dictation.
-            return Decision::Report(
-                if offline_all && current == Some(&Provider::LocalStreaming) {
-                    "Using Local streaming · Offline-all is on".into()
-                } else if offline_all {
-                    "Using Local Whisper · Offline-all is on".into()
-                } else {
-                    format!("Using {current_label}")
-                },
-            );
-        }
-        Command::Use(target) => provider(target),
-        Command::Undo => match previous {
-            Some(previous) => previous.clone(),
-            None => return Decision::Report("Nothing to undo".into()),
-        },
+            Command::Which if offline_all && current == Some(&Provider::LocalStreaming) => {
+                "Using Local streaming · Offline-all is on".into()
+            }
+            Command::Which if offline_all => format!(
+                "Using {} · Offline-all is on",
+                current
+                    .and_then(Provider::local_engine)
+                    .unwrap_or(default_local)
+                    .label()
+            ),
+            Command::Which => format!("Using {current_label}"),
+            _ => "Nothing to undo".into(),
+        });
     };
     if current == Some(&target) {
         return Decision::Report(format!("Already using {}", label(&target)));
     }
-    let cloud = !matches!(target, Provider::LocalWhisper | Provider::LocalStreaming);
-    if cloud && offline_all {
+    if target.uses_cloud() && offline_all {
         return Decision::Refuse(format!(
             "Offline-all is on — switch to {} from the menu; staying on {current_label}",
             label(&target)
@@ -150,8 +177,11 @@ pub fn decide(
             "{reason} — add a Deepgram key first; staying on {current_label}"
         ));
     }
-    let needs_local = !matches!(target, Provider::Deepgram);
-    if needs_local && let Err(reason) = local {
+    // `local` probes the engine the target needs: the streaming engine for
+    // Local streaming, otherwise its batch engine.
+    if (target.local_engine().is_some() || target == Provider::LocalStreaming)
+        && let Err(reason) = local
+    {
         return Decision::Refuse(format!("{reason} — staying on {current_label}"));
     }
     Decision::Switch {

@@ -526,17 +526,17 @@ pub enum CaptureProvider {
         key: String,
         endpoint: fotw_stt::DeepgramEndpoint,
     },
-    Local(crate::local_stt::LocalEndpoint),
+    Local(crate::local_stt::LocalTranscriber),
     DeepgramThenLocal {
         key: String,
         endpoint: fotw_stt::DeepgramEndpoint,
-        local: crate::local_stt::LocalEndpoint,
+        local: crate::local_stt::LocalTranscriber,
     },
     /// Local streaming dictation (#100), with the batch engine it falls back
     /// to when streaming is not ready or fails mid-utterance. Never cloud.
     Streaming {
         stream: crate::local_streaming::Endpoint,
-        fallback: Option<crate::local_stt::LocalEndpoint>,
+        fallback: Option<crate::local_stt::LocalTranscriber>,
     },
 }
 pub async fn run_provider_observed(
@@ -723,7 +723,7 @@ pub async fn run_provider_raw_with_preparation(
         let prepared = wait_for_preflight(readiness, &control, &changes, &fault).await?;
         provider = match prepared {
             Ok(stream) => {
-                progress.set(crate::fallback::Stage::Streaming);
+                progress.set(crate::fallback::Stage::Streaming { corrections: 0 });
                 CaptureProvider::Streaming {
                     stream,
                     fallback: fallback.clone(),
@@ -734,7 +734,9 @@ pub async fn run_provider_raw_with_preparation(
             Err(reason) => match fallback.clone() {
                 Some(batch) => {
                     eprintln!("local streaming not ready; using the batch engine: {reason}");
-                    progress.set(crate::fallback::Stage::StreamingUnavailable);
+                    progress.set(crate::fallback::Stage::StreamingUnavailable {
+                        engine: batch.engine(),
+                    });
                     CaptureProvider::Local(batch)
                 }
                 None => return Err(format!("{reason}. Nothing was recorded")),
@@ -743,7 +745,7 @@ pub async fn run_provider_raw_with_preparation(
     }
     let streaming_fallback = matches!(
         progress.stage(),
-        crate::fallback::Stage::StreamingUnavailable
+        crate::fallback::Stage::StreamingUnavailable { .. }
     );
     match &mut provider {
         CaptureProvider::Local(endpoint)
@@ -751,8 +753,7 @@ pub async fn run_provider_raw_with_preparation(
             local: endpoint, ..
         } => {
             let prepared = {
-                let readiness =
-                    crate::local_stt::prepare(endpoint, &profile.language, Duration::from_secs(2));
+                let readiness = endpoint.prepare(&profile.language, Duration::from_secs(2));
                 tokio::pin!(readiness);
                 let mut tick = tokio::time::interval(Duration::from_millis(5));
                 loop {
@@ -772,7 +773,7 @@ pub async fn run_provider_raw_with_preparation(
                         _ = tick.tick() => {}
                         result = &mut readiness => break result.map_err(|e| {
                             if streaming_fallback {
-                                format!("Local streaming is not ready and Local Whisper is unavailable: {e}")
+                                format!("Local streaming is not ready and {} is unavailable: {e}", endpoint.engine().label())
                             } else {
                                 e
                             }
@@ -856,6 +857,11 @@ pub async fn run_provider_raw_with_preparation(
             }
             CaptureProvider::Streaming { stream, fallback } => {
                 let corrections = crate::vocabulary::VocabularyMatcher::new(&profile);
+                progress.set(crate::fallback::Stage::Streaming {
+                    corrections: u32::try_from(corrections.len()).unwrap_or(u32::MAX),
+                });
+                // The final gets the same vocabulary corrections as every
+                // local engine (#102) before snippets and cleanup.
                 match stream.transcribe(rx, progress.clone(), control.clone()).await {
                     Ok(text) => Ok(corrections.apply(&text)),
                     Err(failure) if control.load(Ordering::Acquire) == 2 => {
@@ -865,10 +871,13 @@ pub async fn run_provider_raw_with_preparation(
                     Err(failure) => {
                         // No transcript content is logged, only why.
                         eprintln!("local streaming failed: {}", failure.reason);
+                        let engine = fallback.as_ref().map(crate::local_stt::LocalTranscriber::engine);
                         retry_on_batch(fallback, &profile.language, &failure.pcm, control.clone())
                             .await
                             .map(|text| {
-                                progress.set(crate::fallback::Stage::StreamingRetried);
+                                if let Some(engine) = engine {
+                                    progress.set(crate::fallback::Stage::StreamingRetried { engine });
+                                }
                                 corrections.apply(&text)
                             })
                             .map_err(|e| {
@@ -883,21 +892,17 @@ pub async fn run_provider_raw_with_preparation(
             CaptureProvider::Local(endpoint) => {
                 let corrections = crate::vocabulary::VocabularyMatcher::new(&profile);
                 if !streaming_fallback {
-                    progress.set(crate::fallback::local_vocabulary_stage(&corrections));
+                    progress.set(crate::fallback::local_vocabulary_stage(&endpoint, &corrections));
                 }
                 let mut rx = rx;
                 let mut pcm = Vec::new();
                 while let Some(chunk) = rx.recv().await {
                     append_local_pcm(&mut pcm, chunk);
                 }
-                crate::local_stt::transcribe(
-                    &endpoint,
-                    &pcm,
-                    control.clone(),
-                    Duration::from_secs(180),
-                )
-                .await
-                .map(|text| corrections.apply(&text))
+                endpoint
+                    .transcribe(&pcm, control.clone(), Duration::from_secs(180))
+                    .await
+                    .map(|text| corrections.apply(&text))
             }
         }
     };
@@ -988,19 +993,24 @@ async fn wait_for_preflight<T>(
 }
 
 /// A failed stream's audio, transcribed by the batch engine in the same attempt.
+/// The batch engine is not kept warm beside streaming, so after release it
+/// gets longer than a preflight to load.
 async fn retry_on_batch(
-    fallback: Option<crate::local_stt::LocalEndpoint>,
+    fallback: Option<crate::local_stt::LocalTranscriber>,
     language: &str,
     pcm: &[i16],
     control: Arc<AtomicU8>,
 ) -> Result<String, String> {
     let batch = fallback.ok_or("no batch engine to retry on")?;
-    let batch = crate::local_stt::prepare(&batch, language, Duration::from_secs(2))
+    let label = batch.engine().label();
+    let batch = batch
+        .prepare(language, Duration::from_secs(30))
         .await
-        .map_err(|e| format!("retry on Local Whisper unavailable: {e}"))?;
-    crate::local_stt::transcribe(&batch, pcm, control, Duration::from_secs(180))
+        .map_err(|e| format!("retry on {label} unavailable: {e}"))?;
+    batch
+        .transcribe(pcm, control, Duration::from_secs(180))
         .await
-        .map_err(|e| format!("retry on Local Whisper failed: {e}"))
+        .map_err(|e| format!("retry on {label} failed: {e}"))
 }
 
 /// Retain at most 120 seconds of actual capture, including on a late stop tick.

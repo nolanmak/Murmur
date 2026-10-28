@@ -23,21 +23,42 @@ impl Drop for LiveGuard {
         self.0.0.lock().unwrap_or_else(|e| e.into_inner()).1 = true;
     }
 }
+
+fn engine_bit(engine: crate::speech::LocalEngine) -> u64 {
+    u64::from(engine == crate::speech::LocalEngine::Parakeet)
+}
+fn engine_of(packed: u64) -> crate::speech::LocalEngine {
+    if packed >> 8 & 1 == 1 {
+        crate::speech::LocalEngine::Parakeet
+    } else {
+        crate::speech::LocalEngine::Whisper
+    }
+}
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Stage {
     #[default]
     Preparing,
     Cloud,
     Retrying,
-    Local,
-    /// Local engine text gets this many vocabulary correction targets (#102).
-    LocalCorrections(u32),
-    /// Local streaming dictation (#100).
-    Streaming,
-    /// The stream failed mid-utterance; its audio went to the batch engine.
-    StreamingRetried,
-    /// Streaming was not ready before recording; the batch engine took it.
-    StreamingUnavailable,
+    /// A local engine, whose text gets this many vocabulary correction
+    /// targets (#102).
+    Local {
+        engine: crate::speech::LocalEngine,
+        corrections: u32,
+    },
+    /// Local streaming dictation (#100), whose final gets this many
+    /// vocabulary correction targets.
+    Streaming {
+        corrections: u32,
+    },
+    /// The stream failed mid-utterance; its audio went to this batch engine.
+    StreamingRetried {
+        engine: crate::speech::LocalEngine,
+    },
+    /// Streaming was not ready before recording; this batch engine took it.
+    StreamingUnavailable {
+        engine: crate::speech::LocalEngine,
+    },
 }
 impl Progress {
     pub fn stage(&self) -> Stage {
@@ -45,11 +66,19 @@ impl Progress {
         match packed & 0xff {
             1 => Stage::Cloud,
             2 => Stage::Retrying,
-            3 => Stage::Local,
-            4 => Stage::LocalCorrections((packed >> 8) as u32),
-            5 => Stage::Streaming,
-            6 => Stage::StreamingRetried,
-            7 => Stage::StreamingUnavailable,
+            3 => Stage::Local {
+                engine: engine_of(packed),
+                corrections: (packed >> 16) as u32,
+            },
+            4 => Stage::Streaming {
+                corrections: (packed >> 16) as u32,
+            },
+            5 => Stage::StreamingRetried {
+                engine: engine_of(packed),
+            },
+            6 => Stage::StreamingUnavailable {
+                engine: engine_of(packed),
+            },
             _ => Stage::Preparing,
         }
     }
@@ -72,11 +101,13 @@ impl Progress {
             Stage::Preparing => 0,
             Stage::Cloud => 1,
             Stage::Retrying => 2,
-            Stage::Local => 3,
-            Stage::LocalCorrections(count) => 4 | u64::from(count) << 8,
-            Stage::Streaming => 5,
-            Stage::StreamingRetried => 6,
-            Stage::StreamingUnavailable => 7,
+            Stage::Local {
+                engine,
+                corrections,
+            } => 3 | engine_bit(engine) << 8 | u64::from(corrections) << 16,
+            Stage::Streaming { corrections } => 4 | u64::from(corrections) << 16,
+            Stage::StreamingRetried { engine } => 5 | engine_bit(engine) << 8,
+            Stage::StreamingUnavailable { engine } => 6 | engine_bit(engine) << 8,
         };
         self.0.store(packed, std::sync::atomic::Ordering::Release);
     }
@@ -85,8 +116,12 @@ impl Stage {
     /// Keep local vocabulary behavior visible even when a fast local result
     /// completes between two native UI progress polls.
     pub fn completion_message(self, message: &str) -> String {
-        if let Self::LocalCorrections(_) | Self::StreamingRetried | Self::StreamingUnavailable =
-            self
+        if let Self::Local {
+            corrections: 1.., ..
+        }
+        | Self::Streaming { corrections: 1.. }
+        | Self::StreamingRetried { .. }
+        | Self::StreamingUnavailable { .. } = self
         {
             format!("{message} · {}", self.label())
         } else {
@@ -98,15 +133,31 @@ impl Stage {
             Self::Preparing => "Checking speech engine".into(),
             Self::Cloud => "Deepgram".into(),
             Self::Retrying => "Retrying Deepgram".into(),
-            Self::Local => "Local Whisper".into(),
-            Self::Streaming => "Local streaming".into(),
-            Self::StreamingRetried => "Streaming failed; retried on Local Whisper".into(),
-            Self::StreamingUnavailable => "Streaming not ready; used Local Whisper".into(),
-            Self::LocalCorrections(count) => format!(
-                "Local: {count} vocabulary correction{} available",
-                if count == 1 { "" } else { "s" }
+            Self::Local {
+                engine,
+                corrections: 0,
+            } => engine.label().into(),
+            Self::Local {
+                engine,
+                corrections,
+            } => format!(
+                "{}: {corrections} vocabulary correction{} available",
+                engine.label(),
+                if corrections == 1 { "" } else { "s" }
             )
             .into(),
+            Self::Streaming { corrections: 0 } => "Local streaming".into(),
+            Self::Streaming { corrections } => format!(
+                "Local streaming: {corrections} vocabulary correction{} available",
+                if corrections == 1 { "" } else { "s" }
+            )
+            .into(),
+            Self::StreamingRetried { engine } => {
+                format!("Streaming failed; retried on {}", engine.label()).into()
+            }
+            Self::StreamingUnavailable { engine } => {
+                format!("Streaming not ready; used {}", engine.label()).into()
+            }
         }
     }
 }
@@ -130,7 +181,7 @@ pub async fn transcribe(
     key: String,
     audio: mpsc::Receiver<Vec<i16>>,
     cloud: fotw_stt::DeepgramEndpoint,
-    local: crate::local_stt::LocalEndpoint,
+    local: impl Into<crate::local_stt::LocalTranscriber>,
     control: Arc<AtomicU8>,
     deadlines: Deadlines,
 ) -> Result<String, String> {
@@ -150,7 +201,7 @@ pub async fn transcribe_observed(
     key: String,
     audio: mpsc::Receiver<Vec<i16>>,
     cloud: fotw_stt::DeepgramEndpoint,
-    local: crate::local_stt::LocalEndpoint,
+    local: impl Into<crate::local_stt::LocalTranscriber>,
     control: Arc<AtomicU8>,
     deadlines: Deadlines,
     progress: Progress,
@@ -166,7 +217,7 @@ pub async fn transcribe_with_vocabulary(
     key: String,
     audio: mpsc::Receiver<Vec<i16>>,
     cloud: fotw_stt::DeepgramEndpoint,
-    local: crate::local_stt::LocalEndpoint,
+    local: impl Into<crate::local_stt::LocalTranscriber>,
     control: Arc<AtomicU8>,
     deadlines: Deadlines,
     progress: Progress,
@@ -190,12 +241,13 @@ pub async fn transcribe_with_profile(
     key: String,
     mut audio: mpsc::Receiver<Vec<i16>>,
     cloud: fotw_stt::DeepgramEndpoint,
-    local: crate::local_stt::LocalEndpoint,
+    local: impl Into<crate::local_stt::LocalTranscriber>,
     control: Arc<AtomicU8>,
     deadlines: Deadlines,
     progress: Progress,
     profile: &crate::vocabulary::Profile,
 ) -> Result<String, String> {
+    let local = local.into();
     profile.validate()?;
     crate::language::validate_deepgram(&profile.language)?;
     if local.language() != profile.language {
@@ -225,7 +277,7 @@ pub async fn transcribe_with_profile(
             return Err("Cancelled".into());
         }
         if remote.is_none() && retry_at.is_none() {
-            progress.set(local_vocabulary_stage(&corrections));
+            progress.set(local_vocabulary_stage(&local, &corrections));
             if ended {
                 break;
             }
@@ -298,7 +350,8 @@ pub async fn transcribe_with_profile(
             }
         }
     }
-    crate::local_stt::transcribe(&local, &pcm, control, deadlines.local)
+    local
+        .transcribe(&pcm, control, deadlines.local)
         .await
         .map(|text| corrections.apply(&text))
         .map_err(|e| format!("Cloud transcription unavailable; local fallback: {e}"))
@@ -307,10 +360,12 @@ pub async fn transcribe_with_profile(
 /// Local engines receive no recognition hints; their text is corrected from
 /// the vocabulary afterwards instead. Cloud text never is: Deepgram already
 /// received the hints as keyterms.
-pub(crate) fn local_vocabulary_stage(corrections: &crate::vocabulary::VocabularyMatcher) -> Stage {
-    match u32::try_from(corrections.len()) {
-        Ok(0) => Stage::Local,
-        Ok(count) => Stage::LocalCorrections(count),
-        Err(_) => Stage::LocalCorrections(u32::MAX),
+pub(crate) fn local_vocabulary_stage(
+    endpoint: &crate::local_stt::LocalTranscriber,
+    corrections: &crate::vocabulary::VocabularyMatcher,
+) -> Stage {
+    Stage::Local {
+        engine: endpoint.engine(),
+        corrections: u32::try_from(corrections.len()).unwrap_or(u32::MAX),
     }
 }

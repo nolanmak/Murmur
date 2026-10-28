@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- fotw-speechd (#101) gets nothing. It never opens a capture device:
+	     Murmur sends it PCM over a pipe, so it has no use for
+	     com.apple.security.device.audio-input, and scripts/sign-app.sh fails
+	     if it ever carries it. Core ML needs no entitlement. Hardened Runtime
+	     still applies; it is a codesign option, not an entitlement. -->
+</dict>
+</plist>

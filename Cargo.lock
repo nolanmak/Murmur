@@ -571,7 +571,7 @@ dependencies = [
 [[package]]
 name = "fotw-audio"
 version = "0.1.0"
-source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=c3381866e1726755fa1ec0f6e228df32f0c9a52f#c3381866e1726755fa1ec0f6e228df32f0c9a52f"
+source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=5cf535567b66e996c7ba3302b8dc4b3cd5610f13#5cf535567b66e996c7ba3302b8dc4b3cd5610f13"
 dependencies = [
  "cidre",
  "objc2-app-kit",
@@ -582,7 +582,7 @@ dependencies = [
 [[package]]
 name = "fotw-dsp"
 version = "0.1.0"
-source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=c3381866e1726755fa1ec0f6e228df32f0c9a52f#c3381866e1726755fa1ec0f6e228df32f0c9a52f"
+source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=5cf535567b66e996c7ba3302b8dc4b3cd5610f13#5cf535567b66e996c7ba3302b8dc4b3cd5610f13"
 dependencies = [
  "rubato",
  "thiserror",
@@ -591,7 +591,7 @@ dependencies = [
 [[package]]
 name = "fotw-secrets"
 version = "0.1.0"
-source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=c3381866e1726755fa1ec0f6e228df32f0c9a52f#c3381866e1726755fa1ec0f6e228df32f0c9a52f"
+source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=5cf535567b66e996c7ba3302b8dc4b3cd5610f13#5cf535567b66e996c7ba3302b8dc4b3cd5610f13"
 dependencies = [
  "apple-native-keyring-store",
  "argon2",
@@ -608,7 +608,7 @@ dependencies = [
 [[package]]
 name = "fotw-speechd-client"
 version = "0.1.0"
-source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=c3381866e1726755fa1ec0f6e228df32f0c9a52f#c3381866e1726755fa1ec0f6e228df32f0c9a52f"
+source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=5cf535567b66e996c7ba3302b8dc4b3cd5610f13#5cf535567b66e996c7ba3302b8dc4b3cd5610f13"
 dependencies = [
  "serde",
  "serde_json",
@@ -619,7 +619,7 @@ dependencies = [
 [[package]]
 name = "fotw-stt"
 version = "0.1.0"
-source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=c3381866e1726755fa1ec0f6e228df32f0c9a52f#c3381866e1726755fa1ec0f6e228df32f0c9a52f"
+source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=5cf535567b66e996c7ba3302b8dc4b3cd5610f13#5cf535567b66e996c7ba3302b8dc4b3cd5610f13"
 dependencies = [
  "futures-util",
  "serde",

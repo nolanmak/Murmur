@@ -315,7 +315,7 @@ fn main() {
             let mut row = dictate(streaming(), pcm.clone()).await;
             if let Some(url) = &whisper {
                 let local = murmur::local_stt::LocalEndpoint::new(url).unwrap();
-                let batch = dictate(CaptureProvider::Local(local), pcm).await;
+                let batch = dictate(CaptureProvider::Local(local.into()), pcm).await;
                 row["whisper"] = batch;
             }
             row["wav"] = json!(path);

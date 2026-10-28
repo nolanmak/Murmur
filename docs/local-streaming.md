@@ -7,9 +7,9 @@ Streaming 0.6B (multilingual, NVIDIA, OpenMDW-1.1) in FlyOnTheWall's
 
 ## Setup
 
-1. Build Murmur with the helper bundled (`MURMUR_SPEECHD=1 ./scripts/build-app.sh`,
-   from the Local Parakeet work, #101). Without the helper, streaming reports
-   that it is unavailable and Local Whisper takes every dictation.
+1. Build Murmur with the helper bundled (`MURMUR_SPEECHD=1 ./scripts/build-app.sh`).
+   Without it, streaming reports that it is unavailable and the batch engine
+   takes every dictation. Streaming and Local Parakeet share one helper process.
 2. Install the model once: `murmur speech install-streaming` (about 1.2 GB,
    the only step that uses the network), or `--from DIR` to import a local
    copy holding `560ms/` and `1120ms/`.
@@ -29,12 +29,19 @@ Streaming 0.6B (multilingual, NVIDIA, OpenMDW-1.1) in FlyOnTheWall's
 - **Esc** drops the stream, which cancels it in the helper. Each attempt has its
   own `Progress`, so a partial that arrives late can't reach a later dictation.
 - **Not ready** before the mic opens (still loading, model not installed, no
-  helper, or a language the model has no prompt for): Local Whisper takes the
-  utterance and the completion says "Streaming not ready; used Local Whisper".
-- **Failure mid-utterance**: every captured sample is kept. On release, Local
-  Whisper transcribes it in the same attempt, and the completion says
-  "Streaming failed; retried on Local Whisper". If Local Whisper is unavailable
-  too, nothing is typed and the message names both reasons.
+  helper, or a language the model has no prompt for): the default local engine
+  (Local Parakeet on a new install, Local Whisper for older settings) takes the
+  utterance, and the completion says "Streaming not ready; used Local Parakeet".
+- **Failure mid-utterance**: every captured sample is kept. On release, the
+  default local engine transcribes it in the same attempt, and the completion
+  says "Streaming failed; retried on Local Parakeet". If that is unavailable too,
+  nothing is typed and the message names both reasons.
+- **Memory.** With streaming chosen only its engine is kept warm: about 1.1 GB
+  of wired (Neural Engine) memory plus ~90 MB in the helper. The batch fallback
+  loads on demand rather than staying resident beside it, because both together
+  are about 1.85 GB.
+- **Vocabulary.** The final gets the same vocabulary corrections as every local
+  engine (#102) before snippets and cleanup.
 - **A helper restart** during an utterance means nothing from that stream is
   typed. The helper client replays the load and warmup, and the next
   dictation's preflight waits for it.

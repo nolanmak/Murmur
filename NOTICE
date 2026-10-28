@@ -27,3 +27,22 @@ committed to this repository:
 - Whisper base.en (ggml conversion, Hugging Face ggerganov/whisper.cpp revision
   5359861c739e955e79d9a303bcbc70fb988958b1). MIT License, Copyright (c) 2022
   OpenAI (https://github.com/openai/whisper).
+
+Local Parakeet (#101) runs these models through the fotw-speechd helper
+(FluidAudio 0.17.3, Apache-2.0). They are downloaded or imported only by the
+explicit install action (Transcription → Install Parakeet model…, or
+`murmur speech install-parakeet`), pinned to a revision with per-file SHA-256,
+and never committed:
+
+- Parakeet Unified 0.6B (English), int8 Core ML conversion, Hugging Face
+  FluidInference/parakeet-unified-en-0.6b-coreml revision
+  d32e972dd4315f1dc3f6be28fb2aab0ab3e80358. Model by NVIDIA. Licensed under
+  Creative Commons Attribution 4.0 International (CC-BY-4.0,
+  https://creativecommons.org/licenses/by/4.0/). Converted to Core ML by
+  FluidInference; Murmur uses it unmodified.
+- Silero VAD, Core ML conversion, Hugging Face FluidInference/silero-vad-coreml
+  revision b419383c55c110e2c9271fa6ee0ea83d03c70d96. MIT License, Copyright
+  (c) 2020-present Silero Team (https://github.com/snakers4/silero-vad).
+
+The helper's own third-party notices (Muesli, MIT; FluidAudio, Apache-2.0;
+fastcluster) are in THIRD_PARTY_NOTICES.md.

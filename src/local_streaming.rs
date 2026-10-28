@@ -453,54 +453,32 @@ fn one_line(text: &str) -> String {
 use fotw_speechd_client::message::ErrorCode;
 use fotw_speechd_client::{ClientError, SpeechdClient, SpeechdConfig, StreamConfig, StreamEvent};
 
-/// Where installed models live; `MURMUR_SPEECHD_MODELS` overrides it.
-pub fn models_root() -> Result<PathBuf, String> {
-    if let Some(root) = std::env::var_os("MURMUR_SPEECHD_MODELS").filter(|v| !v.is_empty()) {
-        return Ok(PathBuf::from(root));
-    }
-    Ok(
-        PathBuf::from(std::env::var_os("HOME").ok_or("Cannot locate home directory")?)
-            .join("Library/Application Support/Murmur/models"),
-    )
-}
-
 /// The real backend: `fotw-speechd` through `fotw-speechd-client`.
 pub struct SpeechdBackend {
     inner: Arc<Inner>,
 }
 struct Inner {
-    config: Result<SpeechdConfig, String>,
+    helper: Arc<crate::speechd::Helper>,
     engine: String,
-    client: tokio::sync::Mutex<Option<SpeechdClient>>,
-    current: Mutex<Option<SpeechdClient>>,
 }
 
 impl SpeechdBackend {
-    /// The bundled helper (or `FOTW_SPEECHD_PATH`) and Murmur's models root.
+    /// The app's helper, shared with Local Parakeet (#101).
     pub fn from_environment() -> Self {
-        let config = match (fotw_speechd_client::locate_helper(), models_root()) {
-            (Some(program), Ok(root)) => Ok(SpeechdConfig::new(program, root)),
-            (None, _) => Err(
-                "this build does not include the fotw-speechd helper; rebuild with MURMUR_SPEECHD=1 ./scripts/build-app.sh"
-                    .to_string(),
-            ),
-            (_, Err(error)) => Err(error),
-        };
-        Self::new(config, ENGINE)
+        Self::with_helper(crate::speechd::Helper::shared(), ENGINE)
     }
 
-    /// `engine` is `nemotron-3.5`, or a fake one in tests.
+    /// `engine` is `nemotron-3.5`, or a fake one in tests, on its own helper.
     pub fn new(config: Result<SpeechdConfig, String>, engine: &str) -> Self {
-        let config = config.map(|mut config| {
-            config.client_name = concat!("murmur/", env!("CARGO_PKG_VERSION")).into();
-            config
-        });
+        Self::with_helper(crate::speechd::Helper::new(config), engine)
+    }
+
+    /// `engine` on a helper process another backend may share.
+    pub fn with_helper(helper: Arc<crate::speechd::Helper>, engine: &str) -> Self {
         Self {
             inner: Arc::new(Inner {
-                config,
+                helper,
                 engine: engine.into(),
-                client: tokio::sync::Mutex::new(None),
-                current: Mutex::new(None),
             }),
         }
     }
@@ -508,28 +486,10 @@ impl SpeechdBackend {
 
 impl Inner {
     async fn client(&self) -> Result<SpeechdClient, LoadError> {
-        let mut client = self.client.lock().await;
-        if let Some(existing) = client.as_ref() {
-            if !existing.status().failed {
-                return Ok(existing.clone());
-            }
-            // The restart budget was spent; an explicit retry resets it.
-            existing.reset().await;
-            if !existing.status().failed {
-                return Ok(existing.clone());
-            }
-        }
-        let config = self.config.clone().map_err(LoadError::Unavailable)?;
-        let started = SpeechdClient::start(config).await.map_err(|e| match e {
-            ClientError::Spawn(reason) => LoadError::Unavailable(reason),
-            ClientError::VersionMismatch { .. } => {
-                LoadError::Unavailable(format!("{e}; rebuild Murmur so its helper matches"))
-            }
-            other => LoadError::Failed(other.to_string()),
-        })?;
-        *self.current.lock().unwrap_or_else(|e| e.into_inner()) = Some(started.clone());
-        *client = Some(started.clone());
-        Ok(started)
+        self.helper.client().await.map_err(|e| match e {
+            crate::speechd::StartError::Unavailable(reason) => LoadError::Unavailable(reason),
+            crate::speechd::StartError::Failed(reason) => LoadError::Failed(reason),
+        })
     }
 
     async fn load(&self) -> Result<Binding, LoadError> {
@@ -564,12 +524,7 @@ impl Inner {
     }
 
     fn instance(&self) -> Option<u64> {
-        let client = self.current.lock().unwrap_or_else(|e| e.into_inner());
-        client
-            .as_ref()
-            .map(SpeechdClient::status)
-            .filter(|status| !status.failed)
-            .map(|status| status.generation)
+        self.helper.instance()
     }
 }
 

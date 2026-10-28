@@ -425,6 +425,10 @@ enum Spoken {
         Result<(), String>,
     ),
 }
+enum InstallEvent {
+    Progress(String),
+    Done(Result<(), String>),
+}
 struct Completion {
     command: Option<SpokenCommand>,
     cleanup: Option<crate::cleanup::Disposition>,
@@ -669,7 +673,9 @@ struct Shell {
     _tray: TrayIcon,
     status: MenuItem,
     speech: crate::speech::Selection,
-    speech_toggle: MenuItem,
+    transcription_menu: super::macos_transcription::TranscriptionMenu,
+    /// Status lines from an explicit Parakeet model install.
+    install_events: Option<mpsc::Receiver<InstallEvent>>,
     /// The engine before the last switch, for "Murmur, undo".
     previous_provider: Option<crate::speech::Provider>,
     language_menu: super::macos_language::LanguageMenu,
@@ -729,16 +735,10 @@ impl Shell {
         let menu = Menu::new();
         let status = MenuItem::with_id("status", "Hold Control to dictate", false, None);
         let speech = crate::speech::Selection::load(crate::speech::Settings::path());
-        warm_streaming(speech.provider());
         if speech.error().is_some() {
-            status.set_text("Speech settings invalid — choose Local Whisper in the Transcription menu to repair");
+            status.set_text(INVALID_SPEECH);
         }
-        let speech_toggle = MenuItem::with_id(
-            "speech_provider",
-            speech_label(speech.provider()),
-            true,
-            None,
-        );
+        let transcription_menu = super::macos_transcription::TranscriptionMenu::new()?;
         let language_menu =
             super::macos_language::LanguageMenu::new(crate::vocabulary::Profile::path())?;
         let vocabulary_menu =
@@ -747,7 +747,13 @@ impl Shell {
             crate::cleanup_config::Settings::path(),
             crate::cleanup_config::NetworkPolicy::path(),
         )?;
-        speech_toggle.set_text(cleanup_menu.speech_label(speech_label(speech.provider())));
+        transcription_menu.refresh(
+            speech.provider(),
+            cleanup_menu.speech_label(
+                speech_label(speech.provider()),
+                offline_label(speech.settings()),
+            ),
+        );
         let native_menu = Menu::new();
         let application_menu = muda::Submenu::new("Murmur", true);
         application_menu
@@ -851,7 +857,8 @@ impl Shell {
             None,
         );
         menu.append(&status).map_err(|e| e.to_string())?;
-        menu.append(&speech_toggle).map_err(|e| e.to_string())?;
+        menu.append(&transcription_menu.menu)
+            .map_err(|e| e.to_string())?;
         menu.append(&language_menu.menu)
             .map_err(|e| e.to_string())?;
         menu.append(&vocabulary_menu.menu)
@@ -907,7 +914,8 @@ impl Shell {
             _tray: tray,
             status,
             speech,
-            speech_toggle,
+            transcription_menu,
+            install_events: None,
             previous_provider: None,
             language_menu,
             vocabulary_menu,
@@ -966,6 +974,122 @@ impl Shell {
         eprintln!("status: {message}");
         self.status.set_text(message);
     }
+    fn refresh_speech_menu(&mut self) {
+        let title = self.cleanup_menu.speech_label(
+            speech_label(self.speech.provider()),
+            offline_label(self.speech.settings()),
+        );
+        self.transcription_menu
+            .refresh(self.speech.provider(), title);
+    }
+    /// Load and warm Parakeet in the background when the next dictation may
+    /// use it, so the first utterance pays no model load or Core ML compile.
+    /// With streaming chosen only the streaming engine is warmed (#100): its
+    /// batch fallback loads on demand, so both 0.6B models are not resident
+    /// together just in case.
+    fn warm_local_engine(&self) {
+        let Some(settings) = self.speech.settings() else {
+            return;
+        };
+        if settings.provider == crate::speech::Provider::LocalStreaming {
+            crate::local_streaming::Endpoint::shared().service().warm();
+            return;
+        }
+        let engine = if self.cleanup_menu.offline_all() {
+            Some(settings.effective_local_engine())
+        } else {
+            settings.provider.local_engine()
+        };
+        if engine == Some(crate::speech::LocalEngine::Parakeet) {
+            crate::local_parakeet::Endpoint::shared().service().warm();
+        }
+    }
+    fn handle_transcription(&mut self, action: super::macos_transcription::Action) {
+        use super::macos_transcription::Action;
+        if self.core.phase != Phase::Idle || self.install_events.is_some() {
+            self.refresh_speech_menu();
+            self.show("Finish dictation or the model install before changing transcription");
+            return;
+        }
+        match action {
+            Action::Choose(provider) => {
+                let before = self.speech.provider().cloned();
+                match crate::speech::Settings::path()
+                    .and_then(|path| self.speech.choose(provider, &path))
+                {
+                    Ok(()) => {
+                        if before.as_ref() != self.speech.provider() {
+                            self.previous_provider = before;
+                        }
+                        self.refresh_speech_menu();
+                        self.warm_local_engine();
+                        self.show("Transcription engine saved for the next recording");
+                    }
+                    Err(error) => {
+                        self.refresh_speech_menu();
+                        self.show(&error);
+                    }
+                }
+            }
+            Action::InstallParakeet => self.install_parakeet(),
+        }
+    }
+    /// The only path that downloads a model in the app: an explicit menu
+    /// action while no dictation runs. Dictation refuses until it finishes.
+    fn install_parakeet(&mut self) {
+        let (tx, rx) = mpsc::channel();
+        self.install_events = Some(rx);
+        self.transcription_menu
+            .set_install_text("Installing Parakeet model…");
+        self.show("Installing the Parakeet model; dictation waits until it finishes");
+        std::thread::spawn(move || {
+            let progress_tx = tx.clone();
+            let progress: crate::local_parakeet::Progress = Arc::new(move |line: String| {
+                let _ = progress_tx.send(InstallEvent::Progress(line));
+            });
+            let service = crate::local_parakeet::Endpoint::shared().service().clone();
+            let result = crate::capture::block_on_detached(async move {
+                service
+                    .install(crate::local_parakeet::InstallSources::default(), progress)
+                    .await
+            })
+            .and_then(|r| r);
+            let _ = tx.send(InstallEvent::Done(result));
+        });
+    }
+    fn drain_install_events(&mut self) {
+        let Some(events) = &self.install_events else {
+            return;
+        };
+        let mut last = None;
+        let mut done = None;
+        loop {
+            match events.try_recv() {
+                Ok(InstallEvent::Progress(line)) => last = Some(line),
+                Ok(InstallEvent::Done(result)) => {
+                    done = Some(result);
+                    break;
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    done = Some(Err("The Parakeet model install stopped unexpectedly".into()));
+                    break;
+                }
+            }
+        }
+        if let Some(line) = last {
+            self.status(&format!("Installing Parakeet model · {line}"));
+        }
+        if let Some(result) = done {
+            self.install_events = None;
+            self.transcription_menu
+                .set_install_text("Install Parakeet model…");
+            match result {
+                Ok(()) => self.show("Parakeet model installed · loading it for the next dictation"),
+                Err(error) => self.show(&error),
+            }
+        }
+    }
     fn apply_engine_command(&mut self, spoken: &SpokenCommand) {
         use crate::engine_command::Decision;
         let current = self.speech.provider().cloned();
@@ -973,6 +1097,7 @@ impl Shell {
             spoken.command,
             current.as_ref(),
             self.previous_provider.as_ref(),
+            self.speech.local_engine(),
             spoken.offline_all,
             &spoken.local,
             &spoken.cloud,
@@ -981,12 +1106,9 @@ impl Shell {
                 match crate::speech::Settings::path().and_then(|path| self.speech.choose(to, &path))
                 {
                     Ok(()) => {
-                        warm_streaming(self.speech.provider());
                         self.previous_provider = current;
-                        self.speech_toggle.set_text(
-                            self.cleanup_menu
-                                .speech_label(speech_label(self.speech.provider())),
-                        );
+                        self.refresh_speech_menu();
+                        self.warm_local_engine();
                         self.show(&message);
                     }
                     Err(error) => self.show(&error),
@@ -1061,7 +1183,7 @@ impl Shell {
             return "Privacy settings invalid · choose Offline-all to repair".into();
         }
         if self.speech.error().is_some() {
-            return "Speech settings invalid — choose Local Whisper in the Transcription menu to repair".into();
+            return INVALID_SPEECH.into();
         }
         match &self.warning {
             Some(warning) => warning.clone(),
@@ -1138,6 +1260,7 @@ impl Shell {
         let startup = self.microphone_startup.clone();
         let progress = self.speech_progress.clone();
         let speech = self.speech.clone();
+        let previous = self.previous_provider.clone();
         let remote_cleanup = self.recording_remote;
         let cleanup_service = self.cleanup_service.clone();
         std::thread::spawn(move || {
@@ -1187,27 +1310,33 @@ impl Shell {
                     // A whole-utterance engine command is never cleaned up,
                     // expanded or inserted; it is applied by the UI instead.
                     if let Some(command) = crate::engine_command::parse(&raw) {
-                        let local = if command.needs_streaming() {
-                            // Streaming must be loaded and warm to switch to it.
-                            crate::local_streaming::Endpoint::shared()
+                        // Probe the local engine this command would land on.
+                        let engine = crate::engine_command::target(
+                            command,
+                            previous.as_ref(),
+                            speech.local_engine(),
+                        );
+                        let streaming =
+                            engine.as_ref() == Some(&crate::speech::Provider::LocalStreaming);
+                        let engine = engine.and_then(|target| target.local_engine());
+                        let local = match (engine, speech.settings()) {
+                            // Switching to streaming needs it loaded and warm.
+                            _ if streaming => crate::local_streaming::Endpoint::shared()
                                 .service()
                                 .ready(Duration::from_secs(2))
                                 .await
-                                .map(|_| ())
-                        } else if command.may_need_local() {
-                            match speech
-                                .local_endpoint()
-                                .ok_or_else(|| "Speech settings are invalid".to_string())
-                                .and_then(crate::local_stt::LocalEndpoint::new)
-                            {
-                                Ok(endpoint) => {
-                                    crate::local_stt::check_ready(&endpoint, Duration::from_secs(2))
+                                .map(|_| ()),
+                            (None, _) => Ok(()),
+                            (Some(_), None) => Err("Speech settings are invalid".to_string()),
+                            (Some(engine), Some(settings)) => {
+                                match settings.local_transcriber(engine) {
+                                    Ok(local) => local
+                                        .prepare("en", Duration::from_secs(2))
                                         .await
+                                        .map(|_| ()),
+                                    Err(error) => Err(error),
                                 }
-                                Err(error) => Err(error),
                             }
-                        } else {
-                            Ok(())
                         };
                         let cloud = if command.may_need_cloud() {
                             crate::config::load().map(|_| ())
@@ -1414,11 +1543,11 @@ impl Shell {
             self.prewarm();
         }
         if self.cleanup_menu.refresh_if_due() {
-            self.speech_toggle.set_text(
-                self.cleanup_menu
-                    .speech_label(speech_label(self.speech.provider())),
-            );
+            self.refresh_speech_menu();
         }
+        self.transcription_menu
+            .set_enabled(self.core.phase == Phase::Idle && self.install_events.is_none());
+        self.drain_install_events();
         self.cleanup_menu
             .menu
             .set_enabled(self.core.phase == Phase::Idle);
@@ -1501,10 +1630,8 @@ impl Shell {
                     continue;
                 }
                 if let Some(result) = self.cleanup_menu.handle(event.id.as_ref()) {
-                    self.speech_toggle.set_text(
-                        self.cleanup_menu
-                            .speech_label(speech_label(self.speech.provider())),
-                    );
+                    self.refresh_speech_menu();
+                    self.warm_local_engine();
                     match result {
                         Ok(message) => self.show(&message),
                         Err(error) => self.show(&error),
@@ -1559,36 +1686,11 @@ impl Shell {
                 }
                 continue;
             }
+            if let Some(action) = self.transcription_menu.handle(event.id.as_ref()) {
+                self.handle_transcription(action);
+                continue;
+            }
             match event.id.as_ref() {
-                "speech_provider" => {
-                    let provider = match self.speech.provider() {
-                        Some(crate::speech::Provider::LocalWhisper) => {
-                            crate::speech::Provider::LocalStreaming
-                        }
-                        Some(crate::speech::Provider::LocalStreaming) => {
-                            crate::speech::Provider::DeepgramThenLocal
-                        }
-                        Some(crate::speech::Provider::DeepgramThenLocal) => {
-                            crate::speech::Provider::Deepgram
-                        }
-                        _ => crate::speech::Provider::LocalWhisper,
-                    };
-                    let before = self.speech.provider().cloned();
-                    match crate::speech::Settings::path()
-                        .and_then(|path| self.speech.choose(provider, &path))
-                    {
-                        Ok(()) => {
-                            warm_streaming(self.speech.provider());
-                            self.previous_provider = before;
-                            self.speech_toggle.set_text(
-                                self.cleanup_menu
-                                    .speech_label(speech_label(self.speech.provider())),
-                            );
-                            self.show("Transcription provider saved for the next recording");
-                        }
-                        Err(error) => self.show(&error),
-                    }
-                }
                 "remote_mode" => {
                     if self.local_lease.pending() || self.clipboard_lease.pending() {
                         self.show("Restore previous clipboard before changing modes");
@@ -2323,6 +2425,7 @@ pub fn run() -> Result<(), String> {
     app.finishLaunching();
     let shell = Rc::new(RefCell::new(Shell::new(mtm)?));
     shell.borrow_mut().check_permissions();
+    shell.borrow().warm_local_engine();
     if shell.borrow().remote_mode {
         shell
             .borrow_mut()
@@ -2342,28 +2445,27 @@ pub fn run() -> Result<(), String> {
     Ok(())
 }
 
-/// Load and warm the streaming engine in the background when it is chosen,
-/// at launch or on a switch, so the first dictation needs no Core ML compile.
-/// A helper restart is caught by the next preflight, which reloads it.
-fn warm_streaming(provider: Option<&crate::speech::Provider>) {
-    if provider == Some(&crate::speech::Provider::LocalStreaming) {
-        crate::local_streaming::Endpoint::shared().service().warm();
+const INVALID_SPEECH: &str =
+    "Speech settings invalid — choose an engine in the Transcription menu to repair";
+
+fn speech_label(provider: Option<&crate::speech::Provider>) -> &'static str {
+    use crate::speech::Provider;
+    match provider {
+        Some(Provider::Deepgram) => "Transcription: Deepgram",
+        Some(Provider::LocalParakeet) => "Transcription: Local Parakeet",
+        Some(Provider::LocalWhisper) => "Transcription: Local Whisper",
+        Some(Provider::LocalStreaming) => "Transcription: Local streaming",
+        Some(Provider::DeepgramThenParakeet) => "Transcription: Deepgram → Parakeet",
+        Some(Provider::DeepgramThenWhisper) => "Transcription: Deepgram → Whisper",
+        None => "Transcription: invalid settings — choose an engine",
     }
 }
 
-fn speech_label(provider: Option<&crate::speech::Provider>) -> &'static str {
-    match provider {
-        Some(crate::speech::Provider::Deepgram) => "Transcription: Deepgram (click for local)",
-        Some(crate::speech::Provider::LocalWhisper) => {
-            "Transcription: Local Whisper (click for local streaming)"
-        }
-        Some(crate::speech::Provider::LocalStreaming) => {
-            "Transcription: Local streaming (click for cloud → local)"
-        }
-        Some(crate::speech::Provider::DeepgramThenLocal) => {
-            "Transcription: Deepgram → local (click for cloud only)"
-        }
-        None => "Transcription: invalid settings — click to select Local Whisper",
+/// What Offline-all runs instead of the saved choice.
+fn offline_label(settings: Option<&crate::speech::Settings>) -> &'static str {
+    match settings.map(crate::speech::Settings::effective_local_engine) {
+        Some(crate::speech::LocalEngine::Whisper) => "Transcription: Local Whisper (Offline-all)",
+        _ => "Transcription: Local Parakeet (Offline-all)",
     }
 }
 

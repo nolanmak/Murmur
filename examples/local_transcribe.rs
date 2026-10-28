@@ -221,7 +221,7 @@ async fn recover_after_loss(
     let _ = server.await;
     let text = result.map_err(|_| "Cloud-loss fixture deadline exceeded")??;
     if heard.load(Ordering::Acquire) != split
-        || !matches!(progress.stage(), murmur::fallback::Stage::Local)
+        || !matches!(progress.stage(), murmur::fallback::Stage::Local { .. })
         || text.contains("Incomplete cloud fixture text")
     {
         return Err("Whole-utterance local fallback was not established".into());

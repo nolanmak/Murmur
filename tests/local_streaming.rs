@@ -9,6 +9,7 @@ use murmur::fallback::{Progress, Stage};
 use murmur::local_streaming::{
     Backend, Binding, BoxFuture, Endpoint, Event, LiveStream, LoadError, Service,
 };
+use murmur::speech::LocalEngine;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -199,7 +200,7 @@ fn service(backend: &Arc<FakeBackend>) -> Arc<Service> {
 fn streaming(service: &Arc<Service>, fallback: Option<&str>) -> CaptureProvider {
     CaptureProvider::Streaming {
         stream: Endpoint::new(service.clone()),
-        fallback: fallback.map(|url| murmur::local_stt::LocalEndpoint::new(url).unwrap()),
+        fallback: fallback.map(|url| murmur::local_stt::LocalEndpoint::new(url).unwrap().into()),
     }
 }
 
@@ -210,6 +211,29 @@ async fn dictate(
     hold: Duration,
     end: u8,
     seen_while_held: Arc<Mutex<Vec<String>>>,
+) -> Result<String, String> {
+    dictate_with(
+        provider,
+        progress,
+        hold,
+        end,
+        seen_while_held,
+        murmur::vocabulary::Profile::default(),
+        false,
+    )
+    .await
+}
+
+/// [`dictate`] with a vocabulary profile; `expand` returns the text after
+/// corrections and snippet expansion, as it would be typed.
+async fn dictate_with(
+    provider: CaptureProvider,
+    progress: Progress,
+    hold: Duration,
+    end: u8,
+    seen_while_held: Arc<Mutex<Vec<String>>>,
+    profile: murmur::vocabulary::Profile,
+    expand: bool,
 ) -> Result<String, String> {
     let control = Arc::new(AtomicU8::new(0));
     let tap = LiveTap {
@@ -234,17 +258,21 @@ async fn dictate(
             control.store(end, Ordering::Release);
         })
     };
-    let result = murmur::capture::run_provider_raw_with_preparation(
-        InputPreparation::new(move || Ok(PreparedInput::new(Box::new(tap)))),
-        provider,
-        control,
-        Arc::new(AtomicBool::new(false)),
-        progress,
-        MicrophoneStartup::default(),
-        fotw_audio::device_change::DeviceChangeSignal::new(),
-        murmur::vocabulary::Profile::default(),
-    )
-    .await;
+    let input = InputPreparation::new(move || Ok(PreparedInput::new(Box::new(tap))));
+    let changes = fotw_audio::device_change::DeviceChangeSignal::new();
+    let receiving = Arc::new(AtomicBool::new(false));
+    let startup = MicrophoneStartup::default();
+    let result = if expand {
+        murmur::capture::run_provider_with_preparation(
+            input, provider, control, receiving, progress, startup, changes, profile,
+        )
+        .await
+    } else {
+        murmur::capture::run_provider_raw_with_preparation(
+            input, provider, control, receiving, progress, startup, changes, profile,
+        )
+        .await
+    };
     watcher.await.unwrap();
     result
 }
@@ -340,7 +368,7 @@ async fn partials_show_while_held_and_only_the_final_is_returned() {
         seen.len() >= 2 && seen.iter().all(|t| t.starts_with("heard ")),
         "partials were shown while Control was held: {seen:?}"
     );
-    assert_eq!(progress.stage(), Stage::Streaming);
+    assert_eq!(progress.stage(), Stage::Streaming { corrections: 0 });
     let log = backend.log();
     assert!(log.finished, "release flushes the stream");
     assert!(log.samples >= 16 * 500, "the audio streamed while held");
@@ -428,11 +456,18 @@ async fn an_engine_error_mid_stream_retries_the_kept_audio_on_the_batch_engine()
         retried >= 16 * 650,
         "all the attempt's audio was kept, before and after the failure: {retried} samples"
     );
-    assert_eq!(progress.stage(), Stage::StreamingRetried);
+    assert_eq!(
+        progress.stage(),
+        Stage::StreamingRetried {
+            engine: LocalEngine::Whisper
+        }
+    );
     assert!(
-        Stage::StreamingRetried
-            .completion_message("Paste sent")
-            .contains("Streaming failed"),
+        Stage::StreamingRetried {
+            engine: LocalEngine::Whisper
+        }
+        .completion_message("Paste sent")
+        .contains("Streaming failed; retried on Local Whisper"),
         "the user is told"
     );
 }
@@ -528,7 +563,12 @@ async fn streaming_not_ready_falls_back_to_the_batch_engine_before_recording() {
     assert_eq!(text, "From the batch engine.");
     assert!(gateway.await.unwrap() > 0);
     assert_eq!(backend.log().opened, 0, "no stream was opened");
-    assert_eq!(progress.stage(), Stage::StreamingUnavailable);
+    assert_eq!(
+        progress.stage(),
+        Stage::StreamingUnavailable {
+            engine: LocalEngine::Whisper
+        }
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -597,6 +637,7 @@ fn murmur_use_streaming_is_a_command_that_switches_to_local_streaming() {
         Command::Use(Target::Streaming),
         Some(&Provider::Deepgram),
         None,
+        LocalEngine::Parakeet,
         true,
         &ok,
         &Err("no key".into()),
@@ -612,10 +653,47 @@ fn murmur_use_streaming_is_a_command_that_switches_to_local_streaming() {
             Command::Use(Target::Streaming),
             Some(&Provider::Deepgram),
             None,
+            LocalEngine::Parakeet,
             false,
             &Err("Local streaming is still loading its model".into()),
             &ok,
         ),
         Decision::Refuse(_)
     ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_streaming_final_gets_vocabulary_corrections_before_snippets() {
+    // #102 for streaming: the final is corrected like every local engine's
+    // text, then snippets expand from the corrected text.
+    let backend = FakeBackend::new(Script::Speak {
+        final_text: "Insert snippet Fluid Audio.".into(),
+    });
+    let service = service(&backend);
+    let profile = murmur::vocabulary::Profile {
+        recognition_hints: vec!["FluidAudio".into()],
+        snippets: vec![murmur::vocabulary::Snippet {
+            name: "FluidAudio".into(),
+            text: "Expanded only after correction".into(),
+        }],
+        ..Default::default()
+    };
+    let progress = Progress::default();
+    let text = dictate_with(
+        streaming(&service, None),
+        progress.clone(),
+        Duration::from_millis(300),
+        1,
+        Arc::default(),
+        profile,
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(text, "Expanded only after correction");
+    assert_eq!(progress.stage(), Stage::Streaming { corrections: 1 });
+    assert_eq!(
+        progress.stage().label(),
+        "Local streaming: 1 vocabulary correction available"
+    );
 }

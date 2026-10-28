@@ -35,7 +35,10 @@ fn main() -> Result<(), String> {
     }
     menu.handle("cleanup:offline")
         .ok_or("Missing privacy route")??;
-    if menu.speech_label("Transcription: Deepgram") != "Transcription: Local Whisper (Offline-all)"
+    if menu.speech_label(
+        "Transcription: Deepgram",
+        "Transcription: Local Parakeet (Offline-all)",
+    ) != "Transcription: Local Parakeet (Offline-all)"
     {
         return Err("Privacy override hidden in speech label".into());
     }
