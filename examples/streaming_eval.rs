@@ -79,7 +79,11 @@ impl AudioTap for WavTap {
             // Like a live mic, keep delivering (silence) until stopped.
             while !stop.load(Ordering::Acquire) {
                 std::thread::sleep(Duration::from_millis(10));
-                sink.on_frames(&[0.0; 160], CaptureTimestamp::new(0, 0), FrameFlags::empty());
+                sink.on_frames(
+                    &[0.0; 160],
+                    CaptureTimestamp::new(0, 0),
+                    FrameFlags::empty(),
+                );
             }
         });
         Ok(self.format())
@@ -131,7 +135,9 @@ async fn dictate(provider: CaptureProvider, pcm: Arc<Vec<f32>>) -> Value {
             let mut partials = Vec::new();
             loop {
                 if let (Some(text), Some(begin)) = (progress.live(), *started.lock().unwrap())
-                    && partials.last().is_none_or(|(_, last): &(f64, String)| *last != text)
+                    && partials
+                        .last()
+                        .is_none_or(|(_, last): &(f64, String)| *last != text)
                 {
                     partials.push((begin.elapsed().as_secs_f64(), text));
                 }
@@ -252,7 +258,10 @@ fn main() {
             let row = runtime.block_on(async {
                 let launched = Instant::now();
                 service.warm();
-                service.ready(Duration::from_secs(300)).await.expect("ready");
+                service
+                    .ready(Duration::from_secs(300))
+                    .await
+                    .expect("ready");
                 let ready_ms = launched.elapsed().as_secs_f64() * 1000.0;
                 let mut runs = Vec::new();
                 for _ in 0..6 {
@@ -268,7 +277,10 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
             rows.push(row);
         }
-        println!("{}", serde_json::to_string_pretty(&json!({"launches": rows})).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({"launches": rows})).unwrap()
+        );
         runtime.shutdown_background();
         return;
     }
