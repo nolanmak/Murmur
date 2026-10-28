@@ -18,9 +18,10 @@ p.add_argument("-m")
 p.add_argument("--request-path", default="")
 p.add_argument("--vad", action="store_true")
 p.add_argument("--vad-model")
+p.add_argument("--vad-threshold")
 a, _ = p.parse_known_args()
 pathlib.Path(a.m).parent.parent.joinpath("engine-vad.json").write_text(
-    json.dumps({"vad": a.vad, "vad_model": a.vad_model}))
+    json.dumps({"vad": a.vad, "vad_model": a.vad_model, "threshold": a.vad_threshold}))
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200 if self.path == a.request_path + "/health" else 404)
@@ -176,6 +177,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertIs(caps.get("vad"), True)
         engine = json.loads((state / "engine-vad.json").read_text())
         self.assertTrue(engine["vad"])
+        self.assertEqual(engine["threshold"], "0.8")
         vad = pathlib.Path(engine["vad_model"])
         self.assertEqual(vad, (state / "vad.bin").resolve())
         self.assertEqual(vad.stem, hashlib.sha256(vad.read_bytes()).hexdigest())

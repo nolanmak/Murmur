@@ -92,7 +92,11 @@ acceptance are recorded in the capability contract document.
 
 ## Silero VAD (Murmur #99)
 
-The managed engine starts `whisper-server --vad --vad-model <verified file>`.
+The managed engine starts `whisper-server --vad --vad-model <verified file>
+--vad-threshold 0.8`. The threshold is above upstream's 0.5: a sweep on the #247
+corpus showed 0.5 still passed short music/noise segments that Whisper turned
+into text such as "Thank you.", while 0.8 dropped them and kept speech mixed
+with music at 10 dB SNR.
 whisper.cpp runs Silero VAD over each request and only transcribes detected
 speech; a request with no speech returns `{"text": ""}`, which Murmur reports as
 "No speech detected" without inserting anything. The gateway advertises

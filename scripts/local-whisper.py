@@ -34,6 +34,10 @@ VAD_SHA256 = "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987"
 VAD_URL = (
     f"https://huggingface.co/ggml-org/whisper-vad/resolve/{VAD_REVISION}/ggml-silero-v6.2.0.bin"
 )
+# Silero speech probability needed to decode. 0.8 (upstream default 0.5) drops
+# the short music/noise segments Whisper turned into "Thank you." etc. while
+# keeping speech in music at 10 dB SNR (Murmur #99 corpus sweep).
+VAD_THRESHOLD = "0.8"
 VAD_MISSING = (
     "missing or corrupt VAD model; run setup --vad-only or import-model --vad explicitly"
 )
@@ -290,6 +294,8 @@ def supervise(state, binary, port, token, timeout):
                 "--vad",
                 "--vad-model",
                 str(vad),
+                "--vad-threshold",
+                VAD_THRESHOLD,
             ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
