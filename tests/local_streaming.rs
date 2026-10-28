@@ -11,7 +11,7 @@ use murmur::local_streaming::{
 };
 use murmur::speech::LocalEngine;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -35,6 +35,8 @@ struct Log {
     languages: Vec<Option<String>>,
     /// Samples each stream received, in opening order.
     per_stream: Vec<usize>,
+    /// The distinct sample values each stream received.
+    values: Vec<std::collections::BTreeSet<i16>>,
 }
 
 struct FakeBackend {
@@ -87,6 +89,7 @@ impl Backend for FakeBackend {
         log.dropped = false;
         log.languages.push(language);
         log.per_stream.push(0);
+        log.values.push(Default::default());
         drop(log);
         let stream = FakeStream {
             script: self.script.lock().unwrap().clone(),
@@ -121,6 +124,7 @@ impl LiveStream for FakeStream {
         let mut log = self.log.lock().unwrap();
         log.samples = self.samples;
         *log.per_stream.last_mut().unwrap() = self.samples;
+        log.values.last_mut().unwrap().extend(pcm.iter().copied());
         drop(log);
         match &self.script {
             Script::Speak { .. } if self.samples / 1600 > before / 1600 => {
@@ -154,11 +158,13 @@ impl LiveStream for FakeStream {
 
 // ------------------------------------------------------------ fake microphone
 
-/// Delivers 10 ms frames of 16 kHz audio every 10 ms until stopped.
+/// Delivers 10 ms frames of 16 kHz audio every 10 ms until stopped, counting
+/// what it delivered.
 struct LiveTap {
     id: TapId,
     stop: Arc<AtomicBool>,
     value: f32,
+    delivered: Arc<AtomicUsize>,
 }
 impl AudioTap for LiveTap {
     fn id(&self) -> &TapId {
@@ -173,6 +179,7 @@ impl AudioTap for LiveTap {
     fn start(&mut self, mut sink: Box<dyn FrameSink>) -> Result<StreamFormat, TapError> {
         let stop = self.stop.clone();
         let value = self.value;
+        let delivered = self.delivered.clone();
         std::thread::spawn(move || {
             while !stop.load(Ordering::Acquire) {
                 sink.on_frames(
@@ -180,6 +187,7 @@ impl AudioTap for LiveTap {
                     CaptureTimestamp::new(0, 0),
                     FrameFlags::empty(),
                 );
+                delivered.fetch_add(160, Ordering::AcqRel);
                 std::thread::sleep(Duration::from_millis(10));
             }
         });
@@ -204,11 +212,18 @@ fn streaming(service: &Arc<Service>, fallback: Option<&str>) -> CaptureProvider 
     }
 }
 
-/// One dictation: hold for `hold`, then release (control 1) or Esc (2).
+/// Samples in `ms` milliseconds of 16 kHz audio.
+fn ms(ms: usize) -> usize {
+    ms * 16
+}
+
+/// One dictation: hold until the mic has delivered `hold` samples, then
+/// release (control 1) or Esc (2). Counting samples instead of wall time
+/// keeps the tests independent of how fast the runner is.
 async fn dictate(
     provider: CaptureProvider,
     progress: Progress,
-    hold: Duration,
+    hold: usize,
     end: u8,
     seen_while_held: Arc<Mutex<Vec<String>>>,
 ) -> Result<String, String> {
@@ -220,33 +235,43 @@ async fn dictate(
         seen_while_held,
         murmur::vocabulary::Profile::default(),
         false,
+        0.25,
     )
     .await
 }
 
-/// [`dictate`] with a vocabulary profile; `expand` returns the text after
-/// corrections and snippet expansion, as it would be typed.
+/// [`dictate`] with a vocabulary profile and the mic's signal level; `expand`
+/// returns the text after corrections and snippet expansion, as it would be
+/// typed.
+#[allow(clippy::too_many_arguments, reason = "test fixture knobs")]
 async fn dictate_with(
     provider: CaptureProvider,
     progress: Progress,
-    hold: Duration,
+    hold: usize,
     end: u8,
     seen_while_held: Arc<Mutex<Vec<String>>>,
     profile: murmur::vocabulary::Profile,
     expand: bool,
+    value: f32,
 ) -> Result<String, String> {
     let control = Arc::new(AtomicU8::new(0));
+    let delivered = Arc::new(AtomicUsize::new(0));
     let tap = LiveTap {
         id: TapId::mic("live"),
         stop: Arc::new(AtomicBool::new(false)),
-        value: 0.25,
+        value,
+        delivered: delivered.clone(),
     };
     let watcher = {
         let control = control.clone();
         let progress = progress.clone();
         tokio::spawn(async move {
             let started = tokio::time::Instant::now();
-            while started.elapsed() < hold {
+            while delivered.load(Ordering::Acquire) < hold {
+                assert!(
+                    started.elapsed() < Duration::from_secs(30),
+                    "the fake mic stalled"
+                );
                 if let Some(text) = progress.live() {
                     let mut seen = seen_while_held.lock().unwrap();
                     if seen.last() != Some(&text) {
@@ -353,7 +378,7 @@ async fn partials_show_while_held_and_only_the_final_is_returned() {
     let text = dictate(
         streaming(&service, None),
         progress.clone(),
-        Duration::from_millis(600),
+        ms(1000),
         1,
         seen.clone(),
     )
@@ -386,7 +411,7 @@ async fn escape_mid_stream_inserts_nothing_and_nothing_arrives_after() {
     let result = dictate(
         streaming(&service, None),
         progress.clone(),
-        Duration::from_millis(400),
+        ms(800),
         2,
         seen.clone(),
     )
@@ -420,7 +445,7 @@ async fn a_command_utterance_comes_back_whole_for_the_command_path() {
     let raw = dictate(
         streaming(&service, None),
         Progress::default(),
-        Duration::from_millis(300),
+        ms(300),
         1,
         Arc::default(),
     )
@@ -444,7 +469,7 @@ async fn an_engine_error_mid_stream_retries_the_kept_audio_on_the_batch_engine()
     let text = dictate(
         streaming(&service, Some(&url)),
         progress.clone(),
-        Duration::from_millis(700),
+        ms(700),
         1,
         Arc::default(),
     )
@@ -479,7 +504,7 @@ async fn an_engine_error_without_a_batch_engine_reports_and_inserts_nothing() {
     let error = dictate(
         streaming(&service, None),
         Progress::default(),
-        Duration::from_millis(400),
+        ms(400),
         1,
         Arc::default(),
     )
@@ -502,7 +527,7 @@ async fn two_rapid_dictations_never_mix_stream_state() {
     let result = dictate(
         streaming(&service, None),
         first.clone(),
-        Duration::from_millis(1000),
+        ms(1000),
         2,
         Arc::default(),
     )
@@ -515,12 +540,17 @@ async fn two_rapid_dictations_never_mix_stream_state() {
     };
     let second = Progress::default();
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let text = dictate(
+    // The second attempt's microphone carries a different signal, so each
+    // stream's audio can be told apart.
+    let text = dictate_with(
         streaming(&service, None),
         second.clone(),
-        Duration::from_millis(200),
+        ms(200),
         1,
         seen.clone(),
+        murmur::vocabulary::Profile::default(),
+        false,
+        0.5,
     )
     .await
     .unwrap();
@@ -532,13 +562,21 @@ async fn two_rapid_dictations_never_mix_stream_state() {
         "the second attempt showed only its own partials"
     );
     assert_eq!(backend.log().opened, 2, "a fresh stream per dictation");
-    // Each stream got only its own attempt's audio: the first ~1 s, the
-    // second ~200 ms (plus mic start/stop slack), never the two together.
-    let per_stream = backend.log().per_stream.clone();
+    // Each stream got only its own attempt's audio.
+    let values = backend.log().values.clone();
+    let first_signal = (0.25f32 * 32767.0) as i16;
+    let second_signal = (0.5f32 * 32767.0) as i16;
     assert!(
-        per_stream[0] >= 16 * 600 && per_stream[1] > 0 && per_stream[1] < per_stream[0],
-        "per stream: {per_stream:?}"
+        values[0].contains(&first_signal) && !values[0].contains(&second_signal),
+        "first stream: {:?}",
+        values[0]
     );
+    assert!(
+        values[1].contains(&second_signal) && !values[1].contains(&first_signal),
+        "second stream: {:?}",
+        values[1]
+    );
+    assert!(backend.log().per_stream[1] >= ms(200));
     assert_ne!(first.live(), second.live());
 }
 
@@ -554,7 +592,7 @@ async fn streaming_not_ready_falls_back_to_the_batch_engine_before_recording() {
     let text = dictate(
         streaming(&service, Some(&url)),
         progress.clone(),
-        Duration::from_millis(300),
+        ms(300),
         1,
         Arc::default(),
     )
@@ -585,7 +623,7 @@ async fn a_helper_restart_after_the_mic_opened_inserts_nothing_from_the_stream()
     let error = dictate(
         streaming(&service, None),
         Progress::default(),
-        Duration::from_millis(400),
+        ms(400),
         1,
         Arc::default(),
     )
@@ -682,11 +720,12 @@ async fn the_streaming_final_gets_vocabulary_corrections_before_snippets() {
     let text = dictate_with(
         streaming(&service, None),
         progress.clone(),
-        Duration::from_millis(300),
+        ms(300),
         1,
         Arc::default(),
         profile,
         true,
+        0.25,
     )
     .await
     .unwrap();
