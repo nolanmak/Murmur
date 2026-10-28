@@ -59,13 +59,12 @@ pub struct Binding {
     pub revision: String,
 }
 impl Binding {
-    /// Whether a final's `model` names this binding: the helper reports
-    /// `<model>@<revision>`; a bare model id is accepted too.
+    /// Whether a final's `model` names this binding. The helper always reports
+    /// `<model>@<revision>`; anything else, a bare id included, is refused.
     pub fn produced(&self, model: &str) -> bool {
-        match model.split_once('@') {
-            Some((id, revision)) => id == self.model && revision == self.revision,
-            None => model == self.model,
-        }
+        model
+            .split_once('@')
+            .is_some_and(|(id, revision)| id == self.model && revision == self.revision)
     }
 }
 
@@ -217,7 +216,11 @@ impl Service {
         let mut load = self.load.lock().unwrap_or_else(|e| e.into_inner());
         let reusable = load.as_ref().is_some_and(|current| match current.peek() {
             None => true,
-            Some(Ok(_)) => self.backend.instance().is_some(),
+            // Only for the helper instance it loaded into. A replacement helper
+            // replays loads, but a replay that fails is dropped silently, and
+            // a replay reads whatever revision is installed now; so load again
+            // (idempotent in the helper) and bind to what that reports.
+            Some(Ok(binding)) => self.backend.instance() == Some(binding.instance),
             // A failed load is retried, so installing a missing model, even
             // from the CLI while the app runs, needs no restart.
             Some(Err(_)) => false,
@@ -263,7 +266,7 @@ impl Service {
             );
         }
         let load = self.load();
-        let mut binding = match tokio::time::timeout(deadline, load).await {
+        let binding = match tokio::time::timeout(deadline, load).await {
             Ok(Ok(binding)) => binding,
             Ok(Err(error)) => return Err(error.message()),
             Err(_) => {
@@ -273,11 +276,14 @@ impl Service {
                 );
             }
         };
-        // After a helper restart the client replays the load into the new
-        // instance; this utterance binds to whichever instance serves now.
-        binding.instance = self.backend.instance().ok_or_else(|| {
-            LoadError::Failed("the speech helper is not running".into()).message()
-        })?;
+        // A load from an instance that has since been replaced proves nothing
+        // about the one serving now; the next attempt loads into it.
+        if self.backend.instance() != Some(binding.instance) {
+            return Err(
+                "Local Parakeet's helper restarted; it is reloading, so try again. Nothing was recorded"
+                    .into(),
+            );
+        }
         Ok(binding)
     }
 
@@ -327,10 +333,10 @@ impl Service {
             .await?
             .map_err(|e| format!("Local Parakeet failed: {e}; no text inserted"))?;
         if self.backend.instance() != Some(binding.instance)
-            || recognized
+            || !recognized
                 .model
                 .as_deref()
-                .is_some_and(|model| !binding.produced(model))
+                .is_some_and(|model| binding.produced(model))
         {
             return Err(CHANGED.into());
         }

@@ -103,7 +103,11 @@ struct Fake {
     /// The gate's peak probability; speech is certain unless a test lowers it.
     peak: Mutex<Option<f32>>,
     text: Mutex<String>,
+    /// What finals name; `None` reports `parakeet-unified@<revision>` as the
+    /// helper does.
     model: Mutex<Option<String>>,
+    /// The installed revision the next load reads.
+    revision: Mutex<String>,
     speech_calls: AtomicUsize,
     recognized: Mutex<Vec<usize>>,
     installs: AtomicUsize,
@@ -113,7 +117,7 @@ impl Fake {
         let fake = Self::default();
         fake.instance.store(1, Ordering::SeqCst);
         *fake.text.lock().unwrap() = "Fixture text.".into();
-        *fake.model.lock().unwrap() = Some("parakeet-unified".into());
+        *fake.revision.lock().unwrap() = "d32e972dd4315f1dc3f6be28fb2aab0ab3e80358".into();
         Arc::new(fake)
     }
 }
@@ -132,7 +136,7 @@ impl Backend for Handle {
             Ok(Binding {
                 instance: fake.instance.load(Ordering::SeqCst),
                 model: "parakeet-unified".into(),
-                revision: "d32e972dd4315f1dc3f6be28fb2aab0ab3e80358".into(),
+                revision: fake.revision.lock().unwrap().clone(),
             })
         })
     }
@@ -162,7 +166,9 @@ impl Backend for Handle {
             fake.recognized.lock().unwrap().push(pcm.len());
             Ok(Recognized {
                 text: fake.text.lock().unwrap().clone(),
-                model: fake.model.lock().unwrap().clone(),
+                model: Some(fake.model.lock().unwrap().clone().unwrap_or_else(|| {
+                    format!("parakeet-unified@{}", fake.revision.lock().unwrap())
+                })),
             })
         })
     }
@@ -332,9 +338,11 @@ async fn the_engine_is_bound_per_utterance() {
     let endpoint = endpoint(&fake);
     let error = dictate(&endpoint).await.0.unwrap_err();
     assert!(error.contains("no text inserted"), "{error}");
-    // The next utterance binds to the instance serving now.
+    // The next utterance loads again into the instance serving now, rather
+    // than trusting that the client's replay of the load succeeded.
     fake.restart_during_speech.store(false, Ordering::SeqCst);
     assert_eq!(dictate(&endpoint).await.0.unwrap(), "Fixture text.");
+    assert_eq!(fake.loads.load(Ordering::SeqCst), 2);
 
     // Text from a different model than preflight checked is not typed.
     *fake.model.lock().unwrap() = Some("another-model".into());
@@ -479,4 +487,82 @@ async fn unknown_tokens_are_never_typed() {
         dictate(&endpoint(&fake)).await.0.unwrap(),
         "como contribuje t ests, luz"
     );
+}
+
+#[tokio::test]
+async fn after_a_helper_restart_whose_replay_failed_the_microphone_stays_closed() {
+    let fake = Fake::new();
+    let endpoint = endpoint(&fake);
+    assert_eq!(dictate(&endpoint).await.0.unwrap(), "Fixture text.");
+    // The helper crashed and was replaced; replaying the model load failed,
+    // so the new instance has no Parakeet loaded.
+    fake.instance.fetch_add(1, Ordering::SeqCst);
+    *fake.load.lock().unwrap() = Some(LoadError::Invalid("parakeet-unified".into()));
+    let (result, opened) = dictate(&endpoint).await;
+    let message = result.unwrap_err();
+    assert!(message.contains("install-parakeet"), "{message}");
+    assert_eq!(
+        opened, 0,
+        "preflight must not trust the first instance's load"
+    );
+}
+
+#[tokio::test]
+async fn a_revision_installed_by_another_process_is_picked_up_after_a_restart() {
+    let fake = Fake::new();
+    let endpoint = endpoint(&fake);
+    assert_eq!(dictate(&endpoint).await.0.unwrap(), "Fixture text.");
+    // `murmur speech install-parakeet` in another process selected a new
+    // revision, then the app's helper restarted and loaded it.
+    *fake.revision.lock().unwrap() = "0123456789abcdef0123456789abcdef01234567".into();
+    fake.instance.fetch_add(1, Ordering::SeqCst);
+    assert_eq!(dictate(&endpoint).await.0.unwrap(), "Fixture text.");
+}
+
+#[tokio::test]
+async fn a_final_must_name_the_bound_model_and_revision() {
+    let fake = Fake::new();
+    let endpoint = endpoint(&fake);
+    for model in ["parakeet-unified", "parakeet-unified@another-revision"] {
+        *fake.model.lock().unwrap() = Some(model.into());
+        let error = dictate(&endpoint).await.0.unwrap_err();
+        assert!(error.contains("no text inserted"), "{model}: {error}");
+    }
+}
+
+#[tokio::test]
+async fn a_gated_utterance_reports_no_speech_instead_of_typing_nothing() {
+    let fake = Fake::new();
+    *fake.peak.lock().unwrap() = Some(0.6);
+    let (result, _) = dictate(&endpoint(&fake)).await;
+    let mut dictation = murmur::core::Dictation::default();
+    assert!(dictation.start_manual());
+    assert!(dictation.stop());
+    let effect = dictation.complete(dictation.generation(), result).unwrap();
+    assert_eq!(effect.status_message(), Some(murmur::core::NO_SPEECH));
+}
+
+#[test]
+fn a_machine_without_saved_settings_keeps_an_installed_whisper_runtime() {
+    // speech.json lives in .../Application Support/Murmur; the managed Whisper
+    // runtime keeps its selected model in .../Application Support/murmur.
+    for (whisper_installed, expected) in [
+        (true, murmur::speech::LocalEngine::Whisper),
+        (false, murmur::speech::LocalEngine::Parakeet),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let support = root.path().join("Application Support");
+        let path = support.join("Murmur/speech.json");
+        if whisper_installed {
+            let state = support.join("murmur/local-whisper");
+            std::fs::create_dir_all(&state).unwrap();
+            std::fs::write(state.join("model.bin"), b"ggml").unwrap();
+        }
+        let settings = Settings::load(&path).unwrap();
+        assert_eq!(
+            settings.local_engine, expected,
+            "whisper installed: {whisper_installed}"
+        );
+        assert_eq!(settings.provider, Provider::Deepgram);
+    }
 }

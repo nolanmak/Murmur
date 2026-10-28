@@ -165,9 +165,20 @@ impl Settings {
                 settings.validate()?;
                 Ok(settings)
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::unsaved(path)),
             Err(_) => Err("Cannot read speech settings".into()),
         }
+    }
+    /// Settings before any choice is saved. Parakeet is the local engine on a
+    /// new machine, but someone who installed the managed Whisper runtime and
+    /// never saved a choice already relies on Whisper (Offline-all, "use
+    /// local"), so they keep it until they choose.
+    fn unsaved(path: &Path) -> Self {
+        let mut settings = Self::default();
+        if whisper_runtime_installed(path) {
+            settings.local_engine = LocalEngine::Whisper;
+        }
+        settings
     }
     pub fn validate(&self) -> Result<(), String> {
         crate::local_stt::LocalEndpoint::new(&self.local_endpoint).map(|_| ())
@@ -241,4 +252,15 @@ impl Selection {
         self.0 = Ok(settings);
         Ok(())
     }
+}
+
+/// Whether the managed Whisper runtime (`scripts/local-whisper.py --app
+/// murmur`) has a selected model beside this settings file:
+/// `<Application Support>/Murmur/speech.json` and
+/// `<Application Support>/murmur/local-whisper/model.bin`.
+fn whisper_runtime_installed(settings: &Path) -> bool {
+    settings
+        .parent()
+        .and_then(Path::parent)
+        .is_some_and(|support| support.join("murmur/local-whisper/model.bin").exists())
 }
