@@ -161,6 +161,13 @@ Local Whisper supports offline dictation after explicit engine/model setup. Choo
 **Transcription: Local Whisper** in the menu, or run `murmur speech local`.
 See [setup, privacy and acceptance evidence](docs/local-whisper.md).
 
+**Local streaming** (Nemotron 3.5 through the bundled `fotw-speechd` helper)
+shows words in the indicator while Control is held and types the final text
+about 50 ms after release. Run `murmur speech install-streaming` once, then
+choose it in the Transcription menu, run `murmur speech streaming`, or say
+"Murmur, use streaming". It falls back to Local Whisper when it isn't ready and
+never uses the cloud. See [local streaming](docs/local-streaming.md).
+
 ### Wi-Fi resilience
 
 `murmur speech fallback [http://127.0.0.1:17863]` selects Deepgram with local
@@ -185,6 +192,7 @@ Hold Control and say only a command, starting with "Murmur":
 | Say | Next dictation uses |
 |---|---|
 | "Murmur, use local" | Local Whisper |
+| "Murmur, use streaming" | Local streaming |
 | "Murmur, use Deepgram" (or "use cloud") | Deepgram only |
 | "Murmur, use backup" | Deepgram with local backup |
 | "Murmur, undo" | The engine before the last switch |
