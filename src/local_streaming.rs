@@ -243,13 +243,21 @@ impl Service {
         if self.installing.swap(true, Ordering::AcqRel) {
             return Err("A streaming model install is already running".into());
         }
+        // Cleared however this ends, including when the caller gives up.
+        struct Installing<'a>(&'a AtomicBool);
+        impl Drop for Installing<'_> {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
+            }
+        }
+        let guard = Installing(&self.installing);
         let result = self
             .handle()
             .spawn(self.backend.install(from))
             .await
             .unwrap_or_else(|_| Err("the install stopped".into()));
         *self.load.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        self.installing.store(false, Ordering::Release);
+        drop(guard);
         if result.is_ok() {
             self.warm();
         }
@@ -387,24 +395,34 @@ impl Endpoint {
         // Whatever happens, this attempt shows no partial after it ends.
         let _done = progress.live_guard();
         let mut pcm: Vec<i16> = Vec::new();
+        // Whether any sample was louder than digital silence (the batch
+        // path's bar, local_stt): a wholly silent hold types nothing.
+        let mut heard = false;
         let keep = |pcm: &mut Vec<i16>, chunk: &[i16]| {
             let room = MAX_SAMPLES.saturating_sub(pcm.len());
             pcm.extend(chunk.iter().take(room));
         };
         let Some(binding) = self.binding.clone() else {
-            return Err(drain(audio, pcm, "it was not checked before recording".into()).await);
+            return Err(drain(
+                audio,
+                pcm,
+                "it was not checked before recording".into(),
+                &progress,
+            )
+            .await);
         };
         if self.service.backend.instance() != Some(binding.instance) {
             return Err(drain(
                 audio,
                 pcm,
                 "the helper restarted after the mic opened".into(),
+                &progress,
             )
             .await);
         }
         let mut stream = match self.service.open(self.language.clone()).await {
             Ok(stream) => stream,
-            Err(reason) => return Err(drain(audio, pcm, reason).await),
+            Err(reason) => return Err(drain(audio, pcm, reason, &progress).await),
         };
         // While held: forward audio, show partials.
         loop {
@@ -413,14 +431,15 @@ impl Endpoint {
                 event = stream.next() => match event {
                     Some(Event::Partial(text)) => progress.set_live(&text),
                     Some(Event::Final { .. }) => {}
-                    Some(Event::Failed(reason)) => return Err(drain(audio, pcm, reason).await),
-                    None => return Err(drain(audio, pcm, "the stream ended early".into()).await),
+                    Some(Event::Failed(reason)) => return Err(drain(audio, pcm, reason, &progress).await),
+                    None => return Err(drain(audio, pcm, "the stream ended early".into(), &progress).await),
                 },
                 chunk = audio.recv() => match chunk {
                     Some(chunk) => {
+                        heard |= chunk.iter().any(|v| v.unsigned_abs() >= 16);
                         keep(&mut pcm, &chunk);
                         if let Err(reason) = stream.send(&chunk).await {
-                            return Err(drain(audio, pcm, reason).await);
+                            return Err(drain(audio, pcm, reason, &progress).await);
                         }
                     }
                     None => break,
@@ -432,6 +451,10 @@ impl Endpoint {
                 reason: "Cancelled".into(),
                 pcm,
             });
+        }
+        if !heard {
+            // Dropping the stream cancels it; nothing was said.
+            return Ok(String::new());
         }
         // Released: flush the last step and take the final.
         if let Err(reason) = stream.finish().await {
@@ -470,7 +493,10 @@ async fn drain(
     mut audio: mpsc::Receiver<Vec<i16>>,
     mut pcm: Vec<i16>,
     reason: String,
+    progress: &crate::fallback::Progress,
 ) -> StreamFailure {
+    // The stream is gone; don't leave its last words on screen until release.
+    progress.end_live();
     while let Some(chunk) = audio.recv().await {
         let room = MAX_SAMPLES.saturating_sub(pcm.len());
         pcm.extend(chunk.into_iter().take(room));
@@ -538,9 +564,9 @@ impl Inner {
                     self.engine
                 ))
             })?;
-        if info.model.as_ref().is_some_and(|model| !model.installed) {
-            return Err(LoadError::Missing);
-        }
+        // Not the handshake's `installed`: a model installed since (by the
+        // CLI, another process) must load without restarting the helper.
+        // The helper's own load reads the store and refuses a missing one.
         let map = |error: ClientError| match error.code() {
             ErrorCode::ModelMissing => LoadError::Missing,
             ErrorCode::ModelInvalid => LoadError::Invalid,

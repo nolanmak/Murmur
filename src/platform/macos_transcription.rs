@@ -18,8 +18,9 @@ const INSTALL: &str = "transcription:install-parakeet";
 
 /// The local models' licenses, shown in the menu as the attribution CC-BY-4.0
 /// requires. NOTICE in the bundle has the full text.
-pub const LICENSES: [&str; 5] = [
+pub const LICENSES: [&str; 6] = [
     "Parakeet Unified 0.6B (English) · NVIDIA · CC-BY-4.0",
+    "Nemotron 3.5 ASR Streaming 0.6B (local streaming) · NVIDIA · OpenMDW-1.1",
     "Silero VAD · Silero Team · MIT",
     "FluidAudio runtime · Apache-2.0",
     "Whisper base.en · OpenAI · MIT",

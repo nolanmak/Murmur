@@ -590,15 +590,15 @@ impl SpeechdInner {
             .capabilities()
             .ok_or_else(|| LoadError::Failed("the speech helper is not running".into()))?;
         for engine in self.engines() {
-            let info = capabilities.engine(engine).ok_or_else(|| {
+            capabilities.engine(engine).ok_or_else(|| {
                 LoadError::Unavailable(format!(
                     "the speech helper does not offer {engine}; rebuild Murmur"
                 ))
             })?;
-            if info.model.as_ref().is_some_and(|model| !model.installed) {
-                return Err(LoadError::Missing(engine.into()));
-            }
         }
+        // Not the handshake's `installed`: a model installed since (from the
+        // CLI, another process) must load without restarting the helper. The
+        // helper's own load reads the store and refuses a missing model.
         let map = |engine: &str, error: ClientError| match error.code() {
             ErrorCode::ModelMissing => LoadError::Missing(engine.into()),
             ErrorCode::ModelInvalid => LoadError::Invalid(engine.into()),

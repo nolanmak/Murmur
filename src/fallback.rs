@@ -92,6 +92,11 @@ impl Progress {
             live.0 = Some(text.to_owned());
         }
     }
+    /// The stream died: take its last partial off screen now, while the key
+    /// may still be held, and take no more.
+    pub(crate) fn end_live(&self) {
+        *self.1.0.lock().unwrap_or_else(|e| e.into_inner()) = (None, true);
+    }
     /// Hold while a stream runs; dropping it ends the live text for good.
     pub(crate) fn live_guard(&self) -> LiveGuard {
         LiveGuard(self.1.clone())

@@ -225,6 +225,11 @@ fn main() {
     let models_root = std::path::absolute(models_root.expect("--models-root")).unwrap();
     let manifest = manifest.expect("--manifest");
     let clips = clips(&manifest, music_snr);
+    assert!(
+        !clips.is_empty(),
+        "no clips in {} for this selection",
+        manifest.display()
+    );
 
     let mut config = fotw_speechd_client::SpeechdConfig::new(&helper, &models_root);
     if sandbox {

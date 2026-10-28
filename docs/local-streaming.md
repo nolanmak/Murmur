@@ -50,8 +50,11 @@ Streaming 0.6B (multilingual, NVIDIA, OpenMDW-1.1) in FlyOnTheWall's
   dictation's preflight waits for it.
 - **Warmup** runs at launch and whenever streaming is chosen: one silent step,
   then a reset.
-- **Never cloud.** Offline-all keeps streaming selected. After setup the
-  helper runs with no network access.
+- **Never cloud.** Offline-all keeps streaming selected. After setup nothing
+  on the streaming path opens a network connection: the helper reads models
+  only from local files, and only `install` downloads. The acceptance runs
+  checked this with the helper under `sandbox-exec` with networking denied;
+  Murmur itself does not sandbox the helper.
 
 ## The engine
 

@@ -2504,6 +2504,10 @@ fn speech_label(provider: Option<&crate::speech::Provider>) -> &'static str {
 
 /// What Offline-all runs instead of the saved choice.
 fn offline_label(settings: Option<&crate::speech::Settings>) -> &'static str {
+    // Offline-all keeps streaming, which is local already.
+    if settings.is_some_and(|s| s.provider == crate::speech::Provider::LocalStreaming) {
+        return "Transcription: Local streaming (Offline-all)";
+    }
     match settings.map(crate::speech::Settings::effective_local_engine) {
         Some(crate::speech::LocalEngine::Whisper) => "Transcription: Local Whisper (Offline-all)",
         _ => "Transcription: Local Parakeet (Offline-all)",

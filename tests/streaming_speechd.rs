@@ -231,3 +231,35 @@ async fn leaving_streaming_unloads_the_engine_in_the_helper_and_it_reloads_on_re
     drop(tx);
     assert_eq!(run.await.unwrap().expect("final"), "steps=1 lang=en");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_model_installed_after_the_helper_started_loads_without_a_restart() {
+    // The CLI (another process) installs the model while the app's helper is
+    // running. The helper's startup capabilities still say "not installed";
+    // the next load must ask the helper, which reads the models on disk.
+    let root = std::env::temp_dir().join(format!(
+        "murmur-streaming-install-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let config = fotw_speechd_client::SpeechdConfig::new(fake_helper(), &root)
+        .arg("--fake-engines")
+        .arg("--pinned")
+        .arg("nemotron-3.5@r1");
+    let service =
+        Arc::new(Service::new(Arc::new(SpeechdBackend::new(Ok(config), "nemotron-3.5"))).unwrap());
+    let missing = service.ready(Duration::from_secs(10)).await.unwrap_err();
+    assert!(missing.contains("not installed"), "{missing}");
+    // As `murmur speech install-streaming` lays it out, from elsewhere.
+    std::fs::create_dir_all(root.join("nemotron-3.5/r1")).unwrap();
+    let binding = service
+        .ready(Duration::from_secs(10))
+        .await
+        .expect("the running helper loads the newly installed model");
+    assert_eq!(binding.revision, "r1");
+    let _ = std::fs::remove_dir_all(root);
+}

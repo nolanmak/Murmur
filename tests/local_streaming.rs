@@ -22,7 +22,8 @@ use std::time::Duration;
 enum Script {
     /// A partial "heard <n>" every 1600 samples; the final is `final_text`.
     Speak { final_text: String },
-    /// Fails once this many samples have arrived.
+    /// Shows partials like `Speak`, then fails once this many samples have
+    /// arrived.
     FailAfter(usize),
 }
 
@@ -48,6 +49,8 @@ struct FakeBackend {
     /// When set, the helper "restarts" (a new instance) once a stream has
     /// received this many samples.
     restart_after: Mutex<Option<usize>>,
+    /// Installs never finish (to test an abandoned install).
+    hang_install: std::sync::atomic::AtomicBool,
     instance: Arc<AtomicU64>,
     log: Arc<Mutex<Log>>,
     /// Lets a test push events into the newest stream after it has ended.
@@ -60,6 +63,7 @@ impl FakeBackend {
             script: Mutex::new(script),
             load: Mutex::new(Ok(())),
             restart_after: Mutex::new(None),
+            hang_install: Default::default(),
             instance: Arc::new(AtomicU64::new(1)),
             log: Arc::default(),
             late: Arc::default(),
@@ -114,7 +118,13 @@ impl Backend for FakeBackend {
         Box::pin(async move { Ok(Box::new(stream) as Box<dyn LiveStream>) })
     }
     fn install(&self, _: Option<PathBuf>) -> BoxFuture<'static, Result<(), String>> {
-        Box::pin(async { Ok(()) })
+        let hang = self.hang_install.load(Ordering::SeqCst);
+        Box::pin(async move {
+            if hang {
+                std::future::pending::<()>().await;
+            }
+            Ok(())
+        })
     }
     fn unload(&self) -> BoxFuture<'static, Result<(), String>> {
         self.log.lock().unwrap().unloads += 1;
@@ -160,6 +170,13 @@ impl LiveStream for FakeStream {
                 let _ = self
                     .tx
                     .send(Event::Failed("engine: the fake failed".into()));
+            }
+            Script::FailAfter(limit)
+                if self.samples < *limit && self.samples / 1600 > before / 1600 =>
+            {
+                let _ = self
+                    .tx
+                    .send(Event::Partial(format!("heard {}", self.samples / 1600)));
             }
             _ => {}
         }
@@ -832,4 +849,115 @@ fn streaming_finalization_outlasts_its_own_retry_deadlines() {
         limit > Duration::from_secs(10 + 30 + 180),
         "streaming finalization limit {limit:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_stream_stops_showing_its_last_partial_while_still_held() {
+    let backend = FakeBackend::new(Script::FailAfter(3_200));
+    let service = service(&backend);
+    let endpoint = Endpoint::new(service)
+        .prepare("en", Duration::from_secs(2))
+        .await
+        .unwrap();
+    // A stream that showed a partial before failing.
+    *backend.script.lock().unwrap() = Script::FailAfter(3_200);
+    let (tx, rx) = tokio::sync::mpsc::channel(64);
+    let progress = Progress::default();
+    let run = tokio::spawn({
+        let progress = progress.clone();
+        async move {
+            endpoint
+                .transcribe(rx, progress, Arc::new(AtomicU8::new(0)))
+                .await
+        }
+    });
+    tx.send(vec![8_000; 1_600]).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while progress.live().is_none() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("a partial was shown");
+    tx.send(vec![8_000; 1_600]).await.unwrap(); // the stream fails here
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        progress.live(),
+        None,
+        "a dead stream's text is not left on screen while Control is held"
+    );
+    drop(tx);
+    assert!(run.await.unwrap().is_err());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_abandoned_install_does_not_leave_streaming_marked_as_installing() {
+    let backend = FakeBackend::new(Script::Speak {
+        final_text: "unused".into(),
+    });
+    backend.hang_install.store(true, Ordering::SeqCst);
+    let service = service(&backend);
+    let install = tokio::spawn({
+        let service = service.clone();
+        async move { service.install(None).await }
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    install.abort();
+    let _ = install.await;
+    service
+        .ready(Duration::from_secs(2))
+        .await
+        .expect("not refused as still installing");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_wholly_silent_hold_types_nothing_even_if_the_engine_says_something() {
+    let backend = FakeBackend::new(Script::Speak {
+        final_text: "Thank you.".into(),
+    });
+    let service = service(&backend);
+    let text = dictate_with(
+        streaming(&service, None),
+        Progress::default(),
+        ms(400),
+        1,
+        Arc::default(),
+        murmur::vocabulary::Profile::default(),
+        false,
+        0.0,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        text, "",
+        "digital silence is no speech, as on the batch path"
+    );
+}
+
+#[test]
+fn undo_back_to_streaming_is_checked_against_streaming() {
+    // The worker probes the engine `target` resolves Undo to; for a switch
+    // away from streaming, that is streaming's own readiness.
+    use murmur::engine_command::{Command, Decision, decide, target};
+    use murmur::speech::Provider;
+    assert_eq!(
+        target(
+            Command::Undo,
+            Some(&Provider::LocalStreaming),
+            LocalEngine::Parakeet
+        ),
+        Some(Provider::LocalStreaming)
+    );
+    assert!(matches!(
+        decide(
+            Command::Undo,
+            Some(&Provider::LocalParakeet),
+            Some(&Provider::LocalStreaming),
+            LocalEngine::Parakeet,
+            false,
+            &Err("Local streaming is still loading its model".into()),
+            &Ok(()),
+        ),
+        Decision::Refuse(ref m) if m.contains("still loading")
+    ));
 }

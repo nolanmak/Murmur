@@ -4,7 +4,7 @@ fn main() {
     let result = match command.as_str() {
         "--help" | "help" => {
             println!(
-                "Murmur — macOS hold-Control dictation\n\nrun     Launch the menu-bar app (use the .app bundle)\ndoctor  Report provider configuration without printing secrets\nspeech  Select parakeet, whisper [URL], local [URL], deepgram or fallback [parakeet|whisper] [URL];\n        speech install-parakeet [--parakeet-from DIR] [--vad-from DIR] installs the Parakeet model\nlanguage CODE  Select an explicit transcription language (default en)\nvocabulary  Import/export/validate a versioned vocabulary profile\ncleanup  Configure a provider, then explicitly turn text cleanup on/off\nprivacy  Choose offline-all (local speech, no cleanup) or configured providers\n\nHold Control to dictate; release to insert; Esc cancels.\nRun scripts/build-app.sh and launch the resulting .app for capture."
+                "Murmur — macOS hold-Control dictation\n\nrun     Launch the menu-bar app (use the .app bundle)\ndoctor  Report provider configuration without printing secrets\nspeech  Select parakeet, whisper [URL], local [URL], streaming, deepgram or fallback [parakeet|whisper] [URL];\n        speech install-parakeet [--parakeet-from DIR] [--vad-from DIR] installs the Parakeet model;\n        speech install-streaming [--from DIR] installs the streaming (Nemotron 3.5) model\nlanguage CODE  Select an explicit transcription language (default en)\nvocabulary  Import/export/validate a versioned vocabulary profile\ncleanup  Configure a provider, then explicitly turn text cleanup on/off\nprivacy  Choose offline-all (local speech, no cleanup) or configured providers\n\nHold Control to dictate; release to insert; Esc cancels.\nRun scripts/build-app.sh and launch the resulting .app for capture."
             );
             Ok(())
         }
@@ -213,6 +213,12 @@ fn doctor() -> Result<(), String> {
     }
     if privacy.offline_all {
         println!("Offline-all: local speech only, cleanup disabled; cloud credentials not read.");
+        if settings.provider == murmur::speech::Provider::LocalStreaming {
+            println!(
+                "Dictation uses Local streaming (Nemotron 3.5), falling back to {}.",
+                local.label()
+            );
+        }
         return Ok(());
     }
     match settings.provider {
