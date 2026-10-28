@@ -28,9 +28,16 @@ counts, the selected language and capability limitations without printing hints 
   "recognition_hints": ["Project Acorn", "C++", "Zoë & Sons"],
   "snippets": [
     {"name": "sign off", "text": "Thanks,\nExample team"}
+  ],
+  "corrections": [
+    {"word": "open telemetry", "replacement": "OpenTelemetry", "matching_threshold": 0.85}
   ]
 }
 ```
+
+`corrections` is optional (#102); profiles without it load unchanged and export
+without it. `replacement` defaults to `word`, and `matching_threshold` (0.70–0.95,
+default 0.85) uses Muesli's name and range.
 
 Recognition hints become repeated, percent-encoded Nova-3 `keyterm` parameters.
 They are recognition hints, not deterministic text substitutions. Cloud retries
@@ -42,9 +49,27 @@ to reproduce Deepgram's tokenizer. Empty/untrimmed/control-containing or
 case-insensitive duplicate hints are refused.
 
 Local Whisper does not implement Nova-3 keyterms. It receives no hints and never
-contacts a hosted model to repair them. The native progress label and successful
-completion message explicitly report this difference when hints are configured.
-Deterministic snippets still apply to the winning local transcript.
+contacts a hosted model to repair them. Instead (#102), local-engine text is
+corrected after recognition by the shared `fotw-stt` vocabulary matcher, a port
+of Muesli's custom-word matcher. Its targets are each correction and each
+recognition hint. A case- and accent-insensitive exact match, or a near miss
+with Jaro–Winkler similarity at or above the threshold (every word of a phrase
+must match), is replaced; adjacent words spelling a camel-case term are joined
+(`Fluid Audio` → `FluidAudio`, but never from only common words such as
+`power point`). Frequent English words, words with digits and
+longer words containing a term are never treated as near misses. The matcher
+runs on pure-local and local-fallback text before snippets and cleanup, and
+never on Deepgram text, which already had the hints as keyterms. The progress
+label and completion message say "Local: N vocabulary corrections available".
+Deterministic snippets still apply to the winning local transcript afterwards.
+See FlyOnTheWall `docs/VOCABULARY.md` for the exact rules.
+
+On the #118 synthetic technical-term clips with whisper large-v3-turbo, local
+term recall rose from 10/14 to 13/14 with those terms as hints, and WER fell
+from 15.4% to 11.1%; 42 LibriSpeech clips were unchanged. Split words join
+only when at least one is uncommon, so "Fly on the Wall" stays prose unless a
+`fly on the wall` correction is added. A 200-entry profile
+adds well under 1 ms per utterance at p95 (nolanmak/FlyOnTheWall#256).
 
 Say a complete utterance such as **"insert snippet sign off"** to expand a
 snippet. Matching ignores case and surrounding whitespace and allows one final
@@ -63,7 +88,8 @@ The first behavioral tests failed because the scaffold left cues unchanged,
 accepted unsupported versions and overwrote prior settings on invalid save.
 Tests now cover exact boundaries, accented Unicode, overlapping names, prose and
 code preservation, size limits, atomic failure, CLI example/validation, request
-encoding, identical hints across cloud retry, and local capability reporting.
+encoding, identical hints across cloud retry, local corrections before snippet
+expansion, uncorrected Deepgram text, and the local corrections notice.
 A real capture-path fixture changes the on-disk profile during transcription and
 verifies that only the winning final is expanded with the original snapshot.
 An invalid profile never starts the fixture microphone.
@@ -80,7 +106,7 @@ All test audio/text and credentials are synthetic.
 This is partial delivery of #9. Explicit language selection and client-side
 preflight/binding and the managed language adapter are implemented below.
 The native language menu and guarded vocabulary forms are implemented and checked
-with owned AppKit fixtures. Real-model term-recall comparisons (#118), physical
+with owned AppKit fixtures. Local term recall is measured above (#102); physical
 IME interaction and full signed-app dictation/insertion acceptance remain open. Do not claim recognition-quality
 improvement from transport tests. Optional AI cleanup (#8) is separate and has
 not been enabled by this change.
@@ -120,7 +146,7 @@ For a capability-aware adapter, the prepared endpoint carries the selected
 language, model SHA and serving instance ID through capture and fallback.
 Inference sends explicit language, translation=false and detection=false.
 Missing/different response identities refuse insertion. Local recognition hints
-remain unsupported; they are omitted with the existing visible notice.
+are not sent; local text is corrected from the vocabulary afterwards instead.
 
 Language RED/GREEN: the capture fixture selected Spanish but the actual cloud
 handshake omitted language; it now sends Spanish while an on-disk edit to French
@@ -205,6 +231,7 @@ Rust callers of file methods import `murmur::vocabulary::ProfileFile` alongside
 `Profile`; the JSON and CLI remain compatible. Persistence paths, writer locks
 and guarded native editing remain in Murmur. Provider capability selects
 recognition hints separately from local literal snippets. A local adapter with
-no hint mechanism still reports that limitation, while snippets remain local.
+no hint mechanism receives no hints; its text gets local vocabulary corrections,
+and snippets remain local.
 Unicode matching uses lowercase comparison without normalization; the shared
 fixture matrix includes combining characters and preserves unmatched prose.

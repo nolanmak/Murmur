@@ -15,6 +15,11 @@ fn independent_dialogs_merge_language_hints_and_different_snippets() {
     let path = root.path().join("vocabulary.json");
     Profile {
         snippets: vec![snippet("signature", "Old"), snippet("address", "Somewhere")],
+        corrections: vec![murmur::vocabulary::Correction {
+            word: "open telemetry".into(),
+            replacement: Some("OpenTelemetry".into()),
+            matching_threshold: Some(0.9),
+        }],
         ..Default::default()
     }
     .save(&path)
@@ -36,6 +41,11 @@ fn independent_dialogs_merge_language_hints_and_different_snippets() {
     assert_eq!(saved.language, "fr");
     assert_eq!(saved.recognition_hints, ["Café", "OpenAI"]);
     assert_eq!(saved.snippets, [snippet("sign off", "Hello\n\tWorld")]);
+    assert_eq!(
+        saved.corrections.len(),
+        1,
+        "editors keep imported corrections"
+    );
     assert_eq!(
         hints.baseline.language, "en",
         "active snapshots remain immutable"

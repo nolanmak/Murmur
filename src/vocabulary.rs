@@ -1,5 +1,6 @@
 //! Murmur file persistence for the shared credential-free vocabulary schema.
-pub use fotw_stt::vocabulary::{MAX_PROFILE_BYTES, Profile, Snippet, validate_hints};
+pub use fotw_stt::vocabulary::{Correction, MAX_PROFILE_BYTES, Profile, Snippet, validate_hints};
+pub use fotw_stt::vocabulary_matcher::VocabularyMatcher;
 use std::path::{Path, PathBuf};
 /// Murmur's storage location and guarded writer policy; the wire schema is shared.
 pub trait ProfileFile: Sized {
