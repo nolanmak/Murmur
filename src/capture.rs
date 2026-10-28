@@ -14,6 +14,8 @@ struct Sink {
     failed: Arc<AtomicU8>,
     receiving: Arc<AtomicBool>,
     fault: Arc<AtomicBool>,
+    /// Samples accepted so far, to tell a startup blip from a mid-speech gap.
+    delivered: u64,
 }
 impl FrameSink for Sink {
     fn on_frames(&mut self, pcm: &[f32], _: CaptureTimestamp, flags: FrameFlags) {
@@ -21,6 +23,12 @@ impl FrameSink for Sink {
             return;
         }
         if flags.contains(FrameFlags::DISCONTINUITY) {
+            // Once per failed attempt (later callbacks return above). No audio
+            // or transcript content is logged.
+            eprintln!(
+                "microphone discontinuity after {} samples ({flags:?})",
+                self.delivered
+            );
             self.fail(3);
             return;
         }
@@ -31,6 +39,7 @@ impl FrameSink for Sink {
         if !pcm.is_empty() {
             self.receiving.store(true, Ordering::Release);
         }
+        self.delivered += pcm.len() as u64;
         for sample in pcm {
             if self.producer.push(*sample).is_err() {
                 self.fail(1);
@@ -740,6 +749,7 @@ pub async fn run_provider_raw_with_preparation(
         failed: failed.clone(),
         receiving: receiving.clone(),
         fault: fault.clone(),
+        delivered: 0,
     });
     let started_capture =
         start_within_deadline(input, sink, &control, &startup, &receiving, &changes).await;

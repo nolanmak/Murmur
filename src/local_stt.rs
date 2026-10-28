@@ -302,7 +302,9 @@ pub async fn transcribe(
             return value
                 .get("text")
                 .and_then(|v| v.as_str())
-                .map(|v| v.trim().to_owned())
+                // whisper.cpp ends each segment with a newline; it is not the
+                // speaker's formatting and would stop the text being typed.
+                .map(|v| v.split_whitespace().collect::<Vec<_>>().join(" "))
                 .ok_or_else(|| "Local engine response is missing transcript text".into());
         }
     };
