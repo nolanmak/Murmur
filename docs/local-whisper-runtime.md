@@ -11,7 +11,7 @@ python3 scripts/local-whisper.py --app murmur status
 python3 scripts/local-whisper.py --app murmur stop
 ```
 
-`setup` explicitly downloads base.en (~148 MB) and the Silero VAD model (~0.9 MB), verifies their SHA-256s, then atomically selects them. `setup --vad-only` installs just the VAD model and keeps the selected speech model. Alternatively, import an existing model:
+`setup` explicitly downloads base.en (~148 MB), then the Silero VAD model (~0.9 MB). Each is verified by SHA-256 and selected atomically on its own; the two installs are not one atomic step. If the VAD download or check fails after base.en was installed, base.en stays selected, any previously selected VAD model is kept, and setup exits with an error: rerun `setup --vad-only`. `setup --vad-only` installs just the VAD model and keeps the selected speech model. Alternatively, import an existing model:
 
 ```sh
 python3 scripts/local-whisper.py --app murmur import-model '/path/to/ggml-base.en.bin' --sha256 a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002
