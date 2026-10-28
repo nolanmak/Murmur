@@ -16,30 +16,31 @@ fn fake_helper() -> PathBuf {
 fn build_fake() -> PathBuf {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    let metadata = std::process::Command::new(&cargo)
-        .args(["metadata", "--offline", "--locked", "--format-version", "1"])
-        .current_dir(root)
-        .output()
-        .expect("cargo metadata");
-    assert!(metadata.status.success(), "{metadata:?}");
-    let metadata: serde_json::Value = serde_json::from_slice(&metadata.stdout).unwrap();
-    let client = metadata["packages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|p| p["name"] == "fotw-speechd-client")
-        .expect("fotw-speechd-client is a dependency");
-    let manifest = PathBuf::from(client["manifest_path"].as_str().unwrap());
-    let source = client["source"].as_str().unwrap();
-    let rev = source
-        .split("rev=")
-        .nth(1)
-        .and_then(|r| r.split('#').next())
-        .expect("a pinned git revision");
-    let fake_source = manifest
-        .parent()
-        .unwrap()
-        .join("src/bin/fotw-speechd-fake.rs");
+    // The pinned revision, from the lockfile this build used.
+    let lock = std::fs::read_to_string(root.join("Cargo.lock")).unwrap();
+    let rev = lock
+        .split("[[package]]")
+        .find(|block| block.contains("name = \"fotw-speechd-client\""))
+        .and_then(|block| block.split("rev=").nth(1))
+        .and_then(|rest| rest.split('#').next())
+        .expect("fotw-speechd-client is pinned to a git revision")
+        .to_owned();
+    // Cargo checked that revision out to build this test; find it without
+    // `cargo metadata`, which would want every platform's packages offline.
+    let cargo_home = std::env::var_os("CARGO_HOME").map_or_else(
+        || PathBuf::from(std::env::var_os("HOME").expect("HOME")).join(".cargo"),
+        PathBuf::from,
+    );
+    let fake_source = std::fs::read_dir(cargo_home.join("git/checkouts"))
+        .expect("Cargo git checkouts")
+        .filter_map(Result::ok)
+        .map(|repo| {
+            repo.path()
+                .join(&rev[..7])
+                .join("crates/fotw-speechd-client/src/bin/fotw-speechd-fake.rs")
+        })
+        .find(|path| path.is_file())
+        .expect("the pinned FlyOnTheWall checkout");
     let target =
         std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), PathBuf::from);
     let package = target.join("speechd-fake");
