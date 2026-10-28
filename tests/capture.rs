@@ -733,6 +733,7 @@ async fn captured_utterance_uses_one_profile_and_expands_only_the_winning_final(
             name: "signature".into(),
             text: "Private fixture body\nExample".into(),
         }],
+        corrections: vec![],
     };
     profile.save(&path).unwrap();
     let snapshot = Profile::load(&path).unwrap();
@@ -2069,4 +2070,141 @@ async fn raw_capture_defers_snippet_expansion_until_the_local_delivery_stage() {
         profile.snippet(&raw),
         Some("Private unrelated snippet contents")
     );
+}
+
+/// A local engine that passes its health probe, then transcribes as `text`.
+async fn local_engine_saying(
+    text: &'static str,
+) -> (
+    murmur::local_stt::LocalEndpoint,
+    tokio::task::JoinHandle<()>,
+) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = murmur::local_stt::LocalEndpoint::new(&format!(
+        "http://{}",
+        listener.local_addr().unwrap()
+    ))
+    .unwrap();
+    let server = tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            loop {
+                let mut buf = [0; 8192];
+                let n = socket.read(&mut buf).await.unwrap();
+                assert!(n > 0);
+                bytes.extend_from_slice(&buf[..n]);
+                if let Some(end) = bytes.windows(4).position(|v| v == b"\r\n\r\n") {
+                    let header = String::from_utf8_lossy(&bytes[..end]).to_lowercase();
+                    let length: usize = header
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length: "))
+                        .map_or(0, |n| n.parse().unwrap());
+                    if bytes.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            let health = bytes.starts_with(b"GET /health ");
+            let body = if health {
+                r#"{"status":"ok"}"#.to_owned()
+            } else {
+                serde_json::json!({ "text": text }).to_string()
+            };
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            if !health {
+                break;
+            }
+        }
+    });
+    (endpoint, server)
+}
+
+#[tokio::test]
+async fn local_text_is_corrected_from_vocabulary_before_snippets_expand() {
+    let (endpoint, server) = local_engine_saying("Insert snippet Fluid Audio.").await;
+    let (tap, control, _, stopped) = fixture(48000, 0);
+    let profile = murmur::vocabulary::Profile {
+        recognition_hints: vec!["FluidAudio".into()],
+        snippets: vec![murmur::vocabulary::Snippet {
+            name: "FluidAudio".into(),
+            text: "Expanded only after correction".into(),
+        }],
+        ..Default::default()
+    };
+    let progress = murmur::fallback::Progress::default();
+    let text = murmur::capture::run_provider_with_preparation(
+        murmur::capture::InputPreparation::new(move || {
+            Ok(murmur::capture::PreparedInput::new(tap))
+        }),
+        murmur::capture::CaptureProvider::Local(endpoint),
+        control,
+        Arc::new(AtomicBool::new(false)),
+        progress.clone(),
+        murmur::capture::MicrophoneStartup::default(),
+        fotw_audio::device_change::DeviceChangeSignal::new(),
+        profile,
+    )
+    .await
+    .unwrap();
+    server.await.unwrap();
+    assert!(stopped.load(Ordering::SeqCst) > 0);
+    assert_eq!(text, "Expanded only after correction");
+    assert_eq!(
+        progress.stage().label(),
+        "Local: 1 vocabulary correction available"
+    );
+}
+
+#[tokio::test]
+async fn deepgram_text_is_never_locally_corrected() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = DeepgramEndpoint::loopback(listener.local_addr().unwrap().port());
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+        while let Some(Ok(message)) = ws.next().await {
+            if matches!(message,Message::Text(ref text) if text.contains("CloseStream")) {
+                ws.send(Message::text(r#"{"type":"Results","is_final":true,"speech_final":true,"channel":{"alternatives":[{"transcript":"Install Fluid Audio with kubectal."}]}}"#)).await.unwrap();
+                ws.send(Message::text(r#"{"type":"Metadata"}"#))
+                    .await
+                    .unwrap();
+                break;
+            }
+        }
+    });
+    let (tap, control, _, _) = fixture(48000, 0);
+    let profile = murmur::vocabulary::Profile {
+        recognition_hints: vec!["FluidAudio".into(), "kubectl".into()],
+        ..Default::default()
+    };
+    let raw = murmur::capture::run_provider_raw_with_preparation(
+        murmur::capture::InputPreparation::new(move || {
+            Ok(murmur::capture::PreparedInput::new(tap))
+        }),
+        murmur::capture::CaptureProvider::Deepgram {
+            key: "fixture".into(),
+            endpoint,
+        },
+        control,
+        Arc::new(AtomicBool::new(false)),
+        murmur::fallback::Progress::default(),
+        murmur::capture::MicrophoneStartup::default(),
+        fotw_audio::device_change::DeviceChangeSignal::new(),
+        profile,
+    )
+    .await
+    .unwrap();
+    server.await.unwrap();
+    assert_eq!(raw, "Install Fluid Audio with kubectal.");
 }

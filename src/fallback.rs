@@ -1,54 +1,68 @@
 //! Whole-utterance arbitration for explicitly selected cloud-to-local dictation.
-use std::sync::{Arc, atomic::AtomicU8};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU8, AtomicU64},
+};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
 /// Per-attempt progress; each capture owns a fresh instance so late updates
 /// cannot overwrite a later dictation's UI.
 #[derive(Clone, Default)]
-pub struct Progress(Arc<AtomicU8>);
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-#[repr(u8)]
+pub struct Progress(Arc<AtomicU64>);
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Stage {
     #[default]
-    Preparing = 0,
-    Cloud = 1,
-    Retrying = 2,
-    Local = 3,
-    LocalWithoutHints = 4,
+    Preparing,
+    Cloud,
+    Retrying,
+    Local,
+    /// Local engine text gets this many vocabulary correction targets (#102).
+    LocalCorrections(u32),
 }
 impl Progress {
     pub fn stage(&self) -> Stage {
-        match self.0.load(std::sync::atomic::Ordering::Acquire) {
+        let packed = self.0.load(std::sync::atomic::Ordering::Acquire);
+        match packed & 0xff {
             1 => Stage::Cloud,
             2 => Stage::Retrying,
             3 => Stage::Local,
-            4 => Stage::LocalWithoutHints,
+            4 => Stage::LocalCorrections((packed >> 8) as u32),
             _ => Stage::Preparing,
         }
     }
     pub(crate) fn set(&self, stage: Stage) {
-        self.0
-            .store(stage as u8, std::sync::atomic::Ordering::Release);
+        let packed = match stage {
+            Stage::Preparing => 0,
+            Stage::Cloud => 1,
+            Stage::Retrying => 2,
+            Stage::Local => 3,
+            Stage::LocalCorrections(count) => 4 | u64::from(count) << 8,
+        };
+        self.0.store(packed, std::sync::atomic::Ordering::Release);
     }
 }
 impl Stage {
-    /// Keep the capability difference visible even when a fast local result
+    /// Keep local vocabulary behavior visible even when a fast local result
     /// completes between two native UI progress polls.
     pub fn completion_message(self, message: &str) -> String {
-        if self == Self::LocalWithoutHints {
-            format!("{message} · Local recognition hints unavailable")
+        if let Self::LocalCorrections(_) = self {
+            format!("{message} · {}", self.label())
         } else {
             message.to_owned()
         }
     }
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> std::borrow::Cow<'static, str> {
         match self {
-            Self::Preparing => "Checking speech engine",
-            Self::Cloud => "Deepgram",
-            Self::Retrying => "Retrying Deepgram",
-            Self::Local => "Local Whisper",
-            Self::LocalWithoutHints => "Local Whisper · recognition hints unavailable",
+            Self::Preparing => "Checking speech engine".into(),
+            Self::Cloud => "Deepgram".into(),
+            Self::Retrying => "Retrying Deepgram".into(),
+            Self::Local => "Local Whisper".into(),
+            Self::LocalCorrections(count) => format!(
+                "Local: {count} vocabulary correction{} available",
+                if count == 1 { "" } else { "s" }
+            )
+            .into(),
         }
     }
 }
@@ -161,12 +175,13 @@ pub async fn transcribe_with_profile(
     let mut retry_at = None;
     let mut retried = false;
     let mut tick = tokio::time::interval(Duration::from_millis(10));
+    let corrections = crate::vocabulary::VocabularyMatcher::new(profile);
     loop {
         if control.load(Ordering::Acquire) == 2 {
             return Err("Cancelled".into());
         }
         if remote.is_none() && retry_at.is_none() {
-            progress.set(local_vocabulary_stage(profile, &local));
+            progress.set(local_vocabulary_stage(&corrections));
             if ended {
                 break;
             }
@@ -241,21 +256,17 @@ pub async fn transcribe_with_profile(
     }
     crate::local_stt::transcribe(&local, &pcm, control, deadlines.local)
         .await
+        .map(|text| corrections.apply(&text))
         .map_err(|e| format!("Cloud transcription unavailable; local fallback: {e}"))
 }
 
-/// The local adapter's capability determines the limitation, not the profile's
-/// deterministic snippets. Unsupported hints never become hosted repair work.
-pub(crate) fn local_vocabulary_stage(
-    profile: &crate::vocabulary::Profile,
-    endpoint: &crate::local_stt::LocalEndpoint,
-) -> Stage {
-    if matches!(
-        profile.hints_for(endpoint.vocabulary_capability()),
-        fotw_stt::vocabulary::HintSelection::Unsupported
-    ) {
-        Stage::LocalWithoutHints
-    } else {
-        Stage::Local
+/// Local engines receive no recognition hints; their text is corrected from
+/// the vocabulary afterwards instead. Cloud text never is: Deepgram already
+/// received the hints as keyterms.
+pub(crate) fn local_vocabulary_stage(corrections: &crate::vocabulary::VocabularyMatcher) -> Stage {
+    match u32::try_from(corrections.len()) {
+        Ok(0) => Stage::Local,
+        Ok(count) => Stage::LocalCorrections(count),
+        Err(_) => Stage::LocalCorrections(u32::MAX),
     }
 }

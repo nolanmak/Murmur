@@ -113,6 +113,12 @@ async fn retry_cannot_restart_the_post_release_cloud_budget() {
     clock_guard.abort();
 }
 async fn local_server() -> (LocalEndpoint, tokio::task::JoinHandle<Vec<u8>>) {
+    local_server_saying("Complete local utterance.").await
+}
+
+async fn local_server_saying(
+    text: &'static str,
+) -> (LocalEndpoint, tokio::task::JoinHandle<Vec<u8>>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint =
         LocalEndpoint::new(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
@@ -137,7 +143,7 @@ async fn local_server() -> (LocalEndpoint, tokio::task::JoinHandle<Vec<u8>>) {
                 }
             }
         }
-        let body = r#"{"text":"Complete local utterance."}"#;
+        let body = serde_json::json!({ "text": text }).to_string();
         socket
             .write_all(
                 format!(
@@ -469,8 +475,8 @@ async fn fallback_retains_at_most_the_capture_limit() {
 }
 
 #[tokio::test]
-async fn local_fallback_reports_unsupported_hints_without_sending_them_to_the_local_engine() {
-    let (local, server) = local_server().await;
+async fn local_fallback_corrects_vocabulary_locally_without_sending_hints_to_the_engine() {
+    let (local, server) = local_server_saying("Install Fluid Audio with kubectal.").await;
     let (tx, rx) = mpsc::channel(1);
     tx.send(vec![1000; 1600]).await.unwrap();
     drop(tx);
@@ -483,21 +489,20 @@ async fn local_fallback_reports_unsupported_hints_without_sending_them_to_the_lo
         Arc::new(AtomicU8::new(1)),
         deadlines(),
         progress.clone(),
-        &["Private fixture name".into()],
+        &[
+            "FluidAudio".into(),
+            "kubectl".into(),
+            "Private fixture name".into(),
+        ],
     )
     .await
     .unwrap();
-    assert_eq!(text, "Complete local utterance.");
-    assert!(matches!(
-        progress.stage(),
-        fallback::Stage::LocalWithoutHints
-    ));
-    assert!(
-        progress
-            .stage()
-            .completion_message("Inserted")
-            .contains("hints unavailable")
+    assert_eq!(text, "Install FluidAudio with kubectl.");
+    assert_eq!(
+        progress.stage().completion_message("Inserted"),
+        "Inserted · Local: 3 vocabulary corrections available"
     );
+    assert!(!progress.stage().label().contains("unavailable"));
     let request = server.await.unwrap();
     assert!(!String::from_utf8_lossy(&request).contains("Private fixture name"));
 }

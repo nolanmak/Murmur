@@ -813,7 +813,8 @@ pub async fn run_provider_raw_with_preparation(
                 .await
             }
             CaptureProvider::Local(endpoint) => {
-                progress.set(crate::fallback::local_vocabulary_stage(&profile, &endpoint));
+                let corrections = crate::vocabulary::VocabularyMatcher::new(&profile);
+                progress.set(crate::fallback::local_vocabulary_stage(&corrections));
                 let mut rx = rx;
                 let mut pcm = Vec::new();
                 while let Some(chunk) = rx.recv().await {
@@ -826,6 +827,7 @@ pub async fn run_provider_raw_with_preparation(
                     Duration::from_secs(180),
                 )
                 .await
+                .map(|text| corrections.apply(&text))
             }
         }
     };
