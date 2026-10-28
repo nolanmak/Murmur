@@ -1,10 +1,10 @@
 # Shared FlyOnTheWall components
 
 Source: https://github.com/nolanmak/FlyOnTheWall
-Pinned revision: `83a1c438675e1b70dad3da0f2486901c8af69590`
+Pinned revision: `7109a2e8063a738435f2b801f819b263491008bd`
 License: Apache-2.0; root LICENSE and NOTICE retained.
 
-Murmur resolves four crates from that immutable Git revision, with matching
+Murmur resolves five crates from that immutable Git revision, with matching
 normal/dev-dependency pins and Cargo.lock. There is no sibling-checkout path
 requirement or moving-branch dependency:
 
