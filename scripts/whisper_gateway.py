@@ -124,10 +124,12 @@ def inference_form(language, audio):
 
 
 class Gateway:
-    def __init__(self, port, engine_port, prefix, metadata, model_sha256, is_ready):
+    def __init__(self, port, engine_port, prefix, metadata, model_sha256, is_ready, vad=False):
+        # vad: the owned engine runs Silero VAD, so no-speech audio yields "".
         self.capabilities = {"protocol_version": 1, "instance_id": secrets.token_hex(32),
                              "model_sha256": model_sha256,
-                             "languages": list(LANGUAGES[:metadata["language_count"]])}
+                             "languages": list(LANGUAGES[:metadata["language_count"]]),
+                             "vad": vad}
         self.engine_port, self.prefix = engine_port, prefix
         self.engine_ready = is_ready
         self.failed = threading.Event()

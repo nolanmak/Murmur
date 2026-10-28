@@ -12,6 +12,17 @@ pub enum CompletionEffect {
     Empty,
     Error(String),
 }
+pub const NO_SPEECH: &str = "No speech detected";
+impl CompletionEffect {
+    /// Status for outcomes that insert nothing; a transcript's depends on delivery.
+    pub fn status_message(&self) -> Option<&str> {
+        match self {
+            Self::Transcript(_) => None,
+            Self::Empty => Some(NO_SPEECH),
+            Self::Error(error) => Some(error),
+        }
+    }
+}
 #[derive(Debug, Default)]
 pub struct Dictation {
     pub phase: Phase,

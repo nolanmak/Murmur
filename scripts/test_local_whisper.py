@@ -11,12 +11,16 @@ SCRIPT = pathlib.Path(__file__).with_name("local-whisper.py")
 
 
 FIXTURE_ENGINE = r"""
-import argparse, http.server, socketserver, json, pathlib, time
+import argparse, http.server, socketserver, json, pathlib, struct, time
 p = argparse.ArgumentParser()
 p.add_argument("--port", type=int)
 p.add_argument("-m")
 p.add_argument("--request-path", default="")
+p.add_argument("--vad", action="store_true")
+p.add_argument("--vad-model")
 a, _ = p.parse_known_args()
+pathlib.Path(a.m).parent.parent.joinpath("engine-vad.json").write_text(
+    json.dumps({"vad": a.vad, "vad_model": a.vad_model}))
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200 if self.path == a.request_path + "/health" else 404)
@@ -32,12 +36,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
         state = pathlib.Path(a.m).parent.parent
         (state / "inference-entered").touch()
         while (state / "hold-inference").exists(): time.sleep(0.01)
-        body = json.dumps({"text":"fixture " + language}).encode()
+        pcm = data.split(b"WAVE", 1)[1].split(b"data", 1)[1][4:].split(b"\r\n--", 1)[0]
+        quiet = max(abs(v) for v in struct.unpack("<%dh" % (len(pcm) // 2), pcm)) < 100
+        text = "" if a.vad and quiet else "fixture " + language
+        body = json.dumps({"text": text}).encode()
         self.send_response(200); self.send_header("Content-Length", str(len(body)))
         self.end_headers(); self.wfile.write(body)
     def log_message(self, *args): pass
 socketserver.ThreadingTCPServer(("127.0.0.1", a.port), Handler).serve_forever()
 """
+
+
+def vad_fixture(version=(6, 2, 0)):
+    # Silero GGML header (magic, name, version), synthetic body.
+    return (struct.pack("<ii", 0x67676d6c, 10) + b"silero-16k"
+            + struct.pack("<3i", *version) + b"fixture vad weights")
 
 
 def model_fixture(n_vocab=51864):
@@ -77,18 +90,33 @@ class RuntimeTests(unittest.TestCase):
     def install(self):
         r = self.run_cli("import-model", str(self.model), "--sha256", self.digest)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        r = self.install_vad()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def install_vad(self, payload=None):
+        vad = self.root / "source vad.bin"
+        vad.write_bytes(payload or vad_fixture())
+        checksum = hashlib.sha256(vad.read_bytes()).hexdigest()
+        return self.run_cli("import-model", "--vad", str(vad), "--sha256", checksum)
+
+    def fixture_engine(self):
+        fake = self.root / "fixture engine"
+        fake.write_text("#!" + sys.executable + "\n" + FIXTURE_ENGINE)
+        fake.chmod(0o755)
+        return fake
+
+    def free_port(self):
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            return probe.getsockname()[1]
 
     def start_fixture_engine(self, multilingual=False):
         if multilingual:
             self.model.write_bytes(model_fixture(51865))
             self.digest = hashlib.sha256(self.model.read_bytes()).hexdigest()
         self.install()
-        fake = self.root / "fixture engine"
-        fake.write_text("#!" + sys.executable + "\n" + FIXTURE_ENGINE)
-        fake.chmod(0o755)
-        with socket.socket() as probe:
-            probe.bind(("127.0.0.1", 0))
-            port = probe.getsockname()[1]
+        fake = self.fixture_engine()
+        port = self.free_port()
         result = self.run_cli("start", "--binary", str(fake), "--port", str(port), "--timeout", "30")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return port
@@ -103,11 +131,11 @@ class RuntimeTests(unittest.TestCase):
         finally:
             conn.close()
 
-    def infer(self, port, caps, language="en", extra=(), path="/inference"):
+    def infer(self, port, caps, language="en", extra=(), path="/inference", level=1234):
         audio = io.BytesIO()
         with wave.open(audio, "wb") as wav:
             wav.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
-            wav.writeframes(struct.pack("<160h", *([1234] * 160)))
+            wav.writeframes(struct.pack("<160h", *([level] * 160)))
         fields = [("file", audio.getvalue()), ("language", language.encode()),
                   ("response_format", b"json"), *extra]
         body = b""
@@ -140,6 +168,98 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(body["text"], "fixture fr")
         self.assertEqual(headers["X-Murmur-Instance"], caps["instance_id"])
         self.assertEqual(headers["X-Murmur-Model"], self.digest)
+
+    def test_managed_runtime_enables_vad_and_no_speech_returns_empty_text(self):
+        port = self.start_fixture_engine()
+        state = self.root / "state folder"
+        caps = self.health(port)["murmur_capabilities"]
+        self.assertIs(caps.get("vad"), True)
+        engine = json.loads((state / "engine-vad.json").read_text())
+        self.assertTrue(engine["vad"])
+        vad = pathlib.Path(engine["vad_model"])
+        self.assertEqual(vad, (state / "vad.bin").resolve())
+        self.assertEqual(vad.stem, hashlib.sha256(vad.read_bytes()).hexdigest())
+        # No-speech fixture: the engine's VAD finds nothing and returns "".
+        status, headers, body = self.infer(port, caps, level=7)
+        self.assertEqual((status, body), (200, {"text": ""}))
+        self.assertEqual(headers["X-Murmur-Instance"], caps["instance_id"])
+        self.assertEqual(self.infer(port, caps)[2], {"text": "fixture en"})
+
+    def test_start_with_missing_or_corrupt_vad_model_refuses_and_keeps_previous_runtime(self):
+        r = self.run_cli("import-model", str(self.model), "--sha256", self.digest)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        state = self.root / "state folder"
+        fake = self.fixture_engine()
+        port = self.free_port()
+        start = ("start", "--binary", str(fake), "--port", str(port), "--timeout", "30")
+        r = self.run_cli(*start)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("VAD", r.stdout)
+        self.assertFalse((state / "engine-vad.json").exists(), "engine must not launch")
+        status = json.loads(self.run_cli("status").stdout)
+        self.assertEqual(status["reason"], "missing_vad_model")
+        self.assertFalse(status["ready"])
+
+        self.assertEqual(self.install_vad().returncode, 0)
+        self.assertEqual(self.run_cli(*start).returncode, 0)
+        before = (state / "runtime.json").read_text()
+        caps = self.health(port)["murmur_capabilities"]
+        selected_model = (state / "model.bin").resolve()
+        (state / "vad.bin").resolve().write_bytes(b"corrupt")
+        r = self.run_cli(*start)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("VAD", r.stdout)
+        self.assertEqual((state / "runtime.json").read_text(), before)
+        self.assertEqual((state / "model.bin").resolve(), selected_model)
+        self.assertEqual(self.health(port)["murmur_capabilities"], caps)
+        self.assertEqual(self.infer(port, caps)[0], 200)
+        self.assertEqual(self.run_cli("stop").returncode, 0)
+        status = json.loads(self.run_cli("status").stdout)
+        self.assertEqual(status["reason"], "corrupt_vad_model")
+
+    def test_vad_import_validates_header_and_preserves_selection(self):
+        self.install()
+        state = self.root / "state folder"
+        selected, model = (state / "vad.bin").resolve(), (state / "model.bin").resolve()
+        bad_name = struct.pack("<ii", 0x67676d6c, 10) + b"whisper-xx" + b"\0" * 12
+        for payload in (b"not a vad", model_fixture(), bad_name, vad_fixture()[:20]):
+            r = self.install_vad(payload)
+            self.assertNotEqual(r.returncode, 0, r.stdout)
+            self.assertEqual((state / "vad.bin").resolve(), selected)
+            self.assertFalse(list(state.glob("*.partial")))
+        # A VAD file is never accepted as the speech model.
+        vad = self.root / "source vad.bin"
+        r = self.run_cli("import-model", str(vad), "--sha256",
+                         hashlib.sha256(vad.read_bytes()).hexdigest())
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual((state / "model.bin").resolve(), model)
+
+    def test_vad_only_setup_downloads_pinned_vad_and_keeps_speech_model(self):
+        self.install()
+        state = self.root / "state folder"
+        model = (state / "model.bin").resolve()
+        payload = vad_fixture((5, 1, 2))
+        urls = []
+        def fetch(url, timeout):
+            urls.append(url)
+            return io.BytesIO(payload)
+        argv = ["local-whisper.py", "--app", "murmur", "--state-dir", str(state),
+                "setup", "--vad-only"]
+        with patch.object(runtime, "VAD_SHA256", hashlib.sha256(payload).hexdigest()), \
+                patch.object(runtime.urllib.request, "urlopen", side_effect=fetch), \
+                patch.object(sys, "argv", argv), patch("builtins.print"):
+            runtime.main()
+        self.assertEqual(urls, [runtime.VAD_URL])
+        self.assertIn(runtime.VAD_REVISION, runtime.VAD_URL)
+        self.assertEqual((state / "vad.bin").read_bytes(), payload)
+        self.assertEqual((state / "model.bin").resolve(), model)
+        with patch.object(runtime, "VAD_SHA256", hashlib.sha256(payload).hexdigest()):
+            status = io.StringIO()
+            with patch.object(sys, "argv", argv[:5] + ["status"]), \
+                    patch("sys.stdout", status):
+                runtime.main()
+        self.assertEqual(json.loads(status.getvalue())["selected_vad_metadata"]["license"],
+                         "MIT (Silero VAD)")
 
     def test_gateway_refuses_language_binding_and_parameter_changes_without_poisoning_engine(self):
         port = self.start_fixture_engine()
