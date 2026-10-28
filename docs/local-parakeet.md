@@ -18,10 +18,14 @@ selectable and is still needed for languages other than English.
    revision, the text is dropped ("no text inserted"), as with the Whisper
    gateway's instance/model headers.
 3. **After release** the whole utterance (at most 120 s) goes through one
-   Silero VAD stream. No speech: nothing is typed and the recognizer never runs.
-   Otherwise the audio from the first speech to the last, plus 300 ms each
-   side, goes to one Parakeet batch stream.
-4. The final text is joined into **one line** (#98) and then goes through the
+   Silero VAD stream. Unless some 256 ms step reaches a speech probability of
+   0.9, nothing is typed and the recognizer never runs: Silero's 0.5 trigger
+   fires for a step on some noise and instrumental music (0.54-0.87 in the
+   corpus), while real speech, even a lone "Thank you.", peaks at 1.0.
+   Otherwise the audio from the first speech to the last (Silero's 0.5
+   regions), plus 300 ms each side, goes to one Parakeet batch stream.
+4. The final text is joined into **one line** (#98), without Parakeet's
+   `<unk>` markers, and then goes through the
    same command, snippet, cleanup, focus and generation checks as every engine.
 
 Murmur spawns and owns the helper (`fotw-speechd-client`: restarts with

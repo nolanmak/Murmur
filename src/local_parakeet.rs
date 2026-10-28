@@ -39,6 +39,11 @@ const SAMPLE_RATE: usize = 16_000;
 const SPEECH_PAD: usize = SAMPLE_RATE * 3 / 10;
 /// Same bound as the Whisper path: 120 s of capture plus resampler drain.
 const MAX_SAMPLES: usize = SAMPLE_RATE * 120 + 3200;
+/// The gate's bar for speech. Silero starts a region at 0.5, which is right
+/// for where speech begins, but MUSAN noise and instrumental music reach
+/// 0.54-0.87 for a step and Parakeet then hears "Uh" or "Okay."; real speech,
+/// even a lone "Thank you.", peaks at 1.0 (#101 corpus run).
+const SPEECH_PEAK: f32 = 0.9;
 /// Audio frames to the helper: 256 ms, Silero's step.
 const CHUNK: usize = 4096;
 
@@ -92,6 +97,15 @@ impl LoadError {
     }
 }
 
+/// What the speech gate found in one utterance.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Detected {
+    /// Speech regions, in samples from the first.
+    pub regions: Vec<Range<usize>>,
+    /// The highest speech probability of any 256 ms step.
+    pub peak: f32,
+}
+
 /// The recognizer's answer for one utterance.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Recognized {
@@ -108,8 +122,8 @@ pub trait Backend: Send + Sync + 'static {
     fn load(&self) -> BoxFuture<Result<Binding, LoadError>>;
     /// The helper instance serving now, if one is running.
     fn instance(&self) -> Option<u64>;
-    /// Speech regions, in samples from the first.
-    fn speech(&self, pcm: Arc<[i16]>) -> BoxFuture<Result<Vec<Range<usize>>, String>>;
+    /// Where the speech is, and how sure the gate is of it.
+    fn speech(&self, pcm: Arc<[i16]>) -> BoxFuture<Result<Detected, String>>;
     /// One batch stream over the whole (trimmed) utterance.
     fn recognize(&self, pcm: Arc<[i16]>) -> BoxFuture<Result<Recognized, String>>;
     /// Explicit setup: install both models, downloading unless a local copy
@@ -292,12 +306,15 @@ impl Service {
             return Err(CHANGED.into());
         }
         let pcm: Arc<[i16]> = pcm.into();
-        let regions = self
+        let detected = self
             .run(self.backend.speech(pcm.clone()))
             .await?
             .map_err(|e| format!("Local Parakeet speech gate failed: {e}; no text inserted"))?;
         // Silence, noise and music without speech never reach the recognizer.
-        let Some(span) = speech_span(&regions, pcm.len()) else {
+        if detected.peak < SPEECH_PEAK {
+            return Ok(String::new());
+        }
+        let Some(span) = speech_span(&detected.regions, pcm.len()) else {
             return Ok(String::new());
         };
         let trimmed: Arc<[i16]> = if span == (0..pcm.len()) {
@@ -338,9 +355,13 @@ fn speech_span(regions: &[Range<usize>], len: usize) -> Option<Range<usize>> {
 }
 
 /// Segment breaks are not the speaker's formatting and would stop the text
-/// being typed (#98).
+/// being typed (#98). `<unk>` is the recognizer's unknown-token marker, not
+/// text.
 fn one_line(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    text.replace("<unk>", "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The local transcriber for one utterance: the shared service plus what
@@ -604,12 +625,12 @@ impl SpeechdInner {
 
     async fn stream(
         &self,
-        engine: &str,
+        config: StreamConfig,
         pcm: &[i16],
     ) -> Result<fotw_speechd_client::SpeechStream, String> {
         let client = self.client().await.map_err(|e| e.message())?;
         let mut stream = client
-            .open_stream(StreamConfig::new(engine, SAMPLE_RATE as u32))
+            .open_stream(config)
             .await
             .map_err(|e| e.to_string())?;
         for chunk in pcm.chunks(CHUNK) {
@@ -619,16 +640,28 @@ impl SpeechdInner {
         Ok(stream)
     }
 
-    async fn speech(&self, pcm: Arc<[i16]>) -> Result<Vec<Range<usize>>, String> {
+    async fn speech(&self, pcm: Arc<[i16]>) -> Result<Detected, String> {
         let Some(vad) = &self.vad else {
-            return Ok(std::iter::once(0..pcm.len()).collect());
+            return Ok(Detected {
+                regions: std::iter::once(0..pcm.len()).collect(),
+                peak: 1.0,
+            });
         };
-        let mut stream = self.stream(vad, &pcm).await?;
+        let mut config = StreamConfig::new(vad.as_str(), SAMPLE_RATE as u32);
+        // Every 256 ms step's probability, for the gate's peak.
+        config.options.probabilities = true;
+        let mut stream = self.stream(config, &pcm).await?;
         let mut regions = Vec::new();
         let mut open = None;
+        let mut peak = 0f32;
         loop {
             match stream.next_event().await {
-                Some(StreamEvent::Vad { event, sample, .. }) => {
+                Some(StreamEvent::Vad {
+                    event,
+                    sample,
+                    probability,
+                }) => {
+                    peak = peak.max(probability);
                     let sample = usize::try_from(sample).unwrap_or(usize::MAX).min(pcm.len());
                     match event {
                         VadKind::SpeechStart => {
@@ -650,11 +683,16 @@ impl SpeechdInner {
         if let Some(start) = open {
             regions.push(start..pcm.len());
         }
-        Ok(regions)
+        Ok(Detected { regions, peak })
     }
 
     async fn recognize(&self, pcm: Arc<[i16]>) -> Result<Recognized, String> {
-        let mut stream = self.stream(&self.asr, &pcm).await?;
+        let mut stream = self
+            .stream(
+                StreamConfig::new(self.asr.as_str(), SAMPLE_RATE as u32),
+                &pcm,
+            )
+            .await?;
         let mut recognized = None;
         loop {
             match stream.next_event().await {
@@ -725,7 +763,7 @@ impl Backend for SpeechdBackend {
     fn instance(&self) -> Option<u64> {
         self.inner.instance()
     }
-    fn speech(&self, pcm: Arc<[i16]>) -> BoxFuture<Result<Vec<Range<usize>>, String>> {
+    fn speech(&self, pcm: Arc<[i16]>) -> BoxFuture<Result<Detected, String>> {
         let inner = self.inner.clone();
         Box::pin(async move { inner.speech(pcm).await })
     }

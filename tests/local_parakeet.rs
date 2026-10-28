@@ -84,7 +84,8 @@ fn use_local_on_a_new_install_lands_on_local_parakeet() {
 // model, helper, microphone or network.
 
 use murmur::local_parakeet::{
-    Backend, Binding, BoxFuture, Endpoint, InstallSources, LoadError, Progress, Recognized, Service,
+    Backend, Binding, BoxFuture, Detected, Endpoint, InstallSources, LoadError, Progress,
+    Recognized, Service,
 };
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
@@ -99,6 +100,8 @@ struct Fake {
     instance: AtomicU64,
     restart_during_speech: AtomicBool,
     regions: Mutex<Option<Vec<Range<usize>>>>,
+    /// The gate's peak probability; speech is certain unless a test lowers it.
+    peak: Mutex<Option<f32>>,
     text: Mutex<String>,
     model: Mutex<Option<String>>,
     speech_calls: AtomicUsize,
@@ -136,19 +139,21 @@ impl Backend for Handle {
     fn instance(&self) -> Option<u64> {
         Some(self.0.instance.load(Ordering::SeqCst))
     }
-    fn speech(&self, pcm: Arc<[i16]>) -> BoxFuture<Result<Vec<Range<usize>>, String>> {
+    fn speech(&self, pcm: Arc<[i16]>) -> BoxFuture<Result<Detected, String>> {
         let fake = self.0.clone();
         Box::pin(async move {
             fake.speech_calls.fetch_add(1, Ordering::SeqCst);
             if fake.restart_during_speech.load(Ordering::SeqCst) {
                 fake.instance.fetch_add(1, Ordering::SeqCst);
             }
-            Ok(fake
+            let regions = fake
                 .regions
                 .lock()
                 .unwrap()
                 .clone()
-                .unwrap_or_else(|| std::iter::once(0..pcm.len()).collect()))
+                .unwrap_or_else(|| std::iter::once(0..pcm.len()).collect());
+            let peak = fake.peak.lock().unwrap().unwrap_or(1.0);
+            Ok(Detected { regions, peak })
         })
     }
     fn recognize(&self, pcm: Arc<[i16]>) -> BoxFuture<Result<Recognized, String>> {
@@ -445,5 +450,33 @@ fn choosing_an_engine_by_name_makes_it_the_default_local_engine() {
             }
         ),
         "{d:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_weak_detection_is_not_speech() {
+    // Silero triggers at 0.5, but MUSAN noise and instrumental music reach
+    // 0.54-0.87 for one step and Parakeet then hears "Uh", "Okay.", "Yeah."
+    // Real speech, even a lone "Thank you.", peaks at 1.0.
+    for (peak, typed) in [(0.6, ""), (0.87, ""), (0.95, "Fixture text.")] {
+        let fake = Fake::new();
+        *fake.peak.lock().unwrap() = Some(peak);
+        let (result, _) = dictate(&endpoint(&fake)).await;
+        assert_eq!(result.unwrap(), typed, "peak {peak}");
+        assert_eq!(
+            fake.recognized.lock().unwrap().is_empty(),
+            typed.is_empty(),
+            "peak {peak}: the recognizer runs only on speech"
+        );
+    }
+}
+
+#[tokio::test]
+async fn unknown_tokens_are_never_typed() {
+    let fake = Fake::new();
+    *fake.text.lock().unwrap() = "como contribuje t<unk> est<unk>s, <unk> luz".into();
+    assert_eq!(
+        dictate(&endpoint(&fake)).await.0.unwrap(),
+        "como contribuje t ests, luz"
     );
 }
