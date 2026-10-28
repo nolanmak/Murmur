@@ -210,12 +210,10 @@ impl Service {
         });
         if !reusable {
             let work = self.run(self.backend.load());
-            let shared: SharedLoad = async move {
-                work.await
-                    .unwrap_or_else(|e| Err(LoadError::Failed(e)))
-            }
-            .boxed()
-            .shared();
+            let shared: SharedLoad =
+                async move { work.await.unwrap_or_else(|e| Err(LoadError::Failed(e))) }
+                    .boxed()
+                    .shared();
             // The load runs on the worker whether or not anyone awaits it, so
             // warming at launch needs no waiter.
             let poll = shared.clone();
@@ -543,9 +541,9 @@ impl SpeechdInner {
         let config = self.config.clone().map_err(LoadError::Unavailable)?;
         let started = SpeechdClient::start(config).await.map_err(|e| match e {
             ClientError::Spawn(reason) => LoadError::Unavailable(reason),
-            ClientError::VersionMismatch { .. } => LoadError::Unavailable(format!(
-                "{e}; rebuild Murmur so its helper matches"
-            )),
+            ClientError::VersionMismatch { .. } => {
+                LoadError::Unavailable(format!("{e}; rebuild Murmur so its helper matches"))
+            }
             other => LoadError::Failed(other.to_string()),
         })?;
         *self.instance.lock().unwrap_or_else(|e| e.into_inner()) = Some(started.clone());
@@ -623,7 +621,7 @@ impl SpeechdInner {
 
     async fn speech(&self, pcm: Arc<[i16]>) -> Result<Vec<Range<usize>>, String> {
         let Some(vad) = &self.vad else {
-            return Ok(vec![0..pcm.len()]);
+            return Ok(std::iter::once(0..pcm.len()).collect());
         };
         let mut stream = self.stream(vad, &pcm).await?;
         let mut regions = Vec::new();
@@ -748,16 +746,24 @@ mod tests {
     #[test]
     fn the_span_covers_first_to_last_speech_with_padding_inside_the_audio() {
         assert_eq!(speech_span(&[], 100_000), None);
-        assert_eq!(speech_span(&[(5..5)], 100_000), None);
+        let empty = 5..5;
+        assert_eq!(speech_span(std::slice::from_ref(&empty), 100_000), None);
         assert_eq!(
             speech_span(&[(20_000..30_000), (50_000..60_000)], 100_000),
             Some(20_000 - SPEECH_PAD..60_000 + SPEECH_PAD)
         );
-        assert_eq!(speech_span(&[(100..99_000)], 100_000), Some(0..100_000));
+        let almost_all = 100..99_000;
+        assert_eq!(
+            speech_span(std::slice::from_ref(&almost_all), 100_000),
+            Some(0..100_000)
+        );
     }
 
     #[test]
     fn segment_breaks_become_spaces() {
-        assert_eq!(one_line(" Hello there.\n Second line.\n"), "Hello there. Second line.");
+        assert_eq!(
+            one_line(" Hello there.\n Second line.\n"),
+            "Hello there. Second line."
+        );
     }
 }

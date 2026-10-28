@@ -410,7 +410,9 @@ async fn unavailable_local_engine_is_reported_before_microphone_capture() {
     let result = murmur::capture::run_provider_observed(
         tap,
         murmur::capture::CaptureProvider::Local(
-            murmur::local_stt::LocalEndpoint::new("http://127.0.0.1:1").unwrap().into(),
+            murmur::local_stt::LocalEndpoint::new("http://127.0.0.1:1")
+                .unwrap()
+                .into(),
         ),
         control,
         Arc::new(AtomicBool::new(false)),
@@ -1027,7 +1029,9 @@ async fn invalid_profile_and_unready_local_engine_do_not_prepare_native_input() 
         let error = murmur::capture::run_provider_with_preparation(
             input,
             murmur::capture::CaptureProvider::Local(
-                murmur::local_stt::LocalEndpoint::new("http://127.0.0.1:1").unwrap().into(),
+                murmur::local_stt::LocalEndpoint::new("http://127.0.0.1:1")
+                    .unwrap()
+                    .into(),
             ),
             Arc::new(AtomicU8::new(0)),
             Arc::new(AtomicBool::new(false)),
@@ -1833,7 +1837,9 @@ async fn language_preflight_observes_cancel_release_and_route_change_while_healt
                 panic!("interrupted preflight must never prepare a microphone")
             }),
             CaptureProvider::Local(
-                murmur::local_stt::LocalEndpoint::new(&format!("http://{address}")).unwrap().into(),
+                murmur::local_stt::LocalEndpoint::new(&format!("http://{address}"))
+                    .unwrap()
+                    .into(),
             ),
             control.clone(),
             Arc::new(AtomicBool::new(false)),

@@ -295,10 +295,14 @@ fn the_speech_helper_is_signed_hardened_without_entitlements_before_the_app() {
     );
     assert!(signs[1].ends_with("stage/Murmur.app"), "{log}");
     assert!(helper(&fixture.installed()).exists());
-    let entitlements =
-        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("packaging/speechd-entitlements.plist"))
-            .unwrap();
-    assert!(!entitlements.contains("<key>"), "the helper gets no entitlements");
+    let entitlements = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("packaging/speechd-entitlements.plist"),
+    )
+    .unwrap();
+    assert!(
+        !entitlements.contains("<key>"),
+        "the helper gets no entitlements"
+    );
 }
 
 #[test]
@@ -310,13 +314,24 @@ fn a_speech_helper_with_the_microphone_entitlement_is_refused() {
         ("FAKE_HELPER_MICROPHONE", "1"),
     ]);
     assert_previous_bundle_kept(&fixture, &output);
-    assert!(stderr(&output).contains("microphone entitlement"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("microphone entitlement"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]
 fn a_requested_speech_helper_that_is_missing_fails_the_build() {
     let fixture = Fixture::new();
-    let output = fixture.run(&[("MURMUR_SIGN_IDENTITY", "Team Dev"), ("MURMUR_SPEECHD", "1")]);
+    let output = fixture.run(&[
+        ("MURMUR_SIGN_IDENTITY", "Team Dev"),
+        ("MURMUR_SPEECHD", "1"),
+    ]);
     assert_previous_bundle_kept(&fixture, &output);
-    assert!(stderr(&output).contains("fotw-speechd"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("fotw-speechd"),
+        "{}",
+        stderr(&output)
+    );
 }

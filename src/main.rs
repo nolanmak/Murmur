@@ -117,7 +117,8 @@ fn install_parakeet(args: &[String]) -> Result<(), String> {
         }
     }
     let service = murmur::local_parakeet::Endpoint::shared().service().clone();
-    let progress: murmur::local_parakeet::Progress = std::sync::Arc::new(|line| eprintln!("{line}"));
+    let progress: murmur::local_parakeet::Progress =
+        std::sync::Arc::new(|line| eprintln!("{line}"));
     murmur::capture::block_on_detached(async move { service.install(sources, progress).await })??;
     println!(
         "Installed Parakeet Unified and Silero VAD in {}. Licenses: {}",
@@ -189,8 +190,9 @@ fn doctor() -> Result<(), String> {
     match local {
         murmur::speech::LocalEngine::Parakeet => println!(
             "Local engine: Local Parakeet (helper {}, models in {}). Install with `murmur speech install-parakeet`; nothing downloads during dictation.",
-            fotw_speechd_client::locate_helper()
-                .map_or("not bundled in this build".into(), |p| p.display().to_string()),
+            fotw_speechd_client::locate_helper().map_or("not bundled in this build".into(), |p| p
+                .display()
+                .to_string()),
             murmur::local_parakeet::models_root()?.display()
         ),
         murmur::speech::LocalEngine::Whisper => println!(

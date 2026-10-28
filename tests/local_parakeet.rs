@@ -84,8 +84,7 @@ fn use_local_on_a_new_install_lands_on_local_parakeet() {
 // model, helper, microphone or network.
 
 use murmur::local_parakeet::{
-    Backend, Binding, BoxFuture, Endpoint, InstallSources, LoadError, Progress, Recognized,
-    Service,
+    Backend, Binding, BoxFuture, Endpoint, InstallSources, LoadError, Progress, Recognized, Service,
 };
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
@@ -149,7 +148,7 @@ impl Backend for Handle {
                 .lock()
                 .unwrap()
                 .clone()
-                .unwrap_or_else(|| vec![0..pcm.len()]))
+                .unwrap_or_else(|| std::iter::once(0..pcm.len()).collect()))
         })
     }
     fn recognize(&self, pcm: Arc<[i16]>) -> BoxFuture<Result<Recognized, String>> {
@@ -173,7 +172,9 @@ impl Backend for Handle {
     }
 }
 fn endpoint(fake: &Arc<Fake>) -> Endpoint {
-    Endpoint::new(Arc::new(Service::new(Arc::new(Handle(fake.clone()))).unwrap()))
+    Endpoint::new(Arc::new(
+        Service::new(Arc::new(Handle(fake.clone()))).unwrap(),
+    ))
 }
 
 /// One second of a loud tone at 16 kHz, delivered after the mic starts.
@@ -195,7 +196,9 @@ impl fotw_audio::AudioTap for ToneTap {
         &mut self,
         mut sink: Box<dyn fotw_audio::FrameSink>,
     ) -> Result<fotw_audio::StreamFormat, fotw_audio::TapError> {
-        let tone: Vec<f32> = (0..16_000).map(|i| ((i % 40) as f32 / 40.0) - 0.5).collect();
+        let tone: Vec<f32> = (0..16_000)
+            .map(|i| ((i % 40) as f32 / 40.0) - 0.5)
+            .collect();
         sink.on_frames(
             &tone,
             fotw_audio::CaptureTimestamp::new(0, 0),
@@ -289,7 +292,7 @@ async fn the_whole_utterance_is_gated_trimmed_recognized_once_and_typed_as_one_l
     let fake = Fake::new();
     *fake.text.lock().unwrap() = " Hello there.\n Second segment.\n".into();
     // Speech only in the middle of the ~1.2 s utterance.
-    *fake.regions.lock().unwrap() = Some(vec![8_000..9_000]);
+    *fake.regions.lock().unwrap() = Some(std::iter::once(8_000..9_000).collect());
     let endpoint = endpoint(&fake);
     let (result, opened) = dictate(&endpoint).await;
     assert_eq!(result.unwrap(), "Hello there. Second segment.");
@@ -299,7 +302,10 @@ async fn the_whole_utterance_is_gated_trimmed_recognized_once_and_typed_as_one_l
     // 300 ms of padding on each side of the speech, inside the audio.
     assert_eq!(recognized, vec![1_000 + 2 * 4_800]);
     // Loaded once, at the first preflight; the next utterance reuses it.
-    assert_eq!(dictate(&endpoint).await.0.unwrap(), "Hello there. Second segment.");
+    assert_eq!(
+        dictate(&endpoint).await.0.unwrap(),
+        "Hello there. Second segment."
+    );
     assert_eq!(fake.loads.load(Ordering::SeqCst), 1);
 }
 
@@ -338,7 +344,10 @@ async fn parakeet_is_english_only_and_says_so_before_recording() {
         .prepare("fr", Duration::from_secs(1))
         .await
         .unwrap_err();
-    assert!(error.contains("English") && error.contains("Local Whisper"), "{error}");
+    assert!(
+        error.contains("English") && error.contains("Local Whisper"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -368,8 +377,14 @@ fn each_choice_runs_its_own_local_engine_and_offline_all_follows_the_default() {
     assert_eq!(engine(Provider::LocalParakeet, Parakeet, false), "parakeet");
     assert_eq!(engine(Provider::LocalWhisper, Whisper, false), "whisper");
     // Without a key the backup runs alone.
-    assert_eq!(engine(Provider::DeepgramThenParakeet, Parakeet, false), "parakeet");
-    assert_eq!(engine(Provider::DeepgramThenWhisper, Whisper, false), "whisper");
+    assert_eq!(
+        engine(Provider::DeepgramThenParakeet, Parakeet, false),
+        "parakeet"
+    );
+    assert_eq!(
+        engine(Provider::DeepgramThenWhisper, Whisper, false),
+        "whisper"
+    );
     assert_eq!(engine(Provider::Deepgram, Parakeet, true), "parakeet");
     assert_eq!(engine(Provider::Deepgram, Whisper, true), "whisper");
 }
@@ -384,7 +399,10 @@ fn choosing_an_engine_by_name_makes_it_the_default_local_engine() {
     )
     .unwrap();
     let mut selection = murmur::speech::Selection::load(Ok(path.clone()));
-    assert_eq!(selection.local_engine(), murmur::speech::LocalEngine::Whisper);
+    assert_eq!(
+        selection.local_engine(),
+        murmur::speech::LocalEngine::Whisper
+    );
     selection.choose(Provider::LocalParakeet, &path).unwrap();
     selection.choose(Provider::Deepgram, &path).unwrap();
     let reloaded = Settings::load(&path).unwrap();
@@ -399,7 +417,16 @@ fn choosing_an_engine_by_name_makes_it_the_default_local_engine() {
         &Ok(()),
         &Ok(()),
     );
-    assert!(matches!(d, Decision::Switch { to: Provider::LocalWhisper, .. }), "{d:?}");
+    assert!(
+        matches!(
+            d,
+            Decision::Switch {
+                to: Provider::LocalWhisper,
+                ..
+            }
+        ),
+        "{d:?}"
+    );
     let d = decide(
         parse("Murmur, use backup").unwrap(),
         Some(&Provider::Deepgram),
@@ -410,7 +437,13 @@ fn choosing_an_engine_by_name_makes_it_the_default_local_engine() {
         &Ok(()),
     );
     assert!(
-        matches!(d, Decision::Switch { to: Provider::DeepgramThenParakeet, .. }),
+        matches!(
+            d,
+            Decision::Switch {
+                to: Provider::DeepgramThenParakeet,
+                ..
+            }
+        ),
         "{d:?}"
     );
 }

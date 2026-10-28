@@ -187,7 +187,9 @@ impl LocalTranscriber {
         deadline: Duration,
     ) -> Result<String, String> {
         match self {
-            LocalTranscriber::Whisper(endpoint) => transcribe(endpoint, pcm, control, deadline).await,
+            LocalTranscriber::Whisper(endpoint) => {
+                transcribe(endpoint, pcm, control, deadline).await
+            }
             LocalTranscriber::Parakeet(endpoint) => {
                 endpoint.transcribe(pcm, control, deadline).await
             }

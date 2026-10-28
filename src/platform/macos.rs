@@ -1313,13 +1313,15 @@ impl Shell {
                         let local = match (engine, speech.settings()) {
                             (None, _) => Ok(()),
                             (Some(_), None) => Err("Speech settings are invalid".to_string()),
-                            (Some(engine), Some(settings)) => match settings.local_transcriber(engine) {
-                                Ok(local) => local
-                                    .prepare("en", Duration::from_secs(2))
-                                    .await
-                                    .map(|_| ()),
-                                Err(error) => Err(error),
-                            },
+                            (Some(engine), Some(settings)) => {
+                                match settings.local_transcriber(engine) {
+                                    Ok(local) => local
+                                        .prepare("en", Duration::from_secs(2))
+                                        .await
+                                        .map(|_| ()),
+                                    Err(error) => Err(error),
+                                }
+                            }
                         };
                         let cloud = if command.may_need_cloud() {
                             crate::config::load().map(|_| ())

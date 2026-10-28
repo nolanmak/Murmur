@@ -36,9 +36,12 @@ fn build_fake() -> PathBuf {
         .nth(1)
         .and_then(|r| r.split('#').next())
         .expect("a pinned git revision");
-    let fake_source = manifest.parent().unwrap().join("src/bin/fotw-speechd-fake.rs");
-    let target = std::env::var_os("CARGO_TARGET_DIR")
-        .map_or_else(|| root.join("target"), PathBuf::from);
+    let fake_source = manifest
+        .parent()
+        .unwrap()
+        .join("src/bin/fotw-speechd-fake.rs");
+    let target =
+        std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), PathBuf::from);
     let package = target.join("speechd-fake");
     std::fs::create_dir_all(&package).unwrap();
     std::fs::write(
@@ -66,7 +69,13 @@ path = {fake_source:?}
     // Murmur's lockfile resolves every dependency the fake has, offline.
     std::fs::copy(root.join("Cargo.lock"), package.join("Cargo.lock")).unwrap();
     let status = std::process::Command::new(&cargo)
-        .args(["build", "--offline", "--quiet", "--bin", "fotw-speechd-fake"])
+        .args([
+            "build",
+            "--offline",
+            "--quiet",
+            "--bin",
+            "fotw-speechd-fake",
+        ])
         .arg("--manifest-path")
         .arg(package.join("Cargo.toml"))
         .arg("--target-dir")
@@ -121,7 +130,11 @@ async fn the_helper_gates_trims_and_transcribes_one_batch_per_utterance() {
         .await
         .unwrap();
     assert_eq!(text, "");
-    assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

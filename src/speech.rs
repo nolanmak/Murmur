@@ -143,11 +143,11 @@ impl Settings {
                     Err(_) => Ok(crate::capture::CaptureProvider::Local(local)),
                 }
             }
-            Provider::LocalWhisper | Provider::LocalParakeet => Ok(
-                crate::capture::CaptureProvider::Local(
+            Provider::LocalWhisper | Provider::LocalParakeet => {
+                Ok(crate::capture::CaptureProvider::Local(
                     self.local_transcriber(self.effective_local_engine())?,
-                ),
-            ),
+                ))
+            }
         }
     }
 
