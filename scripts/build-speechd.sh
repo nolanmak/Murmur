@@ -7,8 +7,8 @@
 # is cloned or downloaded except FluidAudio's own SwiftPM binary artifact.
 #
 # MURMUR_SPEECHD_SOURCE=<FlyOnTheWall checkout> builds from that checkout
-# instead, for local work before the helper reaches the pinned revision. A
-# bundle built that way is for local measurement only.
+# instead, for local work on the helper. A bundle built that way is for local
+# use only.
 set -eu
 cd "$(dirname "$0")/.."
 fail() { printf 'error: %s\n' "$@" >&2; exit 1; }
@@ -27,8 +27,7 @@ print(next(p["manifest_path"] for p in packages if p["name"] == "fotw-speechd-cl
     source=$(dirname "$(dirname "$(dirname "$manifest")")")
 fi
 [ -f "$source/helpers/fotw-speechd/Package.swift" ] ||
-    fail "$source has no helpers/fotw-speechd; the pinned FlyOnTheWall revision predates the Swift helper (FlyOnTheWall #253)." \
-        "Bump the pin once it is merged, or set MURMUR_SPEECHD_SOURCE for a local-only build."
+    fail "$source has no helpers/fotw-speechd (FlyOnTheWall #253 and later have it)"
 python3 "$source/tools/speech-eval/parakeet/verify_runtime.py" "$fluid" >&2
 target="${CARGO_TARGET_DIR:-$PWD/target}/speechd-swift"
 FOTW_FLUIDAUDIO_SOURCE="$fluid" swift build --package-path "$source/helpers/fotw-speechd" \

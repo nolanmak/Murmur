@@ -77,9 +77,9 @@ build fails if the helper is missing, carries the microphone entitlement, or
 is not hardened. Without `MURMUR_SPEECHD=1` no Swift is needed and Local
 Parakeet reports that the build lacks the helper.
 
-Until FlyOnTheWall #253 is merged and pinned, the pinned source has no Swift
-helper; `MURMUR_SPEECHD_SOURCE=<FlyOnTheWall checkout>` builds from a checkout
-instead, for local measurement only.
+The pinned revision contains the helper (FlyOnTheWall #253, bundled as in
+#254). `MURMUR_SPEECHD_SOURCE=<FlyOnTheWall checkout>` builds from another
+checkout instead, for local work on the helper only.
 
 ## Tests
 
