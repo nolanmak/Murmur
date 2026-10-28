@@ -224,7 +224,7 @@ async fn local_release_sends_wav_without_cloud_key_and_stops_microphone() {
     let (tap, control, started, stopped) = fixture(48000, 0);
     let result = murmur::capture::run_provider_observed(
         tap,
-        murmur::capture::CaptureProvider::Local(endpoint),
+        murmur::capture::CaptureProvider::Local(endpoint.into()),
         control,
         Arc::new(AtomicBool::new(false)),
     )
@@ -410,7 +410,7 @@ async fn unavailable_local_engine_is_reported_before_microphone_capture() {
     let result = murmur::capture::run_provider_observed(
         tap,
         murmur::capture::CaptureProvider::Local(
-            murmur::local_stt::LocalEndpoint::new("http://127.0.0.1:1").unwrap(),
+            murmur::local_stt::LocalEndpoint::new("http://127.0.0.1:1").unwrap().into(),
         ),
         control,
         Arc::new(AtomicBool::new(false)),
@@ -1027,7 +1027,7 @@ async fn invalid_profile_and_unready_local_engine_do_not_prepare_native_input() 
         let error = murmur::capture::run_provider_with_preparation(
             input,
             murmur::capture::CaptureProvider::Local(
-                murmur::local_stt::LocalEndpoint::new("http://127.0.0.1:1").unwrap(),
+                murmur::local_stt::LocalEndpoint::new("http://127.0.0.1:1").unwrap().into(),
             ),
             Arc::new(AtomicU8::new(0)),
             Arc::new(AtomicBool::new(false)),
@@ -1723,11 +1723,11 @@ async fn unsupported_language_never_opens_microphone_for_cloud_local_or_fallback
                 key: "fixture".into(),
                 endpoint: cloud,
             },
-            1 => CaptureProvider::Local(local),
+            1 => CaptureProvider::Local(local.clone().into()),
             _ => CaptureProvider::DeepgramThenLocal {
                 key: "fixture".into(),
                 endpoint: cloud,
-                local,
+                local: local.into(),
             },
         };
         let profile = murmur::vocabulary::Profile {
@@ -1777,11 +1777,11 @@ async fn language_preflight_rejects_unsupported_choices_before_native_preparatio
                 key: "fixture".into(),
                 endpoint: DeepgramEndpoint::loopback(1),
             },
-            1 => CaptureProvider::Local(local),
+            1 => CaptureProvider::Local(local.clone().into()),
             _ => CaptureProvider::DeepgramThenLocal {
                 key: "fixture".into(),
                 endpoint: DeepgramEndpoint::loopback(1),
-                local,
+                local: local.into(),
             },
         };
         let calls = Arc::new(AtomicUsize::new(0));
@@ -1833,7 +1833,7 @@ async fn language_preflight_observes_cancel_release_and_route_change_while_healt
                 panic!("interrupted preflight must never prepare a microphone")
             }),
             CaptureProvider::Local(
-                murmur::local_stt::LocalEndpoint::new(&format!("http://{address}")).unwrap(),
+                murmur::local_stt::LocalEndpoint::new(&format!("http://{address}")).unwrap().into(),
             ),
             control.clone(),
             Arc::new(AtomicBool::new(false)),

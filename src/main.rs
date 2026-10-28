@@ -4,7 +4,7 @@ fn main() {
     let result = match command.as_str() {
         "--help" | "help" => {
             println!(
-                "Murmur — macOS hold-Control dictation\n\nrun     Launch the menu-bar app (use the .app bundle)\ndoctor  Report provider configuration without printing secrets\nspeech  Select local [URL], deepgram or fallback [URL] transcription\nlanguage CODE  Select an explicit transcription language (default en)\nvocabulary  Import/export/validate a versioned vocabulary profile\ncleanup  Configure a provider, then explicitly turn text cleanup on/off\nprivacy  Choose offline-all (local speech, no cleanup) or configured providers\n\nHold Control to dictate; release to insert; Esc cancels.\nRun scripts/build-app.sh and launch the resulting .app for capture."
+                "Murmur — macOS hold-Control dictation\n\nrun     Launch the menu-bar app (use the .app bundle)\ndoctor  Report provider configuration without printing secrets\nspeech  Select parakeet, whisper [URL], local [URL], deepgram or fallback [parakeet|whisper] [URL];\n        speech install-parakeet [--parakeet-from DIR] [--vad-from DIR] installs the Parakeet model\nlanguage CODE  Select an explicit transcription language (default en)\nvocabulary  Import/export/validate a versioned vocabulary profile\ncleanup  Configure a provider, then explicitly turn text cleanup on/off\nprivacy  Choose offline-all (local speech, no cleanup) or configured providers\n\nHold Control to dictate; release to insert; Esc cancels.\nRun scripts/build-app.sh and launch the resulting .app for capture."
             );
             Ok(())
         }
@@ -57,26 +57,73 @@ fn configure_cleanup(privacy: bool) -> Result<(), String> {
     Ok(())
 }
 
+const SPEECH_USAGE: &str = "Usage: murmur speech parakeet | whisper [http://127.0.0.1:17863] | local [URL] | deepgram | fallback [parakeet|whisper] [URL] | install-parakeet [--parakeet-from DIR] [--vad-from DIR]";
+
 fn configure_speech() -> Result<(), String> {
-    let args: Vec<String> = std::env::args().collect();
+    use murmur::speech::{LocalEngine, Provider};
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    if args.first().map(String::as_str) == Some("install-parakeet") {
+        return install_parakeet(&args[1..]);
+    }
     let path = murmur::speech::Settings::path()?;
     let mut settings = murmur::speech::Settings::load(&path)?;
-    match args.get(2).map(String::as_str) {
-        Some("local") => {
-            settings.provider = murmur::speech::Provider::LocalWhisper;
-            if let Some(url) = args.get(3) {
-                settings.local_endpoint = url.clone();
+    // A URL is the Whisper gateway's, so giving one means Whisper.
+    let mut engine = settings.local_engine;
+    let mut url = None;
+    for arg in args.iter().skip(1).map(String::as_str) {
+        match arg {
+            "parakeet" => engine = LocalEngine::Parakeet,
+            "whisper" => engine = LocalEngine::Whisper,
+            url_arg if url.is_none() && url_arg.starts_with("http") => {
+                url = Some(url_arg);
+                engine = LocalEngine::Whisper;
             }
+            _ => return Err(SPEECH_USAGE.into()),
         }
-        Some("deepgram") => settings.provider = murmur::speech::Provider::Deepgram,
-        Some("fallback") => {
-            settings.provider = murmur::speech::Provider::DeepgramThenLocal;
-            if let Some(url) = args.get(3) { settings.local_endpoint = url.clone(); }
-        },
-        _ => return Err("Usage: murmur speech local [http://127.0.0.1:17863] | deepgram | fallback [http://127.0.0.1:17863]".into()),
     }
+    let provider = match args.first().map(String::as_str) {
+        Some("parakeet") if args.len() == 1 => Provider::LocalParakeet,
+        Some("whisper") => Provider::LocalWhisper,
+        Some("local") => Provider::local(engine),
+        Some("deepgram") if args.len() == 1 => Provider::Deepgram,
+        Some("fallback") => Provider::backup(engine),
+        _ => return Err(SPEECH_USAGE.into()),
+    };
+    if let Some(url) = url {
+        if provider.local_engine() != Some(LocalEngine::Whisper) {
+            return Err(SPEECH_USAGE.into());
+        }
+        settings.local_endpoint = url.into();
+    }
+    settings.select(provider);
     settings.save(&path)?;
-    println!("Saved transcription provider; restart running app to reload CLI changes.");
+    println!(
+        "Saved {}; restart the running app to reload CLI changes.",
+        murmur::engine_command::label(&settings.provider)
+    );
+    Ok(())
+}
+
+/// Explicit setup: the only CLI path that downloads a model.
+fn install_parakeet(args: &[String]) -> Result<(), String> {
+    let mut sources = murmur::local_parakeet::InstallSources::default();
+    let mut iter = args.iter();
+    while let Some(flag) = iter.next() {
+        let dir = iter.next().ok_or(SPEECH_USAGE)?;
+        match flag.as_str() {
+            "--parakeet-from" => sources.parakeet = Some(dir.into()),
+            "--vad-from" => sources.vad = Some(dir.into()),
+            _ => return Err(SPEECH_USAGE.into()),
+        }
+    }
+    let service = murmur::local_parakeet::Endpoint::shared().service().clone();
+    let progress: murmur::local_parakeet::Progress = std::sync::Arc::new(|line| eprintln!("{line}"));
+    murmur::capture::block_on_detached(async move { service.install(sources, progress).await })??;
+    println!(
+        "Installed Parakeet Unified and Silero VAD in {}. Licenses: {}",
+        murmur::local_parakeet::models_root()?.display(),
+        murmur::local_parakeet::ATTRIBUTION
+    );
     Ok(())
 }
 fn configure_language() -> Result<(), String> {
@@ -126,7 +173,7 @@ fn configure_vocabulary() -> Result<(), String> {
 fn doctor() -> Result<(), String> {
     let vocabulary = murmur::vocabulary::Profile::load(&murmur::vocabulary::Profile::path()?)?;
     println!(
-        "Vocabulary: {} recognition hints, {} snippets (contents withheld). Local Whisper ignores recognition hints; snippets work with either provider.",
+        "Vocabulary: {} recognition hints, {} snippets (contents withheld). Local engines ignore recognition hints; snippets work with every provider.",
         vocabulary.recognition_hints.len(),
         vocabulary.snippets.len()
     );
@@ -138,6 +185,19 @@ fn doctor() -> Result<(), String> {
     let privacy = murmur::cleanup_config::NetworkPolicy::load(
         &murmur::cleanup_config::NetworkPolicy::path()?,
     )?;
+    let local = settings.effective_local_engine();
+    match local {
+        murmur::speech::LocalEngine::Parakeet => println!(
+            "Local engine: Local Parakeet (helper {}, models in {}). Install with `murmur speech install-parakeet`; nothing downloads during dictation.",
+            fotw_speechd_client::locate_helper()
+                .map_or("not bundled in this build".into(), |p| p.display().to_string()),
+            murmur::local_parakeet::models_root()?.display()
+        ),
+        murmur::speech::LocalEngine::Whisper => println!(
+            "Local engine: Local Whisper at {}.",
+            settings.local_endpoint
+        ),
+    }
     if privacy.offline_all {
         println!("Offline-all: local speech only, cleanup disabled; cloud credentials not read.");
         return Ok(());
@@ -149,11 +209,16 @@ fn doctor() -> Result<(), String> {
                 c.source
             )
         }),
-        murmur::speech::Provider::DeepgramThenLocal => {
+        murmur::speech::Provider::DeepgramThenWhisper
+        | murmur::speech::Provider::DeepgramThenParakeet => {
             println!(
-                "Deepgram → local fallback at {}. Install/start the local engine before relying on offline recovery. No model downloads occur during capture.",
-                settings.local_endpoint
+                "Deepgram → {} fallback. Install the local engine before relying on offline recovery. No model downloads occur during capture.",
+                local.label()
             );
+            Ok(())
+        }
+        murmur::speech::Provider::LocalParakeet => {
+            println!("Local Parakeet. No cloud credentials required.");
             Ok(())
         }
         murmur::speech::Provider::LocalWhisper => {

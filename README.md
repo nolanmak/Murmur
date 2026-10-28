@@ -157,17 +157,28 @@ Native validation and restart acceptance steps: [login startup QA](docs/login-st
 
 ## Local transcription
 
-Local Whisper supports offline dictation after explicit engine/model setup. Choose
-**Transcription: Local Whisper** in the menu, or run `murmur speech local`.
-See [setup, privacy and acceptance evidence](docs/local-whisper.md).
+Two local engines work offline after an explicit model install:
+
+- **Local Parakeet** (default for new installs): Parakeet Unified 0.6B, English
+  only, run by the bundled `fotw-speechd` helper with Silero VAD in front. Install
+  its model with **Transcription → Install Parakeet model…** or
+  `murmur speech install-parakeet`, then choose **Local Parakeet** or run
+  `murmur speech parakeet`. See [Local Parakeet](docs/local-parakeet.md).
+- **Local Whisper**: the managed whisper.cpp engine, for languages other than
+  English. Choose **Local Whisper** or run `murmur speech whisper`. See
+  [setup, privacy and acceptance evidence](docs/local-whisper.md).
+
+A settings file from before Parakeet keeps Whisper as its local engine until you
+choose Parakeet.
 
 ### Wi-Fi resilience
 
-`murmur speech fallback [http://127.0.0.1:17863]` selects Deepgram with local
-Whisper fallback. The Transcription menu cycles through cloud-only, local-only,
-and cloud-to-local. Existing saved choices are unchanged. Install/start the
-local engine first: both local and fallback modes check `/health` before opening
-the microphone and never download a model while recording.
+`murmur speech fallback [parakeet|whisper]` selects Deepgram with a local backup
+(the default local engine unless named). The Transcription menu lists every
+choice: Deepgram, Local Parakeet, Local Whisper, and Deepgram with either as
+backup. Existing saved choices are unchanged. Install the local engine first:
+local and fallback modes check it is ready before opening the microphone and
+never download a model while recording.
 
 Fallback retains the complete utterance (at most 120 seconds) in memory. A
 transient cloud failure gets at most one bounded retry; an unavailable cloud or
@@ -184,15 +195,18 @@ Hold Control and say only a command, starting with "Murmur":
 
 | Say | Next dictation uses |
 |---|---|
-| "Murmur, use local" | Local Whisper |
+| "Murmur, use local" | The default local engine (Local Parakeet on a new install) |
+| "Murmur, use Parakeet" | Local Parakeet |
+| "Murmur, use Whisper" | Local Whisper |
 | "Murmur, use Deepgram" (or "use cloud") | Deepgram only |
-| "Murmur, use backup" | Deepgram with local backup |
+| "Murmur, use backup" | Deepgram with the default local engine as backup |
 | "Murmur, undo" | The engine before the last switch |
 | "Murmur, which engine" | Nothing changes; shows the current engine |
 
 The status bubble shows the result for a moment, and a command is never typed.
 Rules:
 - Only the whole utterance counts. "Tell him to use local" or "Murmur, use local and send it" is dictated normally.
+- Naming Parakeet or Whisper, by voice or in the menu, also makes it the default local engine.
 - Switching to local, or to backup, first checks that the local engine is ready. If it isn't, Murmur says why and keeps the current engine.
 - With Offline-all on, voice can't switch to a cloud engine; use the menu.
 - A switch applies from the next dictation.

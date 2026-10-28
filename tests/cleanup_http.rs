@@ -173,7 +173,8 @@ async fn configured_adapter_sends_only_the_utterance_and_accepts_a_complete_edit
 fn offline_all_uses_local_speech_even_when_cloud_or_fallback_was_configured() {
     for provider in [
         murmur::speech::Provider::Deepgram,
-        murmur::speech::Provider::DeepgramThenLocal,
+        murmur::speech::Provider::DeepgramThenWhisper,
+        murmur::speech::Provider::DeepgramThenParakeet,
     ] {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("speech.json");

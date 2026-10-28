@@ -6,24 +6,120 @@ use std::path::{Path, PathBuf};
 pub enum Provider {
     #[default]
     Deepgram,
+    /// Parakeet Unified through the bundled fotw-speechd helper (#101).
+    LocalParakeet,
     LocalWhisper,
-    DeepgramThenLocal,
+    /// Deepgram with Local Whisper as the backup. The name predates Parakeet
+    /// and stays for settings files written before it.
+    #[serde(rename = "deepgram-then-local")]
+    DeepgramThenWhisper,
+    DeepgramThenParakeet,
 }
+impl Provider {
+    /// Every choice, in menu order.
+    pub const ALL: [Provider; 5] = [
+        Provider::Deepgram,
+        Provider::LocalParakeet,
+        Provider::LocalWhisper,
+        Provider::DeepgramThenParakeet,
+        Provider::DeepgramThenWhisper,
+    ];
+    /// The local engine this choice runs, alone or as the backup.
+    pub fn local_engine(&self) -> Option<LocalEngine> {
+        match self {
+            Provider::Deepgram => None,
+            Provider::LocalParakeet | Provider::DeepgramThenParakeet => Some(LocalEngine::Parakeet),
+            Provider::LocalWhisper | Provider::DeepgramThenWhisper => Some(LocalEngine::Whisper),
+        }
+    }
+    /// Local only, no cloud at all.
+    pub fn local(engine: LocalEngine) -> Self {
+        match engine {
+            LocalEngine::Parakeet => Provider::LocalParakeet,
+            LocalEngine::Whisper => Provider::LocalWhisper,
+        }
+    }
+    /// Deepgram, falling back to `engine`.
+    pub fn backup(engine: LocalEngine) -> Self {
+        match engine {
+            LocalEngine::Parakeet => Provider::DeepgramThenParakeet,
+            LocalEngine::Whisper => Provider::DeepgramThenWhisper,
+        }
+    }
+    pub fn uses_cloud(&self) -> bool {
+        !matches!(self, Provider::LocalParakeet | Provider::LocalWhisper)
+    }
+}
+
+/// Which local engine "local" means.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum LocalEngine {
+    Parakeet,
+    Whisper,
+}
+impl LocalEngine {
+    /// Settings written before Parakeet existed keep the engine they used.
+    fn legacy() -> Self {
+        LocalEngine::Whisper
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            LocalEngine::Parakeet => "Local Parakeet",
+            LocalEngine::Whisper => "Local Whisper",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
     pub provider: Provider,
     pub local_endpoint: String,
+    /// The default local engine: what "Murmur, use local" and "use backup"
+    /// select, and what Offline-all runs while Deepgram is chosen. Parakeet on
+    /// a new install; a file from before Parakeet has no field and keeps
+    /// Whisper, so existing users move only when they choose to.
+    #[serde(default = "LocalEngine::legacy")]
+    pub local_engine: LocalEngine,
 }
 impl Default for Settings {
     fn default() -> Self {
         Self {
             provider: Provider::Deepgram,
             local_endpoint: "http://127.0.0.1:17863".into(),
+            local_engine: LocalEngine::Parakeet,
         }
     }
 }
 impl Settings {
+    /// The engine local dictation uses under this choice, or under
+    /// Offline-all while a cloud-only choice is saved.
+    pub fn effective_local_engine(&self) -> LocalEngine {
+        self.provider.local_engine().unwrap_or(self.local_engine)
+    }
+    /// The local transcriber for `engine`.
+    pub fn local_transcriber(
+        &self,
+        engine: LocalEngine,
+    ) -> Result<crate::local_stt::LocalTranscriber, String> {
+        Ok(match engine {
+            LocalEngine::Whisper => crate::local_stt::LocalTranscriber::Whisper(
+                crate::local_stt::LocalEndpoint::new(&self.local_endpoint)?,
+            ),
+            LocalEngine::Parakeet => crate::local_stt::LocalTranscriber::Parakeet(
+                crate::local_parakeet::Endpoint::shared(),
+            ),
+        })
+    }
+    /// Record `provider`; a choice that names a local engine also makes it the
+    /// default local engine.
+    pub fn select(&mut self, provider: Provider) {
+        if let Some(engine) = provider.local_engine() {
+            self.local_engine = engine;
+        }
+        self.provider = provider;
+    }
     pub fn capture_provider(
         &self,
         credentials: impl FnOnce() -> Result<crate::config::Credentials, String>,
@@ -36,8 +132,8 @@ impl Settings {
                     endpoint: fotw_stt::DeepgramEndpoint::production(),
                 })
             }
-            Provider::DeepgramThenLocal => {
-                let local = crate::local_stt::LocalEndpoint::new(&self.local_endpoint)?;
+            Provider::DeepgramThenWhisper | Provider::DeepgramThenParakeet => {
+                let local = self.local_transcriber(self.effective_local_engine())?;
                 match credentials() {
                     Ok(credentials) => Ok(crate::capture::CaptureProvider::DeepgramThenLocal {
                         key: credentials.key.expose().into(),
@@ -47,9 +143,11 @@ impl Settings {
                     Err(_) => Ok(crate::capture::CaptureProvider::Local(local)),
                 }
             }
-            Provider::LocalWhisper => Ok(crate::capture::CaptureProvider::Local(
-                crate::local_stt::LocalEndpoint::new(&self.local_endpoint)?,
-            )),
+            Provider::LocalWhisper | Provider::LocalParakeet => Ok(
+                crate::capture::CaptureProvider::Local(
+                    self.local_transcriber(self.effective_local_engine())?,
+                ),
+            ),
         }
     }
 
@@ -100,7 +198,7 @@ impl Selection {
         if offline_all {
             let settings = self.0.as_ref().map_err(Clone::clone)?;
             return Ok(crate::capture::CaptureProvider::Local(
-                crate::local_stt::LocalEndpoint::new(&settings.local_endpoint)?,
+                settings.local_transcriber(settings.effective_local_engine())?,
             ));
         }
         self.capture_provider(credentials)
@@ -117,6 +215,15 @@ impl Selection {
     pub fn local_endpoint(&self) -> Option<&str> {
         self.0.as_ref().ok().map(|s| s.local_endpoint.as_str())
     }
+    pub fn settings(&self) -> Option<&Settings> {
+        self.0.as_ref().ok()
+    }
+    /// The default local engine; Parakeet when the settings are unreadable,
+    /// since repairing them starts a new choice.
+    pub fn local_engine(&self) -> LocalEngine {
+        self.settings()
+            .map_or(LocalEngine::Parakeet, |s| s.local_engine)
+    }
     pub fn capture_provider(
         &self,
         credentials: impl FnOnce() -> Result<crate::config::Credentials, String>,
@@ -129,7 +236,7 @@ impl Selection {
     /// Commit a user choice only after persistence succeeds; otherwise stay blocked.
     pub fn choose(&mut self, provider: Provider, path: &Path) -> Result<(), String> {
         let mut settings = self.0.as_ref().cloned().unwrap_or_default();
-        settings.provider = provider;
+        settings.select(provider);
         settings.save(path)?;
         self.0 = Ok(settings);
         Ok(())

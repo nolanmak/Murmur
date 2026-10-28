@@ -16,6 +16,8 @@ pub enum Stage {
     Retrying = 2,
     Local = 3,
     LocalWithoutHints = 4,
+    Parakeet = 5,
+    ParakeetWithoutHints = 6,
 }
 impl Progress {
     pub fn stage(&self) -> Stage {
@@ -24,6 +26,8 @@ impl Progress {
             2 => Stage::Retrying,
             3 => Stage::Local,
             4 => Stage::LocalWithoutHints,
+            5 => Stage::Parakeet,
+            6 => Stage::ParakeetWithoutHints,
             _ => Stage::Preparing,
         }
     }
@@ -36,7 +40,7 @@ impl Stage {
     /// Keep the capability difference visible even when a fast local result
     /// completes between two native UI progress polls.
     pub fn completion_message(self, message: &str) -> String {
-        if self == Self::LocalWithoutHints {
+        if matches!(self, Self::LocalWithoutHints | Self::ParakeetWithoutHints) {
             format!("{message} · Local recognition hints unavailable")
         } else {
             message.to_owned()
@@ -49,6 +53,8 @@ impl Stage {
             Self::Retrying => "Retrying Deepgram",
             Self::Local => "Local Whisper",
             Self::LocalWithoutHints => "Local Whisper · recognition hints unavailable",
+            Self::Parakeet => "Local Parakeet",
+            Self::ParakeetWithoutHints => "Local Parakeet · recognition hints unavailable",
         }
     }
 }
@@ -72,7 +78,7 @@ pub async fn transcribe(
     key: String,
     audio: mpsc::Receiver<Vec<i16>>,
     cloud: fotw_stt::DeepgramEndpoint,
-    local: crate::local_stt::LocalEndpoint,
+    local: impl Into<crate::local_stt::LocalTranscriber>,
     control: Arc<AtomicU8>,
     deadlines: Deadlines,
 ) -> Result<String, String> {
@@ -92,7 +98,7 @@ pub async fn transcribe_observed(
     key: String,
     audio: mpsc::Receiver<Vec<i16>>,
     cloud: fotw_stt::DeepgramEndpoint,
-    local: crate::local_stt::LocalEndpoint,
+    local: impl Into<crate::local_stt::LocalTranscriber>,
     control: Arc<AtomicU8>,
     deadlines: Deadlines,
     progress: Progress,
@@ -108,7 +114,7 @@ pub async fn transcribe_with_vocabulary(
     key: String,
     audio: mpsc::Receiver<Vec<i16>>,
     cloud: fotw_stt::DeepgramEndpoint,
-    local: crate::local_stt::LocalEndpoint,
+    local: impl Into<crate::local_stt::LocalTranscriber>,
     control: Arc<AtomicU8>,
     deadlines: Deadlines,
     progress: Progress,
@@ -132,12 +138,13 @@ pub async fn transcribe_with_profile(
     key: String,
     mut audio: mpsc::Receiver<Vec<i16>>,
     cloud: fotw_stt::DeepgramEndpoint,
-    local: crate::local_stt::LocalEndpoint,
+    local: impl Into<crate::local_stt::LocalTranscriber>,
     control: Arc<AtomicU8>,
     deadlines: Deadlines,
     progress: Progress,
     profile: &crate::vocabulary::Profile,
 ) -> Result<String, String> {
+    let local = local.into();
     profile.validate()?;
     crate::language::validate_deepgram(&profile.language)?;
     if local.language() != profile.language {
@@ -239,7 +246,8 @@ pub async fn transcribe_with_profile(
             }
         }
     }
-    crate::local_stt::transcribe(&local, &pcm, control, deadlines.local)
+    local
+        .transcribe(&pcm, control, deadlines.local)
         .await
         .map_err(|e| format!("Cloud transcription unavailable; local fallback: {e}"))
 }
@@ -248,14 +256,16 @@ pub async fn transcribe_with_profile(
 /// deterministic snippets. Unsupported hints never become hosted repair work.
 pub(crate) fn local_vocabulary_stage(
     profile: &crate::vocabulary::Profile,
-    endpoint: &crate::local_stt::LocalEndpoint,
+    endpoint: &crate::local_stt::LocalTranscriber,
 ) -> Stage {
-    if matches!(
+    let without_hints = matches!(
         profile.hints_for(endpoint.vocabulary_capability()),
         fotw_stt::vocabulary::HintSelection::Unsupported
-    ) {
-        Stage::LocalWithoutHints
-    } else {
-        Stage::Local
+    );
+    match (endpoint.engine(), without_hints) {
+        (crate::speech::LocalEngine::Whisper, false) => Stage::Local,
+        (crate::speech::LocalEngine::Whisper, true) => Stage::LocalWithoutHints,
+        (crate::speech::LocalEngine::Parakeet, false) => Stage::Parakeet,
+        (crate::speech::LocalEngine::Parakeet, true) => Stage::ParakeetWithoutHints,
     }
 }

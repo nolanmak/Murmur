@@ -526,11 +526,11 @@ pub enum CaptureProvider {
         key: String,
         endpoint: fotw_stt::DeepgramEndpoint,
     },
-    Local(crate::local_stt::LocalEndpoint),
+    Local(crate::local_stt::LocalTranscriber),
     DeepgramThenLocal {
         key: String,
         endpoint: fotw_stt::DeepgramEndpoint,
-        local: crate::local_stt::LocalEndpoint,
+        local: crate::local_stt::LocalTranscriber,
     },
 }
 pub async fn run_provider_observed(
@@ -715,8 +715,7 @@ pub async fn run_provider_raw_with_preparation(
             local: endpoint, ..
         } => {
             let prepared = {
-                let readiness =
-                    crate::local_stt::prepare(endpoint, &profile.language, Duration::from_secs(2));
+                let readiness = endpoint.prepare(&profile.language, Duration::from_secs(2));
                 tokio::pin!(readiness);
                 let mut tick = tokio::time::interval(Duration::from_millis(5));
                 loop {
@@ -819,13 +818,9 @@ pub async fn run_provider_raw_with_preparation(
                 while let Some(chunk) = rx.recv().await {
                     append_local_pcm(&mut pcm, chunk);
                 }
-                crate::local_stt::transcribe(
-                    &endpoint,
-                    &pcm,
-                    control.clone(),
-                    Duration::from_secs(180),
-                )
-                .await
+                endpoint
+                    .transcribe(&pcm, control.clone(), Duration::from_secs(180))
+                    .await
             }
         }
     };
