@@ -404,6 +404,42 @@ class RuntimeTests(unittest.TestCase):
                 backend.server_close()
                 thread.join(timeout=2)
 
+    def test_gateway_drops_annotation_only_transcripts_and_lines(self):
+        cases = [
+            (" *outro music*\n", ""),
+            (" [BLANK_AUDIO]\n", ""),
+            (" (music)\n", ""),
+            (" *Loud noise* [Music]\n (applause)\n", ""),
+            (" Hello there.\n *music*\n See you soon.\n", " Hello there.\n See you soon.\n"),
+            (" I said [laughs] that was fine.\n", " I said [laughs] that was fine.\n"),
+            (" (Thank you) for coming.\n", " (Thank you) for coming.\n"),
+            (" Plain speech\n", " Plain speech\n"),
+        ]
+        replies = iter(cases)
+        class Backend(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                body = json.dumps({"text": next(replies)[0]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            def log_message(self, *args): pass
+        backend = runtime.LoopbackHTTPServer(("127.0.0.1", 0), Backend)
+        thread = threading.Thread(target=backend.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+        thread.start()
+        gateway = runtime.Gateway(0, backend.server_port, "", {"language_count": 1}, "b" * 64, lambda: True)
+        try:
+            for engine_text, expected in cases:
+                with self.subTest(engine_text=engine_text):
+                    status, _, body = self.infer(gateway.server.server_port, gateway.capabilities)
+                    self.assertEqual((status, body), (200, {"text": expected}))
+        finally:
+            gateway.close()
+            backend.shutdown()
+            backend.server_close()
+            thread.join(timeout=2)
+
     def test_loopback_supervisor_startup_never_resolves_a_hostname(self):
         self.install()
         state = self.root / "state folder"

@@ -5,6 +5,7 @@ import http.client
 import http.server
 import io
 import json
+import re
 import secrets
 import socketserver
 import threading
@@ -18,6 +19,8 @@ MAX_BODY = 4 * 1024 * 1024
 MAX_RESPONSE = 1024 * 1024
 MAX_FRAMES = 16000 * 120 + 3200
 BODY_SECONDS = 3
+# A line that is nothing but Whisper sound annotations: *music*, [BLANK_AUDIO], (applause).
+ANNOTATION_LINE = re.compile(r"\s*(?:(?:\*[^*\n]*\*|\[[^\]\n]*\]|\([^)\n]*\))\s*)+")
 INFERENCE_SECONDS = 180
 
 
@@ -121,6 +124,15 @@ def inference_form(language, audio):
             disposition += '; filename="audio.wav"\r\nContent-Type: audio/wav'
         parts.append(f"--{boundary}\r\n{disposition}\r\n\r\n".encode() + value + b"\r\n")
     return boundary, b"".join(parts) + f"--{boundary}--\r\n".encode()
+
+
+def drop_annotation_lines(text):
+    """Remove annotation-only lines; annotations inside spoken text are kept."""
+    lines = text.splitlines(keepends=True)
+    kept = [line for line in lines if not ANNOTATION_LINE.fullmatch(line)]
+    if len(kept) == len(lines):
+        return text
+    return "".join(kept) if any(line.strip() for line in kept) else ""
 
 
 class Gateway:
@@ -250,7 +262,7 @@ class Gateway:
                 raise Refused(502, "Malformed local engine response") from None
             if not isinstance(result, dict) or not isinstance(result.get("text"), str):
                 raise Refused(502, "Local engine response has no transcript")
-            return {"text": result["text"]}
+            return {"text": drop_annotation_lines(result["text"])}
         except TimeoutError:
             self.failed.set()
             raise Refused(504, "Local inference timed out") from None

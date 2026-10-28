@@ -97,6 +97,18 @@ The managed engine starts `whisper-server --vad --vad-model <verified file>
 corpus showed 0.5 still passed short music/noise segments that Whisper turned
 into text such as "Thank you.", while 0.8 dropped them and kept speech mixed
 with music at 10 dB SNR.
+
+The gateway also drops transcript lines that are only Whisper sound
+annotations (`*outro music*`, `[BLANK_AUDIO]`, `(applause)`), returning `""` if
+nothing else remains. Annotations inside spoken text, such as
+`I said [laughs] fine`, are kept. `--suppress-nst` was measured and not
+enabled: with VAD and this filter it changed non-speech output by one word
+(an annotation became a stray "B") and raised WER on speech in music at 10 dB
+from 3.70% to 3.89%.
+
+Sung vocals are still transcribed. Silero scores singing as speech at every
+threshold tested (0.5 to 0.9, v5.1.2 and v6.2.0), so VAD cannot keep lyrics
+out; that needs a music or singing classifier.
 whisper.cpp runs Silero VAD over each request and only transcribes detected
 speech; a request with no speech returns `{"text": ""}`, which Murmur reports as
 "No speech detected" without inserting anything. The gateway advertises
