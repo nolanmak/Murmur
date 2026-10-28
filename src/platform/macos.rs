@@ -413,11 +413,17 @@ impl Drop for EventTap {
 struct SpokenCommand {
     command: crate::engine_command::Command,
     local: Result<(), String>,
+    cloud: Result<(), String>,
     offline_all: bool,
 }
 enum Spoken {
     Text(crate::cleanup::Outcome),
-    Command(String, crate::engine_command::Command, Result<(), String>),
+    Command(
+        String,
+        crate::engine_command::Command,
+        Result<(), String>,
+        Result<(), String>,
+    ),
 }
 struct Completion {
     command: Option<SpokenCommand>,
@@ -968,6 +974,7 @@ impl Shell {
             self.previous_provider.as_ref(),
             spoken.offline_all,
             &spoken.local,
+            &spoken.cloud,
         ) {
             Decision::Switch { to, message } => {
                 match crate::speech::Settings::path().and_then(|path| self.speech.choose(to, &path))
@@ -1193,7 +1200,12 @@ impl Shell {
                         } else {
                             Ok(())
                         };
-                        return Ok::<_, String>(Spoken::Command(raw, command, local));
+                        let cloud = if command.may_need_cloud() {
+                            crate::config::load().map(|_| ())
+                        } else {
+                            Ok(())
+                        };
+                        return Ok::<_, String>(Spoken::Command(raw, command, local, cloud));
                     }
                     let outcome = cleanup_service
                         .run(
@@ -1212,10 +1224,11 @@ impl Shell {
                         cleanup_notice = Some(outcome.disposition);
                         Ok(outcome.text)
                     }
-                    Spoken::Command(raw, command, local) => {
+                    Spoken::Command(raw, command, local, cloud) => {
                         spoken_command = Some(SpokenCommand {
                             command,
                             local,
+                            cloud,
                             offline_all: policy.offline_all,
                         });
                         Ok(raw)

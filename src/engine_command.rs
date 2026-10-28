@@ -27,6 +27,11 @@ impl Command {
     pub fn may_need_local(self) -> bool {
         !matches!(self, Command::Which | Command::Use(Target::Deepgram))
     }
+    /// Whether applying this command may land on cloud-only Deepgram, so the
+    /// worker checks that a key loads. Backup falls back to local without one.
+    pub fn may_need_cloud(self) -> bool {
+        matches!(self, Command::Undo | Command::Use(Target::Deepgram))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -94,16 +99,17 @@ pub fn decide(
     previous: Option<&Provider>,
     offline_all: bool,
     local: &Result<(), String>,
+    cloud_key: &Result<(), String>,
 ) -> Decision {
     let current_label = current.map(label).unwrap_or("the current setting");
     let target = match command {
         Command::Which => {
-            let suffix = if offline_all {
-                " · Offline-all is on"
+            // Offline-all overrides the saved engine for every dictation.
+            return Decision::Report(if offline_all {
+                "Using Local Whisper · Offline-all is on".into()
             } else {
-                ""
-            };
-            return Decision::Report(format!("Using {current_label}{suffix}"));
+                format!("Using {current_label}")
+            });
         }
         Command::Use(target) => provider(target),
         Command::Undo => match previous {
@@ -119,6 +125,13 @@ pub fn decide(
         return Decision::Refuse(format!(
             "Offline-all is on — switch to {} from the menu; staying on {current_label}",
             label(&target)
+        ));
+    }
+    if matches!(target, Provider::Deepgram)
+        && let Err(reason) = cloud_key
+    {
+        return Decision::Refuse(format!(
+            "{reason} — add a Deepgram key first; staying on {current_label}"
         ));
     }
     let needs_local = !matches!(target, Provider::Deepgram);

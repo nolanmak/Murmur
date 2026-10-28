@@ -75,6 +75,7 @@ fn switching_to_a_ready_engine_saves_it_and_says_so() {
         None,
         false,
         &ready(),
+        &ready(),
     );
     match d {
         Decision::Switch { to, message } => {
@@ -94,6 +95,7 @@ fn an_unready_local_engine_is_refused_and_the_current_choice_kept() {
             None,
             false,
             &down(),
+            &ready(),
         );
         match d {
             Decision::Refuse(message) => {
@@ -109,7 +111,8 @@ fn an_unready_local_engine_is_refused_and_the_current_choice_kept() {
             Some(&Provider::LocalWhisper),
             None,
             false,
-            &down()
+            &down(),
+            &ready()
         ),
         Decision::Switch {
             to: Provider::Deepgram,
@@ -127,6 +130,7 @@ fn offline_all_blocks_voice_switches_to_the_cloud() {
             None,
             true,
             &ready(),
+            &ready(),
         );
         assert!(
             matches!(d, Decision::Refuse(ref m) if m.contains("Offline")),
@@ -139,6 +143,7 @@ fn offline_all_blocks_voice_switches_to_the_cloud() {
             Some(&Provider::Deepgram),
             None,
             true,
+            &ready(),
             &ready()
         ),
         Decision::Switch {
@@ -156,6 +161,7 @@ fn undo_returns_to_the_previous_engine_and_obeys_the_same_rules() {
             Some(&Provider::LocalWhisper),
             Some(&Provider::Deepgram),
             false,
+            &ready(),
             &ready()
         ),
         Decision::Switch {
@@ -164,7 +170,7 @@ fn undo_returns_to_the_previous_engine_and_obeys_the_same_rules() {
         }
     ));
     assert!(matches!(
-        decide(Command::Undo, Some(&Provider::Deepgram), None, false, &ready()),
+        decide(Command::Undo, Some(&Provider::Deepgram), None, false, &ready(),&ready()),
         Decision::Report(ref m) if m.contains("Nothing to undo")
     ));
     assert!(matches!(
@@ -173,7 +179,8 @@ fn undo_returns_to_the_previous_engine_and_obeys_the_same_rules() {
             Some(&Provider::Deepgram),
             Some(&Provider::LocalWhisper),
             false,
-            &down()
+            &down(),
+            &ready()
         ),
         Decision::Refuse(_)
     ));
@@ -182,11 +189,68 @@ fn undo_returns_to_the_previous_engine_and_obeys_the_same_rules() {
 #[test]
 fn which_and_already_selected_only_report() {
     assert!(matches!(
-        decide(Command::Which, Some(&Provider::DeepgramThenLocal), None, false, &ready()),
+        decide(Command::Which, Some(&Provider::DeepgramThenLocal), None, false, &ready(),&ready()),
         Decision::Report(ref m) if m.contains("Deepgram") && m.contains("local")
     ));
     assert!(matches!(
-        decide(Command::Use(Target::Local), Some(&Provider::LocalWhisper), None, false, &ready()),
+        decide(Command::Use(Target::Local), Some(&Provider::LocalWhisper), None, false, &ready(),&ready()),
         Decision::Report(ref m) if m.contains("Already")
     ));
+}
+
+#[test]
+fn a_cloud_switch_without_credentials_is_refused() {
+    let missing: Result<(), String> = Err("No Deepgram key".into());
+    for command in [Command::Use(Target::Deepgram)] {
+        let d = decide(
+            command,
+            Some(&Provider::LocalWhisper),
+            None,
+            false,
+            &ready(),
+            &missing,
+        );
+        assert!(
+            matches!(d, Decision::Refuse(ref m) if m.contains("Deepgram key") && m.contains("staying on Local Whisper")),
+            "{d:?}"
+        );
+    }
+    // Undo back to Deepgram obeys the same rule.
+    let d = decide(
+        Command::Undo,
+        Some(&Provider::LocalWhisper),
+        Some(&Provider::Deepgram),
+        false,
+        &ready(),
+        &missing,
+    );
+    assert!(matches!(d, Decision::Refuse(_)), "{d:?}");
+    // Backup falls back to local without a key, so it is not blocked.
+    assert!(matches!(
+        decide(
+            Command::Use(Target::Backup),
+            Some(&Provider::LocalWhisper),
+            None,
+            false,
+            &ready(),
+            &missing
+        ),
+        Decision::Switch { .. }
+    ));
+}
+
+#[test]
+fn which_names_local_whisper_while_offline_all_overrides_the_saved_engine() {
+    let d = decide(
+        Command::Which,
+        Some(&Provider::Deepgram),
+        None,
+        true,
+        &ready(),
+        &ready(),
+    );
+    assert!(
+        matches!(d, Decision::Report(ref m) if m.starts_with("Using Local Whisper") && m.contains("Offline-all")),
+        "{d:?}"
+    );
 }
