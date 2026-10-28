@@ -62,6 +62,9 @@ struct Capabilities {
     instance_id: String,
     model_sha256: String,
     languages: Vec<String>,
+    /// The managed engine runs Silero VAD: audio without speech returns "".
+    #[serde(default)]
+    vad: bool,
 }
 impl Capabilities {
     fn validate(&self, language: &str) -> Result<(), String> {
@@ -103,6 +106,11 @@ impl LocalEndpoint {
 
     pub fn language(&self) -> &str {
         &self.language
+    }
+
+    /// Whether the preflighted runtime filters non-speech with VAD.
+    pub fn vad(&self) -> bool {
+        self.binding.as_ref().is_some_and(|binding| binding.vad)
     }
     pub fn new(value: &str) -> Result<Self, String> {
         let url = reqwest::Url::parse(value).map_err(|_| "Invalid local engine URL")?;

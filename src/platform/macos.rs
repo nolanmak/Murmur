@@ -1808,7 +1808,7 @@ impl Shell {
                         }
                     }
                 }
-                CompletionEffect::Empty => self.show("No speech detected"),
+                CompletionEffect::Empty => self.show(crate::core::NO_SPEECH),
                 CompletionEffect::Error(e) => {
                     if done.input_failed {
                         self.readiness_reason = Some(e.clone());

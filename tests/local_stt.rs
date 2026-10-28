@@ -320,13 +320,21 @@ async fn language_fixture(
     health: serde_json::Value,
     inference_headers: Option<String>,
 ) -> (LocalEndpoint, tokio::task::JoinHandle<Vec<u8>>) {
+    language_fixture_with(health, inference_headers, r#"{"text":"Bonjour."}"#).await
+}
+
+async fn language_fixture_with(
+    health: serde_json::Value,
+    inference_headers: Option<String>,
+    inference_body: &'static str,
+) -> (LocalEndpoint, tokio::task::JoinHandle<Vec<u8>>) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint =
         LocalEndpoint::new(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
     let task = tokio::spawn(async move {
         let replies = std::iter::once((health.to_string(), String::new()))
-            .chain(inference_headers.map(|headers| (r#"{"text":"Bonjour."}"#.into(), headers)));
+            .chain(inference_headers.map(|headers| (inference_body.into(), headers)));
         let mut last_request = Vec::new();
         for (body, headers) in replies {
             let (mut socket, _) = listener.accept().await.unwrap();
@@ -456,4 +464,36 @@ async fn local_inference_binds_language_instance_and_model_and_rejects_changed_r
         assert!(text.contains(&format!("x-murmur-instance: {}", "a".repeat(64))));
         assert!(text.contains(&format!("x-murmur-model: {}", "b".repeat(64))));
     }
+}
+
+#[tokio::test]
+async fn vad_runtime_preflights_and_no_speech_inserts_nothing() {
+    let mut health = language_health();
+    health["murmur_capabilities"]["vad"] = true.into();
+    let headers = format!(
+        "X-Murmur-Instance: {}\r\nX-Murmur-Model: {}\r\n",
+        "a".repeat(64),
+        "b".repeat(64)
+    );
+    let (endpoint, server) = language_fixture_with(health, Some(headers), r#"{"text":""}"#).await;
+    let bound = murmur::local_stt::prepare(&endpoint, "en", Duration::from_secs(1))
+        .await
+        .expect("a VAD-capable managed runtime must pass preflight");
+    assert!(bound.vad());
+    // Non-silent PCM reaches the engine; its VAD finds no speech.
+    let text = transcribe(
+        &bound,
+        &[1000; 1600],
+        Arc::new(AtomicU8::new(1)),
+        Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+    server.await.unwrap();
+    let mut dictation = murmur::core::Dictation::default();
+    dictation.start_manual();
+    dictation.stop();
+    let effect = dictation.complete(dictation.generation(), Ok(text));
+    assert_eq!(effect, Some(murmur::core::CompletionEffect::Empty));
+    assert_eq!(effect.unwrap().status_message(), Some("No speech detected"));
 }
