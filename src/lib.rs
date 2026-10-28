@@ -17,6 +17,7 @@ pub mod space_hotkey;
 pub mod streaming;
 pub mod transcript;
 
+pub mod engine_command;
 pub mod fallback;
 pub mod local_stt;
 pub mod speech;

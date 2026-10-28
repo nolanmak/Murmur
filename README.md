@@ -178,6 +178,26 @@ use local rather than retrying early. Escape and original-field validation remai
 in force. This is not persistent recording/history and never switches local-only
 speech to cloud. See `docs/local-whisper.md` for deadlines and test evidence.
 
+### Switch engines by voice
+
+Hold Control and say only a command, starting with "Murmur":
+
+| Say | Next dictation uses |
+|---|---|
+| "Murmur, use local" | Local Whisper |
+| "Murmur, use Deepgram" (or "use cloud") | Deepgram only |
+| "Murmur, use backup" | Deepgram with local backup |
+| "Murmur, undo" | The engine before the last switch |
+| "Murmur, which engine" | Nothing changes; shows the current engine |
+
+The status bubble shows the result for a moment, and a command is never typed.
+Rules:
+- Only the whole utterance counts. "Tell him to use local" or "Murmur, use local and send it" is dictated normally.
+- Switching to local, or to backup, first checks that the local engine is ready. If it isn't, Murmur says why and keeps the current engine.
+- With Offline-all on, voice can't switch to a cloud engine; use the menu.
+- A switch applies from the next dictation.
+- Commands are checked before snippets, so a snippet whose cue starts with "Murmur" can't shadow a command.
+
 ### Vocabulary and deliberate snippets
 
 Use `murmur vocabulary example vocabulary.json` to create an editable profile,

@@ -409,7 +409,18 @@ impl Drop for EventTap {
         }
     }
 }
+/// A spoken engine command and what the worker learned before the UI applies it.
+struct SpokenCommand {
+    command: crate::engine_command::Command,
+    local: Result<(), String>,
+    offline_all: bool,
+}
+enum Spoken {
+    Text(crate::cleanup::Outcome),
+    Command(String, crate::engine_command::Command, Result<(), String>),
+}
 struct Completion {
+    command: Option<SpokenCommand>,
     cleanup: Option<crate::cleanup::Disposition>,
     input_failed: bool,
     generation: u64,
@@ -653,6 +664,8 @@ struct Shell {
     status: MenuItem,
     speech: crate::speech::Selection,
     speech_toggle: MenuItem,
+    /// The engine before the last switch, for "Murmur, undo".
+    previous_provider: Option<crate::speech::Provider>,
     language_menu: super::macos_language::LanguageMenu,
     vocabulary_menu: super::macos_vocabulary::VocabularyMenu,
     cleanup_menu: super::macos_cleanup::CleanupMenu,
@@ -888,6 +901,7 @@ impl Shell {
             status,
             speech,
             speech_toggle,
+            previous_provider: None,
             language_menu,
             vocabulary_menu,
             cleanup_menu,
@@ -944,6 +958,33 @@ impl Shell {
     fn status(&self, message: &str) {
         eprintln!("status: {message}");
         self.status.set_text(message);
+    }
+    fn apply_engine_command(&mut self, spoken: &SpokenCommand) {
+        use crate::engine_command::Decision;
+        let current = self.speech.provider().cloned();
+        match crate::engine_command::decide(
+            spoken.command,
+            current.as_ref(),
+            self.previous_provider.as_ref(),
+            spoken.offline_all,
+            &spoken.local,
+        ) {
+            Decision::Switch { to, message } => {
+                match crate::speech::Settings::path().and_then(|path| self.speech.choose(to, &path))
+                {
+                    Ok(()) => {
+                        self.previous_provider = current;
+                        self.speech_toggle.set_text(
+                            self.cleanup_menu
+                                .speech_label(speech_label(self.speech.provider())),
+                        );
+                        self.show(&message);
+                    }
+                    Err(error) => self.show(&error),
+                }
+            }
+            Decision::Refuse(message) | Decision::Report(message) => self.show(&message),
+        }
     }
     fn show(&mut self, message: &str) {
         // A fresh result owns the transient notice. If native cleanup is still
@@ -1093,6 +1134,7 @@ impl Shell {
         std::thread::spawn(move || {
             let fault = Arc::new(AtomicBool::new(false));
             let mut cleanup_notice = None;
+            let mut spoken_command = None;
             let result = crate::core::contain_worker(|| {
                 let vocabulary =
                     crate::vocabulary::Profile::load(&crate::vocabulary::Profile::path()?)?;
@@ -1133,6 +1175,26 @@ impl Shell {
                         vocabulary.clone(),
                     )
                     .await?;
+                    // A whole-utterance engine command is never cleaned up,
+                    // expanded or inserted; it is applied by the UI instead.
+                    if let Some(command) = crate::engine_command::parse(&raw) {
+                        let local = if command.may_need_local() {
+                            match speech
+                                .local_endpoint()
+                                .ok_or_else(|| "Speech settings are invalid".to_string())
+                                .and_then(crate::local_stt::LocalEndpoint::new)
+                            {
+                                Ok(endpoint) => {
+                                    crate::local_stt::check_ready(&endpoint, Duration::from_secs(2))
+                                        .await
+                                }
+                                Err(error) => Err(error),
+                            }
+                        } else {
+                            Ok(())
+                        };
+                        return Ok::<_, String>(Spoken::Command(raw, command, local));
+                    }
                     let outcome = cleanup_service
                         .run(
                             &raw,
@@ -1143,12 +1205,25 @@ impl Shell {
                             crate::config::load_named,
                         )
                         .await?;
-                    Ok::<_, String>(outcome.for_destination(&raw, remote_cleanup))
+                    Ok::<_, String>(Spoken::Text(outcome.for_destination(&raw, remote_cleanup)))
                 })??;
-                cleanup_notice = Some(outcome.disposition);
-                Ok(outcome.text)
+                match outcome {
+                    Spoken::Text(outcome) => {
+                        cleanup_notice = Some(outcome.disposition);
+                        Ok(outcome.text)
+                    }
+                    Spoken::Command(raw, command, local) => {
+                        spoken_command = Some(SpokenCommand {
+                            command,
+                            local,
+                            offline_all: policy.offline_all,
+                        });
+                        Ok(raw)
+                    }
+                }
             });
             let _ = completed.send(Completion {
+                command: spoken_command,
                 cleanup: cleanup_notice,
                 input_failed: fault.load(Ordering::Acquire),
                 generation,
@@ -1222,6 +1297,7 @@ impl Shell {
         let generation = self.core.generation();
         self.core.stop();
         let _ = self.completed.send(Completion {
+            command: None,
             cleanup: None,
             input_failed: false,
             generation,
@@ -1229,6 +1305,7 @@ impl Shell {
         });
         if duplicate {
             let _ = self.completed.send(Completion {
+                command: None,
                 cleanup: None,
                 input_failed: false,
                 generation,
@@ -1471,10 +1548,12 @@ impl Shell {
                         }
                         _ => crate::speech::Provider::LocalWhisper,
                     };
+                    let before = self.speech.provider().cloned();
                     match crate::speech::Settings::path()
                         .and_then(|path| self.speech.choose(provider, &path))
                     {
                         Ok(()) => {
+                            self.previous_provider = before;
                             self.speech_toggle.set_text(
                                 self.cleanup_menu
                                     .speech_label(speech_label(self.speech.provider())),
@@ -1674,6 +1753,11 @@ impl Shell {
                 continue;
             };
             match effect {
+                CompletionEffect::Transcript(_) if done.command.is_some() => {
+                    if let Some(spoken) = done.command.as_ref() {
+                        self.apply_engine_command(spoken);
+                    }
+                }
                 CompletionEffect::Transcript(text) => {
                     let cleanup_suffix = match done.cleanup {
                         Some(crate::cleanup::Disposition::Fallback) => {
