@@ -449,6 +449,9 @@ def main():
                 if (state / name).is_file():
                     result[key] = str(state / name)
                     result[key + "_sha256"] = digest(state / name)
+            if "model_sha256" in result:
+                # Pre-VAD key for the speech model, read by existing consumers.
+                result["sha256"] = result["model_sha256"]
             emit(result)
         elif args.command == "start":
             # Checked before adopting a running instance: a refused start never

@@ -263,6 +263,43 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(json.loads(status.getvalue())["selected_vad_metadata"]["license"],
                          "MIT (Silero VAD)")
 
+    def test_import_and_setup_output_shape_is_pinned(self):
+        r = self.run_cli("import-model", str(self.model), "--sha256", self.digest)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        state = (self.root / "state folder").resolve()
+        # "sha256" stays the speech model's digest for existing consumers.
+        self.assertEqual(json.loads(r.stdout), {
+            "model": str(state / "model.bin"), "sha256": self.digest,
+            "model_sha256": self.digest})
+        r = self.install_vad()
+        vad_digest = (state / "vad.bin").resolve().stem
+        self.assertEqual(json.loads(r.stdout), {
+            "model": str(state / "model.bin"), "sha256": self.digest,
+            "model_sha256": self.digest,
+            "vad_model": str(state / "vad.bin"), "vad_model_sha256": vad_digest})
+
+    def test_public_qa_install_prepares_a_startable_runtime(self):
+        spec = importlib.util.spec_from_file_location(
+            "qa_public_local", pathlib.Path(__file__).with_name("qa-public-local.py"))
+        qa = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(qa)
+        helper = [sys.executable, str(SCRIPT), "--app", "murmur",
+                  "--state-dir", str(self.root / "state folder")]
+        def command(argv):
+            result = subprocess.run(list(map(str, argv)), capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return result
+        vad = self.root / "qa vad.bin"
+        vad.write_bytes(vad_fixture())
+        vad_digest = hashlib.sha256(vad.read_bytes()).hexdigest()
+        imported = qa.install_models(command, helper, self.model, self.digest, vad, vad_digest)
+        self.assertEqual((imported["sha256"], imported["vad_model_sha256"]),
+                         (self.digest, vad_digest))
+        r = self.run_cli("start", "--binary", str(self.fixture_engine()),
+                         "--port", str(self.free_port()), "--timeout", "30")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(qa.VAD_SHA256, runtime.VAD_SHA256)
+
     def test_gateway_refuses_language_binding_and_parameter_changes_without_poisoning_engine(self):
         port = self.start_fixture_engine()
         caps = self.health(port)["murmur_capabilities"]
