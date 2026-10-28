@@ -219,11 +219,17 @@ fn read_wav(path: &Path) -> Result<Vec<i16>, String> {
     if wav.len() < 12 || &wav[..4] != b"RIFF" || &wav[8..12] != b"WAVE" {
         return Err(format!("{}: not a WAV", path.display()));
     }
+    // The format chunk must come first, and no chunk may run past the file:
+    // anything else is not the corpus format and must not be scored as it.
     let mut cursor = 12;
+    let mut format_checked = false;
     while cursor + 8 <= wav.len() {
         let length = u32::from_le_bytes(wav[cursor + 4..cursor + 8].try_into().unwrap()) as usize;
         let start = cursor + 8;
-        let end = (start + length).min(wav.len());
+        let end = start
+            .checked_add(length)
+            .filter(|&end| end <= wav.len())
+            .ok_or_else(|| format!("{}: truncated chunk", path.display()))?;
         if &wav[cursor..cursor + 4] == b"fmt " {
             let format = &wav[start..end];
             // PCM, mono, 16 kHz, 16-bit: the corpus format.
@@ -235,14 +241,18 @@ fn read_wav(path: &Path) -> Result<Vec<i16>, String> {
             {
                 return Err(format!("{}: expected 16 kHz mono PCM16", path.display()));
             }
+            format_checked = true;
         }
         if &wav[cursor..cursor + 4] == b"data" {
+            if !format_checked {
+                return Err(format!("{}: data before its format chunk", path.display()));
+            }
             return Ok(wav[start..end]
                 .chunks_exact(2)
                 .map(|b| i16::from_le_bytes([b[0], b[1]]))
                 .collect());
         }
-        cursor = start + length + (length & 1);
+        cursor = end + (length & 1);
     }
     Err(format!("{}: no data chunk", path.display()))
 }
