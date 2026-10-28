@@ -55,7 +55,8 @@ of Muesli's custom-word matcher. Its targets are each correction and each
 recognition hint. A case- and accent-insensitive exact match, or a near miss
 with Jaro–Winkler similarity at or above the threshold (every word of a phrase
 must match), is replaced; adjacent words spelling a camel-case term are joined
-(`Fluid Audio` → `FluidAudio`). Frequent English words, words with digits and
+(`Fluid Audio` → `FluidAudio`, but never from only common words such as
+`power point`). Frequent English words, words with digits and
 longer words containing a term are never treated as near misses. The matcher
 runs on pure-local and local-fallback text before snippets and cleanup, and
 never on Deepgram text, which already had the hints as keyterms. The progress
@@ -64,8 +65,10 @@ Deterministic snippets still apply to the winning local transcript afterwards.
 See FlyOnTheWall `docs/VOCABULARY.md` for the exact rules.
 
 On the #118 synthetic technical-term clips with whisper large-v3-turbo, local
-term recall rose from 10/14 to 14/14 with those terms as hints, and WER fell
-from 15.4% to 7.7%; 42 LibriSpeech clips were unchanged. A 200-entry profile
+term recall rose from 10/14 to 13/14 with those terms as hints, and WER fell
+from 15.4% to 11.1%; 42 LibriSpeech clips were unchanged. Split words join
+only when at least one is uncommon, so "Fly on the Wall" stays prose unless a
+`fly on the wall` correction is added. A 200-entry profile
 adds well under 1 ms per utterance at p95 (nolanmak/FlyOnTheWall#256).
 
 Say a complete utterance such as **"insert snippet sign off"** to expand a
