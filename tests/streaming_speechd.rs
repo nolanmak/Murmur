@@ -189,3 +189,45 @@ async fn an_unsupported_language_is_refused_before_recording() {
         .unwrap_err();
     assert!(error.contains("does not transcribe"), "{error}");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn leaving_streaming_unloads_the_engine_in_the_helper_and_it_reloads_on_return() {
+    let endpoint = endpoint();
+    let ready = endpoint
+        .prepare("en", Duration::from_secs(10))
+        .await
+        .unwrap();
+    // A finished dictation, so no stream holds the engine.
+    let (tx, rx) = tokio::sync::mpsc::channel(64);
+    let run = tokio::spawn({
+        let ready = ready.clone();
+        async move {
+            ready
+                .transcribe(rx, Progress::default(), Arc::new(AtomicU8::new(0)))
+                .await
+        }
+    });
+    tx.send(vec![100; 4_000]).await.unwrap();
+    drop(tx);
+    run.await.unwrap().expect("final");
+    endpoint
+        .service()
+        .unload()
+        .await
+        .expect("the helper unloads it");
+    assert!(endpoint.service().state().is_none());
+    // Choosing streaming again loads it again; a stream works.
+    let again = endpoint
+        .prepare("en", Duration::from_secs(10))
+        .await
+        .expect("reloaded");
+    let (tx, rx) = tokio::sync::mpsc::channel(64);
+    let run = tokio::spawn(async move {
+        again
+            .transcribe(rx, Progress::default(), Arc::new(AtomicU8::new(0)))
+            .await
+    });
+    tx.send(vec![100; 4_000]).await.unwrap();
+    drop(tx);
+    assert_eq!(run.await.unwrap().expect("final"), "steps=1 lang=en");
+}

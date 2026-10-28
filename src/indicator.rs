@@ -40,7 +40,10 @@ impl Look {
             Look::Armed | Look::Success => (44.0, 8.0),
             Look::Starting | Look::Processing => (50.0, 20.0),
             Look::Listening => (64.0, 22.0),
-            Look::Notice | Look::Live => (
+            // A partial changes several times a second; a fixed width keeps
+            // the pill from easing (and hiding its text) on each one.
+            Look::Live => (NOTICE_MAX_WIDTH, NOTICE_HEIGHT),
+            Look::Notice => (
                 (text_width + 2.0 * NOTICE_PADDING)
                     .ceil()
                     .clamp(44.0, NOTICE_MAX_WIDTH),

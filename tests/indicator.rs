@@ -339,5 +339,17 @@ fn streaming_partials_show_their_latest_words_truncated_while_recording() {
         indicator.look_live(0, Phase::Processing, true, false),
         Look::Processing
     );
-    assert_eq!(Look::Live.size(120.0), Look::Notice.size(120.0));
+    assert_eq!(
+        Look::Live.size(120.0).1,
+        Look::Notice.size(120.0).1,
+        "a text pill"
+    );
+}
+
+#[test]
+fn the_live_pill_keeps_one_width_so_partials_do_not_reflow_it() {
+    // #100 review: a new partial every ~0.56 s must not resize the pill,
+    // or it eases to the new width and hides its text each time.
+    assert_eq!(Look::Live.size(40.0), Look::Live.size(260.0));
+    assert_eq!(Look::Live.size(40.0), (NOTICE_MAX_WIDTH, NOTICE_HEIGHT));
 }

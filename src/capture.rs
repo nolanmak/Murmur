@@ -822,7 +822,7 @@ pub async fn run_provider_raw_with_preparation(
     // Ten seconds of 10 ms chunks covers the bounded eight-second TLS handshake.
     // The previous 320 ms queue overflowed before a live connection could open.
     let (tx, rx) = tokio::sync::mpsc::channel(1024);
-    let local = !matches!(&provider, CaptureProvider::Deepgram { .. });
+    let finalization = finalization_limit(&provider);
     let network = async {
         match provider {
             CaptureProvider::Deepgram { key, endpoint } => {
@@ -899,10 +899,15 @@ pub async fn run_provider_raw_with_preparation(
                 while let Some(chunk) = rx.recv().await {
                     append_local_pcm(&mut pcm, chunk);
                 }
-                endpoint
+                let text = endpoint
                     .transcribe(&pcm, control.clone(), Duration::from_secs(180))
                     .await
-                    .map(|text| corrections.apply(&text))
+                    .map(|text| corrections.apply(&text));
+                if streaming_fallback {
+                    // Only standing in for streaming: don't keep it resident.
+                    endpoint.release_after(BATCH_IDLE);
+                }
+                text
             }
         }
     };
@@ -924,7 +929,7 @@ pub async fn run_provider_raw_with_preparation(
              },
              _=tick.tick()=>{
               if control.load(Ordering::Acquire)==2 {return Err("Cancelled".into());}
-        if finish_started.is_some_and(|at:std::time::Instant|at.elapsed()>Duration::from_secs(if local { 185 } else { 10 })){return Err("Finalization timed out; no text inserted".into());}
+        if finish_started.is_some_and(|at:std::time::Instant|at.elapsed()>finalization){return Err("Finalization timed out; no text inserted".into());}
               if !finishing && let Some(error)=observed_device_failure(&changes, &fault) {return Err(error.into());}
                  if let Some(error)=audio_failure(&failed){return Err(error.into());}
               if !finishing {
@@ -963,6 +968,30 @@ pub async fn run_provider_raw_with_preparation(
     cleanup?;
     result
 }
+
+/// How long after release the attempt may take before it is abandoned as
+/// "Finalization timed out". Each provider's own deadlines must fit inside.
+pub fn finalization_limit(provider: &CaptureProvider) -> Duration {
+    match provider {
+        CaptureProvider::Deepgram { .. } => Duration::from_secs(10),
+        // The stream's final, then the batch retry's load and transcription.
+        CaptureProvider::Streaming { .. } => {
+            crate::local_streaming::FINAL_DEADLINE
+                + RETRY_LOAD
+                + RETRY_TRANSCRIBE
+                + Duration::from_secs(10)
+        }
+        _ => Duration::from_secs(185),
+    }
+}
+
+/// A failed stream's batch retry: time to load the engine (it is not kept
+/// warm beside streaming), then to transcribe up to 120 s of audio.
+const RETRY_LOAD: Duration = Duration::from_secs(30);
+const RETRY_TRANSCRIBE: Duration = Duration::from_secs(180);
+/// How long a batch engine that stood in for streaming stays loaded after
+/// its last use: long enough not to reload for a burst of fallbacks.
+const BATCH_IDLE: Duration = Duration::from_secs(60);
 
 /// Wait for a preflight check, giving up on Esc, release or a device fault.
 /// The outer `Err` ends the attempt; the inner result is the check's own.
@@ -1004,13 +1033,16 @@ async fn retry_on_batch(
     let batch = fallback.ok_or("no batch engine to retry on")?;
     let label = batch.engine().label();
     let batch = batch
-        .prepare(language, Duration::from_secs(30))
+        .prepare(language, RETRY_LOAD)
         .await
         .map_err(|e| format!("retry on {label} unavailable: {e}"))?;
-    batch
-        .transcribe(pcm, control, Duration::from_secs(180))
+    let text = batch
+        .transcribe(pcm, control, RETRY_TRANSCRIBE)
         .await
-        .map_err(|e| format!("retry on {label} failed: {e}"))
+        .map_err(|e| format!("retry on {label} failed: {e}"));
+    // Only a fallback: don't keep it resident beside streaming.
+    batch.release_after(BATCH_IDLE);
+    text
 }
 
 /// Retain at most 120 seconds of actual capture, including on a late stop tick.

@@ -39,7 +39,7 @@ const SAMPLE_RATE: usize = 16_000;
 /// Same bound as the other local engines: 120 s of capture plus resampler drain.
 const MAX_SAMPLES: usize = SAMPLE_RATE * 120 + 3200;
 /// From `finish` to the final: one padded step of each model, ~50 ms on an M3.
-const FINAL_DEADLINE: Duration = Duration::from_secs(10);
+pub const FINAL_DEADLINE: Duration = Duration::from_secs(10);
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -127,6 +127,8 @@ pub trait Backend: Send + Sync + 'static {
     ) -> BoxFuture<'static, Result<Box<dyn LiveStream>, String>>;
     /// Explicit setup: install the model, downloading unless `from` is given.
     fn install(&self, from: Option<PathBuf>) -> BoxFuture<'static, Result<(), String>>;
+    /// Release the model in the helper (streaming is no longer chosen).
+    fn unload(&self) -> BoxFuture<'static, Result<(), String>>;
 }
 
 type SharedLoad = Shared<BoxFuture<'static, Result<Binding, LoadError>>>;
@@ -254,6 +256,31 @@ impl Service {
         result
     }
 
+    /// Release the model when streaming is no longer chosen, so its ~1.1 GB
+    /// of Neural Engine memory is not held for nothing. The next `warm` or
+    /// `ready` loads it again.
+    pub async fn unload(&self) -> Result<(), String> {
+        let result = self
+            .handle()
+            .spawn(self.backend.unload())
+            .await
+            .unwrap_or_else(|_| Err("the unload stopped".into()));
+        if result.is_ok() {
+            *self.load.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+        result
+    }
+
+    /// [`unload`](Self::unload) in the background, for the UI.
+    pub fn release(self: &Arc<Self>) {
+        let service = self.clone();
+        drop(self.handle().spawn(async move {
+            if let Err(error) = service.unload().await {
+                eprintln!("local streaming model not released: {error}");
+            }
+        }));
+    }
+
     async fn open(&self, language: Option<String>) -> Result<Box<dyn LiveStream>, String> {
         self.handle()
             .spawn(self.backend.open(language))
@@ -338,6 +365,14 @@ impl Endpoint {
             binding: Some(binding),
             language,
         })
+    }
+
+    /// The check behind "Murmur, use streaming": loaded, warm and able to
+    /// take `language`, the saved dictation language.
+    pub async fn switch_probe(&self, language: &str) -> Result<(), String> {
+        self.prepare(language, Duration::from_secs(2))
+            .await
+            .map(|_| ())
     }
 
     /// Stream `audio` until its sender closes (release), publishing partials
@@ -529,6 +564,20 @@ impl Inner {
 }
 
 impl Backend for SpeechdBackend {
+    fn unload(&self) -> BoxFuture<'static, Result<(), String>> {
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            // Nothing is loaded without a running helper.
+            let Some(client) = inner.helper.running() else {
+                return Ok(());
+            };
+            client
+                .unload(&inner.engine)
+                .await
+                .map_err(|e| e.to_string())
+        })
+    }
+
     fn load(&self) -> BoxFuture<'static, Result<Binding, LoadError>> {
         let inner = self.inner.clone();
         Box::pin(async move { inner.load().await })

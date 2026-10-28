@@ -266,5 +266,8 @@ fn install_streaming(args: &[String]) -> Result<(), String> {
     println!("Installing the streaming model (about 1.2 GB unless --from is given)…");
     runtime.block_on(endpoint.service().install(from))?;
     println!("Installed. {}", murmur::local_streaming::ATTRIBUTION);
+    println!(
+        "If Murmur is running with this model already loaded, restart it to use the new copy."
+    );
     Ok(())
 }

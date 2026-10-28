@@ -85,6 +85,12 @@ impl Helper {
         Ok(started)
     }
 
+    /// The running helper, if any; never starts one (unloading needs none).
+    pub fn running(&self) -> Option<SpeechdClient> {
+        let client = self.current.lock().unwrap_or_else(|e| e.into_inner());
+        client.clone().filter(|c| !c.status().failed)
+    }
+
     /// Which helper process serves now (the client's spawn generation), if
     /// one is running; a restart changes it.
     pub fn instance(&self) -> Option<u64> {

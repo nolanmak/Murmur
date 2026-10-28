@@ -35,6 +35,9 @@ struct Log {
     languages: Vec<Option<String>>,
     /// Samples each stream received, in opening order.
     per_stream: Vec<usize>,
+    /// Loads and unloads the backend was asked for.
+    loads: usize,
+    unloads: usize,
     /// The distinct sample values each stream received.
     values: Vec<std::collections::BTreeSet<i16>>,
 }
@@ -42,7 +45,10 @@ struct Log {
 struct FakeBackend {
     script: Mutex<Script>,
     load: Mutex<Result<(), LoadError>>,
-    instance: AtomicU64,
+    /// When set, the helper "restarts" (a new instance) once a stream has
+    /// received this many samples.
+    restart_after: Mutex<Option<usize>>,
+    instance: Arc<AtomicU64>,
     log: Arc<Mutex<Log>>,
     /// Lets a test push events into the newest stream after it has ended.
     late: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedSender<Event>>>>,
@@ -53,7 +59,8 @@ impl FakeBackend {
         Arc::new(Self {
             script: Mutex::new(script),
             load: Mutex::new(Ok(())),
-            instance: AtomicU64::new(1),
+            restart_after: Mutex::new(None),
+            instance: Arc::new(AtomicU64::new(1)),
             log: Arc::default(),
             late: Arc::default(),
         })
@@ -65,6 +72,7 @@ impl FakeBackend {
 
 impl Backend for FakeBackend {
     fn load(&self) -> BoxFuture<'static, Result<Binding, LoadError>> {
+        self.log.lock().unwrap().loads += 1;
         let result = self.load.lock().unwrap().clone().map(|()| Binding {
             instance: self.instance.load(Ordering::SeqCst),
             model: "nemotron-3.5".into(),
@@ -92,6 +100,11 @@ impl Backend for FakeBackend {
         log.values.push(Default::default());
         drop(log);
         let stream = FakeStream {
+            restart: self
+                .restart_after
+                .lock()
+                .unwrap()
+                .map(|after| (after, self.instance.clone())),
             script: self.script.lock().unwrap().clone(),
             log: self.log.clone(),
             samples: 0,
@@ -103,9 +116,14 @@ impl Backend for FakeBackend {
     fn install(&self, _: Option<PathBuf>) -> BoxFuture<'static, Result<(), String>> {
         Box::pin(async { Ok(()) })
     }
+    fn unload(&self) -> BoxFuture<'static, Result<(), String>> {
+        self.log.lock().unwrap().unloads += 1;
+        Box::pin(async { Ok(()) })
+    }
 }
 
 struct FakeStream {
+    restart: Option<(usize, Arc<AtomicU64>)>,
     script: Script,
     log: Arc<Mutex<Log>>,
     samples: usize,
@@ -121,6 +139,12 @@ impl LiveStream for FakeStream {
     fn send<'a>(&'a mut self, pcm: &'a [i16]) -> BoxFuture<'a, Result<(), String>> {
         let before = self.samples;
         self.samples += pcm.len();
+        if let Some((after, instance)) = &self.restart
+            && self.samples >= *after
+            && before < *after
+        {
+            instance.store(2, Ordering::SeqCst);
+        }
         let mut log = self.log.lock().unwrap();
         log.samples = self.samples;
         *log.per_stream.last_mut().unwrap() = self.samples;
@@ -614,12 +638,9 @@ async fn a_helper_restart_after_the_mic_opened_inserts_nothing_from_the_stream()
     let backend = FakeBackend::new(Script::Speak {
         final_text: "from a stale helper".into(),
     });
+    // The helper restarts while the stream is running, not before it opens.
+    *backend.restart_after.lock().unwrap() = Some(3_200);
     let service = service(&backend);
-    let control_backend = backend.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(150)).await;
-        control_backend.instance.store(2, Ordering::SeqCst);
-    });
     let error = dictate(
         streaming(&service, None),
         Progress::default(),
@@ -630,6 +651,8 @@ async fn a_helper_restart_after_the_mic_opened_inserts_nothing_from_the_stream()
     .await
     .unwrap_err();
     assert!(error.contains("restarted"), "{error}");
+    assert_eq!(backend.log().opened, 1, "the stream had opened");
+    assert!(backend.log().samples >= 3_200, "and was mid-utterance");
 }
 
 #[test]
@@ -734,5 +757,79 @@ async fn the_streaming_final_gets_vocabulary_corrections_before_snippets() {
     assert_eq!(
         progress.stage().label(),
         "Local streaming: 1 vocabulary correction available"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_switch_probe_runs_in_the_saved_language() {
+    // "Murmur, use streaming" checks streaming can take the saved dictation
+    // language (#108), not only that it is loaded.
+    use murmur::engine_command::{Command, Decision, Target, decide};
+    let backend = FakeBackend::new(Script::Speak {
+        final_text: "unused".into(),
+    });
+    let service = service(&backend);
+    let endpoint = Endpoint::new(service);
+    endpoint
+        .switch_probe("en")
+        .await
+        .expect("English is supported");
+    let refused = endpoint.switch_probe("fr").await;
+    assert!(
+        refused
+            .as_ref()
+            .is_err_and(|e| e.contains("does not transcribe")),
+        "{refused:?}"
+    );
+    match decide(
+        Command::Use(Target::Streaming),
+        Some(&murmur::speech::Provider::LocalParakeet),
+        None,
+        LocalEngine::Parakeet,
+        false,
+        &refused,
+        &Ok(()),
+    ) {
+        Decision::Refuse(message) => assert!(
+            message.contains("does not transcribe") && message.contains("staying on"),
+            "{message}"
+        ),
+        other => panic!("the switch must be refused: {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unloading_streaming_releases_the_model_and_the_next_use_reloads_it() {
+    let backend = FakeBackend::new(Script::Speak {
+        final_text: "unused".into(),
+    });
+    let service = service(&backend);
+    service.ready(Duration::from_secs(2)).await.unwrap();
+    assert_eq!(backend.log().loads, 1);
+    service.unload().await.unwrap();
+    assert_eq!(
+        backend.log().unloads,
+        1,
+        "the helper was asked to unload it"
+    );
+    assert!(service.state().is_none(), "no load is kept");
+    service.ready(Duration::from_secs(2)).await.unwrap();
+    assert_eq!(backend.log().loads, 2, "the next use loads it again");
+}
+
+#[test]
+fn streaming_finalization_outlasts_its_own_retry_deadlines() {
+    // After release a failed stream waits for its final (10 s), then the
+    // batch engine's load (30 s) and transcription (180 s). The attempt must
+    // not be abandoned as a generic "Finalization timed out" before those
+    // report their own, clearer errors.
+    let backend = FakeBackend::new(Script::Speak {
+        final_text: "unused".into(),
+    });
+    let provider = streaming(&service(&backend), None);
+    let limit = murmur::capture::finalization_limit(&provider);
+    assert!(
+        limit > Duration::from_secs(10 + 30 + 180),
+        "streaming finalization limit {limit:?}"
     );
 }

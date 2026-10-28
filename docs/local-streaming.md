@@ -15,6 +15,9 @@ Streaming 0.6B (multilingual, NVIDIA, OpenMDW-1.1) in FlyOnTheWall's
    copy holding `560ms/` and `1120ms/`.
 3. Choose it: the Transcription menu, `murmur speech streaming`, or say
    "Murmur, use streaming".
+   A running Murmur picks up a model installed from the CLI the next time it
+   loads the engine. If you reinstall over a model it already has loaded (a
+   repair), restart Murmur so its helper reads the new copy.
 
 ## Behaviour
 
@@ -38,8 +41,8 @@ Streaming 0.6B (multilingual, NVIDIA, OpenMDW-1.1) in FlyOnTheWall's
   nothing is typed and the message names both reasons.
 - **Memory.** With streaming chosen only its engine is kept warm: about 1.1 GB
   of wired (Neural Engine) memory plus ~90 MB in the helper. The batch fallback
-  loads on demand rather than staying resident beside it, because both together
-  are about 1.85 GB.
+  loads on demand, and is unloaded again after 60 s without use, because both
+  together are about 1.85 GB. Choosing another engine unloads streaming's model.
 - **Vocabulary.** The final gets the same vocabulary corrections as every local
   engine (#102) before snippets and cleanup.
 - **A helper restart** during an utterance means nothing from that stream is

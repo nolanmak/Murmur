@@ -128,6 +128,10 @@ pub trait Backend: Send + Sync + 'static {
     /// Explicit setup: install both models, downloading unless a local copy
     /// is given, then drop any loaded copy so the next load reads the new one.
     fn install(&self, from: InstallSources, progress: Progress) -> BoxFuture<Result<(), String>>;
+    /// Release both models in the helper. Refused while a stream is open.
+    fn unload(&self) -> BoxFuture<Result<(), String>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 /// Local copies to import instead of downloading.
@@ -158,8 +162,10 @@ impl Drop for Worker {
 pub struct Service {
     backend: Arc<dyn Backend>,
     worker: Worker,
-    load: Mutex<Option<SharedLoad>>,
+    load: Arc<Mutex<Option<SharedLoad>>>,
     installing: AtomicBool,
+    /// Bumped on every use, so a scheduled release can tell it went stale.
+    uses: Arc<std::sync::atomic::AtomicU64>,
 }
 impl std::fmt::Debug for Service {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -187,8 +193,9 @@ impl Service {
         Ok(Self {
             backend,
             worker: Worker(Some(runtime)),
-            load: Mutex::new(None),
+            load: Arc::new(Mutex::new(None)),
             installing: AtomicBool::new(false),
+            uses: Arc::default(),
         })
     }
 
@@ -243,6 +250,23 @@ impl Service {
     }
 
     /// Load and warm in the background, at launch or when Parakeet is chosen.
+    /// Unload the models after `idle` with no further use: Parakeet was only
+    /// a fallback for local streaming, which keeps its own model warm (#100).
+    pub fn release_after(&self, idle: Duration) {
+        let seen = self.uses.load(Ordering::Acquire);
+        let (uses, load, backend) = (self.uses.clone(), self.load.clone(), self.backend.clone());
+        drop(self.handle().spawn(async move {
+            tokio::time::sleep(idle).await;
+            if uses.load(Ordering::Acquire) != seen {
+                return; // Used again since: its own release is scheduled.
+            }
+            // Refused while a stream is open, in which case it stays.
+            if backend.unload().await.is_ok() && uses.load(Ordering::Acquire) == seen {
+                *load.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            }
+        }));
+    }
+
     pub fn warm(&self) {
         if !self.installing.load(Ordering::Acquire) {
             drop(self.load());
@@ -259,6 +283,7 @@ impl Service {
     /// Check before the mic opens: the models are installed, valid, loaded and
     /// warm. Waits at most `deadline` for a load in progress.
     pub async fn ready(&self, deadline: Duration) -> Result<Binding, String> {
+        self.uses.fetch_add(1, Ordering::AcqRel);
         if self.installing.load(Ordering::Acquire) {
             return Err(
                 "Local Parakeet's model is installing; dictate when it finishes. Nothing was recorded"
@@ -734,6 +759,19 @@ impl SpeechdInner {
 }
 
 impl Backend for SpeechdBackend {
+    fn unload(&self) -> BoxFuture<Result<(), String>> {
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            // Nothing is loaded without a running helper.
+            let Some(client) = inner.helper.running() else {
+                return Ok(());
+            };
+            for engine in inner.engines() {
+                client.unload(engine).await.map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        })
+    }
     fn load(&self) -> BoxFuture<Result<Binding, LoadError>> {
         let inner = self.inner.clone();
         Box::pin(async move { inner.load().await })
