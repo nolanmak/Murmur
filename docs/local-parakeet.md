@@ -27,8 +27,9 @@ selectable and is still needed for languages other than English.
    Otherwise the audio from the first speech to the last (Silero's 0.5
    regions), plus 300 ms each side, goes to one Parakeet batch stream.
 4. The final text is joined into **one line** (#98), without Parakeet's
-   `<unk>` markers, and then goes through the
-   same command, snippet, cleanup, focus and generation checks as every engine.
+   `<unk>` markers, corrected from the personal vocabulary (#102, as for
+   Whisper), and then goes through the same command, snippet, cleanup, focus
+   and generation checks as every engine.
 
 Murmur spawns and owns the helper (`fotw-speechd-client`: restarts with
 backoff, a crash fails the open stream within a second). It loads and warms

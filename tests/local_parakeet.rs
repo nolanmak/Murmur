@@ -566,3 +566,43 @@ fn a_machine_without_saved_settings_keeps_an_installed_whisper_runtime() {
         assert_eq!(settings.provider, Provider::Deepgram);
     }
 }
+
+#[tokio::test]
+async fn parakeet_text_is_corrected_from_vocabulary_before_snippets_expand() {
+    // #102's corrections apply to every local engine's text, not only Whisper's.
+    let fake = Fake::new();
+    *fake.text.lock().unwrap() = "Insert snippet Fluid Audio.".into();
+    let control = Arc::new(AtomicU8::new(0));
+    let tap_control = control.clone();
+    let profile = murmur::vocabulary::Profile {
+        recognition_hints: vec!["FluidAudio".into()],
+        snippets: vec![murmur::vocabulary::Snippet {
+            name: "FluidAudio".into(),
+            text: "Expanded only after correction".into(),
+        }],
+        ..Default::default()
+    };
+    let progress = murmur::fallback::Progress::default();
+    let text = murmur::capture::run_provider_with_preparation(
+        murmur::capture::InputPreparation::new(move || {
+            Ok(murmur::capture::PreparedInput::new(Box::new(ToneTap {
+                id: fotw_audio::TapId::mic("fixture"),
+                control: tap_control,
+            })))
+        }),
+        murmur::capture::CaptureProvider::Local(endpoint(&fake).into()),
+        control,
+        Arc::new(AtomicBool::new(false)),
+        progress.clone(),
+        Default::default(),
+        fotw_audio::device_change::DeviceChangeSignal::new(),
+        profile,
+    )
+    .await
+    .unwrap();
+    assert_eq!(text, "Expanded only after correction");
+    assert_eq!(
+        progress.stage().label(),
+        "Local Parakeet: 1 vocabulary correction available"
+    );
+}

@@ -19,6 +19,7 @@ fn profile() -> Profile {
                 text: "Bonjour café 👋".into(),
             },
         ],
+        corrections: vec![],
     }
 }
 #[test]

@@ -161,12 +161,17 @@ fn configure_vocabulary() -> Result<(), String> {
                 name: "sign off".into(),
                 text: "Thanks,\nExample team".into(),
             }],
+            corrections: vec![murmur::vocabulary::Correction {
+                word: "open telemetry".into(),
+                replacement: Some("OpenTelemetry".into()),
+                matching_threshold: None,
+            }],
         }
         .save(file)?,
         _ => return Err("Usage: murmur vocabulary import|export|validate|example FILE".into()),
     }
     println!(
-        "Vocabulary profile processed. Changes apply to the next utterance; recognition hints are not supported by local Whisper."
+        "Vocabulary profile processed. Changes apply to the next utterance; local Whisper text is corrected from recognition hints and corrections."
     );
     Ok(())
 }
@@ -174,9 +179,11 @@ fn configure_vocabulary() -> Result<(), String> {
 fn doctor() -> Result<(), String> {
     let vocabulary = murmur::vocabulary::Profile::load(&murmur::vocabulary::Profile::path()?)?;
     println!(
-        "Vocabulary: {} recognition hints, {} snippets (contents withheld). Local engines ignore recognition hints; snippets work with every provider.",
+        "Vocabulary: {} recognition hints, {} corrections, {} snippets (contents withheld). Deepgram receives hints as keyterms; local engines' text gets {} vocabulary corrections instead. Snippets work with every provider.",
         vocabulary.recognition_hints.len(),
-        vocabulary.snippets.len()
+        vocabulary.corrections.len(),
+        vocabulary.snippets.len(),
+        murmur::vocabulary::VocabularyMatcher::new(&vocabulary).len()
     );
     let settings = murmur::speech::Settings::load(&murmur::speech::Settings::path()?)?;
     println!(

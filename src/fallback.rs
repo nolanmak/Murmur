@@ -1,60 +1,92 @@
 //! Whole-utterance arbitration for explicitly selected cloud-to-local dictation.
-use std::sync::{Arc, atomic::AtomicU8};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU8, AtomicU64},
+};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
 /// Per-attempt progress; each capture owns a fresh instance so late updates
 /// cannot overwrite a later dictation's UI.
 #[derive(Clone, Default)]
-pub struct Progress(Arc<AtomicU8>);
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-#[repr(u8)]
+pub struct Progress(Arc<AtomicU64>);
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Stage {
     #[default]
-    Preparing = 0,
-    Cloud = 1,
-    Retrying = 2,
-    Local = 3,
-    LocalWithoutHints = 4,
-    Parakeet = 5,
-    ParakeetWithoutHints = 6,
+    Preparing,
+    Cloud,
+    Retrying,
+    /// A local engine, whose text gets this many vocabulary correction
+    /// targets (#102).
+    Local {
+        engine: crate::speech::LocalEngine,
+        corrections: u32,
+    },
 }
 impl Progress {
     pub fn stage(&self) -> Stage {
-        match self.0.load(std::sync::atomic::Ordering::Acquire) {
+        let packed = self.0.load(std::sync::atomic::Ordering::Acquire);
+        match packed & 0xff {
             1 => Stage::Cloud,
             2 => Stage::Retrying,
-            3 => Stage::Local,
-            4 => Stage::LocalWithoutHints,
-            5 => Stage::Parakeet,
-            6 => Stage::ParakeetWithoutHints,
+            3 => Stage::Local {
+                engine: if packed >> 8 & 1 == 1 {
+                    crate::speech::LocalEngine::Parakeet
+                } else {
+                    crate::speech::LocalEngine::Whisper
+                },
+                corrections: (packed >> 16) as u32,
+            },
             _ => Stage::Preparing,
         }
     }
     pub(crate) fn set(&self, stage: Stage) {
-        self.0
-            .store(stage as u8, std::sync::atomic::Ordering::Release);
+        let packed = match stage {
+            Stage::Preparing => 0,
+            Stage::Cloud => 1,
+            Stage::Retrying => 2,
+            Stage::Local {
+                engine,
+                corrections,
+            } => {
+                let parakeet = u64::from(engine == crate::speech::LocalEngine::Parakeet);
+                3 | parakeet << 8 | u64::from(corrections) << 16
+            }
+        };
+        self.0.store(packed, std::sync::atomic::Ordering::Release);
     }
 }
 impl Stage {
-    /// Keep the capability difference visible even when a fast local result
+    /// Keep local vocabulary behavior visible even when a fast local result
     /// completes between two native UI progress polls.
     pub fn completion_message(self, message: &str) -> String {
-        if matches!(self, Self::LocalWithoutHints | Self::ParakeetWithoutHints) {
-            format!("{message} · Local recognition hints unavailable")
+        if let Self::Local {
+            corrections: 1.., ..
+        } = self
+        {
+            format!("{message} · {}", self.label())
         } else {
             message.to_owned()
         }
     }
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> std::borrow::Cow<'static, str> {
         match self {
-            Self::Preparing => "Checking speech engine",
-            Self::Cloud => "Deepgram",
-            Self::Retrying => "Retrying Deepgram",
-            Self::Local => "Local Whisper",
-            Self::LocalWithoutHints => "Local Whisper · recognition hints unavailable",
-            Self::Parakeet => "Local Parakeet",
-            Self::ParakeetWithoutHints => "Local Parakeet · recognition hints unavailable",
+            Self::Preparing => "Checking speech engine".into(),
+            Self::Cloud => "Deepgram".into(),
+            Self::Retrying => "Retrying Deepgram".into(),
+            Self::Local {
+                engine,
+                corrections: 0,
+            } => engine.label().into(),
+            Self::Local {
+                engine,
+                corrections,
+            } => format!(
+                "{}: {corrections} vocabulary correction{} available",
+                engine.label(),
+                if corrections == 1 { "" } else { "s" }
+            )
+            .into(),
         }
     }
 }
@@ -168,12 +200,13 @@ pub async fn transcribe_with_profile(
     let mut retry_at = None;
     let mut retried = false;
     let mut tick = tokio::time::interval(Duration::from_millis(10));
+    let corrections = crate::vocabulary::VocabularyMatcher::new(profile);
     loop {
         if control.load(Ordering::Acquire) == 2 {
             return Err("Cancelled".into());
         }
         if remote.is_none() && retry_at.is_none() {
-            progress.set(local_vocabulary_stage(profile, &local));
+            progress.set(local_vocabulary_stage(&local, &corrections));
             if ended {
                 break;
             }
@@ -249,23 +282,19 @@ pub async fn transcribe_with_profile(
     local
         .transcribe(&pcm, control, deadlines.local)
         .await
+        .map(|text| corrections.apply(&text))
         .map_err(|e| format!("Cloud transcription unavailable; local fallback: {e}"))
 }
 
-/// The local adapter's capability determines the limitation, not the profile's
-/// deterministic snippets. Unsupported hints never become hosted repair work.
+/// Local engines receive no recognition hints; their text is corrected from
+/// the vocabulary afterwards instead. Cloud text never is: Deepgram already
+/// received the hints as keyterms.
 pub(crate) fn local_vocabulary_stage(
-    profile: &crate::vocabulary::Profile,
     endpoint: &crate::local_stt::LocalTranscriber,
+    corrections: &crate::vocabulary::VocabularyMatcher,
 ) -> Stage {
-    let without_hints = matches!(
-        profile.hints_for(endpoint.vocabulary_capability()),
-        fotw_stt::vocabulary::HintSelection::Unsupported
-    );
-    match (endpoint.engine(), without_hints) {
-        (crate::speech::LocalEngine::Whisper, false) => Stage::Local,
-        (crate::speech::LocalEngine::Whisper, true) => Stage::LocalWithoutHints,
-        (crate::speech::LocalEngine::Parakeet, false) => Stage::Parakeet,
-        (crate::speech::LocalEngine::Parakeet, true) => Stage::ParakeetWithoutHints,
+    Stage::Local {
+        engine: endpoint.engine(),
+        corrections: u32::try_from(corrections.len()).unwrap_or(u32::MAX),
     }
 }
