@@ -127,6 +127,27 @@ async fn sends_whisper_wav_contract_and_trims_text() {
     assert!(!text.contains("Authorization:"));
 }
 #[tokio::test]
+async fn joins_whisper_segment_breaks_so_dictation_is_typed() {
+    // whisper.cpp ends every segment with a newline. Those are not the user's
+    // formatting, and a newline makes Murmur hold the text instead of typing it.
+    let (endpoint, _server) = fixture(
+        "200 OK",
+        r#"{"text":" So this is the first part of a longer thought.\n And this is the second part.\n"}"#,
+    )
+    .await;
+    assert_eq!(
+        transcribe(
+            &endpoint,
+            &[1000; 1600],
+            Arc::new(AtomicU8::new(1)),
+            Duration::from_secs(2)
+        )
+        .await
+        .unwrap(),
+        "So this is the first part of a longer thought. And this is the second part."
+    );
+}
+#[tokio::test]
 async fn rejects_redirects_and_malformed_responses() {
     for (status, body) in [
         ("302 Found", ""),
