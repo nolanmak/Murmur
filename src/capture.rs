@@ -532,6 +532,12 @@ pub enum CaptureProvider {
         endpoint: fotw_stt::DeepgramEndpoint,
         local: crate::local_stt::LocalEndpoint,
     },
+    /// Local streaming dictation (#100), with the batch engine it falls back
+    /// to when streaming is not ready or fails mid-utterance. Never cloud.
+    Streaming {
+        stream: crate::local_streaming::Endpoint,
+        fallback: Option<crate::local_stt::LocalEndpoint>,
+    },
 }
 pub async fn run_provider_observed(
     tap: Box<dyn AudioTap>,
@@ -706,9 +712,39 @@ pub async fn run_provider_raw_with_preparation(
     if let Some(error) = observed_device_failure(&changes, &fault) {
         return Err(error.into());
     }
-    if !matches!(&provider, CaptureProvider::Local(_)) {
+    if matches!(
+        &provider,
+        CaptureProvider::Deepgram { .. } | CaptureProvider::DeepgramThenLocal { .. }
+    ) {
         crate::language::validate_deepgram(&profile.language)?;
     }
+    if let CaptureProvider::Streaming { stream, fallback } = &provider {
+        let readiness = stream.prepare(&profile.language, Duration::from_secs(2));
+        let prepared = wait_for_preflight(readiness, &control, &changes, &fault).await?;
+        provider = match prepared {
+            Ok(stream) => {
+                progress.set(crate::fallback::Stage::Streaming);
+                CaptureProvider::Streaming {
+                    stream,
+                    fallback: fallback.clone(),
+                }
+            }
+            // Not ready (still loading, not installed, no helper): the batch
+            // engine takes this utterance, checked below like any other.
+            Err(reason) => match fallback.clone() {
+                Some(batch) => {
+                    eprintln!("local streaming not ready; using the batch engine: {reason}");
+                    progress.set(crate::fallback::Stage::StreamingUnavailable);
+                    CaptureProvider::Local(batch)
+                }
+                None => return Err(format!("{reason}. Nothing was recorded")),
+            },
+        };
+    }
+    let streaming_fallback = matches!(
+        progress.stage(),
+        crate::fallback::Stage::StreamingUnavailable
+    );
     match &mut provider {
         CaptureProvider::Local(endpoint)
         | CaptureProvider::DeepgramThenLocal {
@@ -734,13 +770,19 @@ pub async fn run_provider_raw_with_preparation(
                     tokio::select! {
                         biased;
                         _ = tick.tick() => {}
-                        result = &mut readiness => break result?,
+                        result = &mut readiness => break result.map_err(|e| {
+                            if streaming_fallback {
+                                format!("Local streaming is not ready and Local Whisper is unavailable: {e}")
+                            } else {
+                                e
+                            }
+                        })?,
                     }
                 }
             };
             *endpoint = prepared;
         }
-        CaptureProvider::Deepgram { .. } => {}
+        CaptureProvider::Deepgram { .. } | CaptureProvider::Streaming { .. } => {}
     }
     let failed = Arc::new(AtomicU8::new(0));
     let (producer, mut consumer) = RingBuffer::new(192_000);
@@ -812,9 +854,37 @@ pub async fn run_provider_raw_with_preparation(
                 )
                 .await
             }
+            CaptureProvider::Streaming { stream, fallback } => {
+                let corrections = crate::vocabulary::VocabularyMatcher::new(&profile);
+                match stream.transcribe(rx, progress.clone(), control.clone()).await {
+                    Ok(text) => Ok(corrections.apply(&text)),
+                    Err(failure) if control.load(Ordering::Acquire) == 2 => {
+                        drop(failure);
+                        Err("Cancelled".into())
+                    }
+                    Err(failure) => {
+                        // No transcript content is logged, only why.
+                        eprintln!("local streaming failed: {}", failure.reason);
+                        retry_on_batch(fallback, &profile.language, &failure.pcm, control.clone())
+                            .await
+                            .map(|text| {
+                                progress.set(crate::fallback::Stage::StreamingRetried);
+                                corrections.apply(&text)
+                            })
+                            .map_err(|e| {
+                                format!(
+                                    "Local streaming failed ({}); {e}; no text inserted",
+                                    failure.reason
+                                )
+                            })
+                    }
+                }
+            }
             CaptureProvider::Local(endpoint) => {
                 let corrections = crate::vocabulary::VocabularyMatcher::new(&profile);
-                progress.set(crate::fallback::local_vocabulary_stage(&corrections));
+                if !streaming_fallback {
+                    progress.set(crate::fallback::local_vocabulary_stage(&corrections));
+                }
                 let mut rx = rx;
                 let mut pcm = Vec::new();
                 while let Some(chunk) = rx.recv().await {
@@ -887,6 +957,50 @@ pub async fn run_provider_raw_with_preparation(
     }
     cleanup?;
     result
+}
+
+/// Wait for a preflight check, giving up on Esc, release or a device fault.
+/// The outer `Err` ends the attempt; the inner result is the check's own.
+async fn wait_for_preflight<T>(
+    readiness: impl std::future::Future<Output = Result<T, String>>,
+    control: &AtomicU8,
+    changes: &fotw_audio::device_change::DeviceChangeSignal,
+    fault: &AtomicBool,
+) -> Result<Result<T, String>, String> {
+    tokio::pin!(readiness);
+    let mut tick = tokio::time::interval(Duration::from_millis(5));
+    loop {
+        if control.load(Ordering::Acquire) == 2 {
+            return Err("Cancelled".into());
+        }
+        if control.load(Ordering::Acquire) != 0 {
+            return Err("Dictation ended before local engine was ready; try again".into());
+        }
+        if let Some(error) = observed_device_failure(changes, fault) {
+            return Err(error.into());
+        }
+        tokio::select! {
+            biased;
+            _ = tick.tick() => {}
+            result = &mut readiness => return Ok(result),
+        }
+    }
+}
+
+/// A failed stream's audio, transcribed by the batch engine in the same attempt.
+async fn retry_on_batch(
+    fallback: Option<crate::local_stt::LocalEndpoint>,
+    language: &str,
+    pcm: &[i16],
+    control: Arc<AtomicU8>,
+) -> Result<String, String> {
+    let batch = fallback.ok_or("no batch engine to retry on")?;
+    let batch = crate::local_stt::prepare(&batch, language, Duration::from_secs(2))
+        .await
+        .map_err(|e| format!("retry on Local Whisper unavailable: {e}"))?;
+    crate::local_stt::transcribe(&batch, pcm, control, Duration::from_secs(180))
+        .await
+        .map_err(|e| format!("retry on Local Whisper failed: {e}"))
 }
 
 /// Retain at most 120 seconds of actual capture, including on a late stop tick.

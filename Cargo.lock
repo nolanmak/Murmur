@@ -571,7 +571,7 @@ dependencies = [
 [[package]]
 name = "fotw-audio"
 version = "0.1.0"
-source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=c99f4bc118ac2976a0b5fabf06ae270e2b63ea59#c99f4bc118ac2976a0b5fabf06ae270e2b63ea59"
+source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=c3381866e1726755fa1ec0f6e228df32f0c9a52f#c3381866e1726755fa1ec0f6e228df32f0c9a52f"
 dependencies = [
  "cidre",
  "objc2-app-kit",
@@ -582,7 +582,7 @@ dependencies = [
 [[package]]
 name = "fotw-dsp"
 version = "0.1.0"
-source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=c99f4bc118ac2976a0b5fabf06ae270e2b63ea59#c99f4bc118ac2976a0b5fabf06ae270e2b63ea59"
+source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=c3381866e1726755fa1ec0f6e228df32f0c9a52f#c3381866e1726755fa1ec0f6e228df32f0c9a52f"
 dependencies = [
  "rubato",
  "thiserror",
@@ -591,7 +591,7 @@ dependencies = [
 [[package]]
 name = "fotw-secrets"
 version = "0.1.0"
-source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=c99f4bc118ac2976a0b5fabf06ae270e2b63ea59#c99f4bc118ac2976a0b5fabf06ae270e2b63ea59"
+source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=c3381866e1726755fa1ec0f6e228df32f0c9a52f#c3381866e1726755fa1ec0f6e228df32f0c9a52f"
 dependencies = [
  "apple-native-keyring-store",
  "argon2",
@@ -606,9 +606,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "fotw-speechd-client"
+version = "0.1.0"
+source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=c3381866e1726755fa1ec0f6e228df32f0c9a52f#c3381866e1726755fa1ec0f6e228df32f0c9a52f"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "fotw-stt"
 version = "0.1.0"
-source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=c99f4bc118ac2976a0b5fabf06ae270e2b63ea59#c99f4bc118ac2976a0b5fabf06ae270e2b63ea59"
+source = "git+https://github.com/nolanmak/FlyOnTheWall?rev=c3381866e1726755fa1ec0f6e228df32f0c9a52f#c3381866e1726755fa1ec0f6e228df32f0c9a52f"
 dependencies = [
  "futures-util",
  "serde",
@@ -1128,6 +1139,7 @@ dependencies = [
  "fotw-audio",
  "fotw-dsp",
  "fotw-secrets",
+ "fotw-speechd-client",
  "fotw-stt",
  "futures-util",
  "muda",
@@ -1877,6 +1889,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "signal-hook-registry"
+version = "1.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
+dependencies = [
+ "errno",
+ "libc",
+]
+
+[[package]]
 name = "simd-adler32"
 version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2017,6 +2039,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys",

@@ -605,7 +605,7 @@ impl Pill {
                     dot.setHidden(false);
                 }
             }
-            Look::Notice => {
+            Look::Notice | Look::Live => {
                 // The label cell insets its text by 2pt on each side.
                 let inset = indicator::NOTICE_PADDING - 2.0;
                 let line = self.label.intrinsicContentSize().height.ceil();
@@ -729,6 +729,7 @@ impl Shell {
         let menu = Menu::new();
         let status = MenuItem::with_id("status", "Hold Control to dictate", false, None);
         let speech = crate::speech::Selection::load(crate::speech::Settings::path());
+        warm_streaming(speech.provider());
         if speech.error().is_some() {
             status.set_text("Speech settings invalid — choose Local Whisper in the Transcription menu to repair");
         }
@@ -980,6 +981,7 @@ impl Shell {
                 match crate::speech::Settings::path().and_then(|path| self.speech.choose(to, &path))
                 {
                     Ok(()) => {
+                        warm_streaming(self.speech.provider());
                         self.previous_provider = current;
                         self.speech_toggle.set_text(
                             self.cleanup_menu
@@ -1185,7 +1187,14 @@ impl Shell {
                     // A whole-utterance engine command is never cleaned up,
                     // expanded or inserted; it is applied by the UI instead.
                     if let Some(command) = crate::engine_command::parse(&raw) {
-                        let local = if command.may_need_local() {
+                        let local = if command.needs_streaming() {
+                            // Streaming must be loaded and warm to switch to it.
+                            crate::local_streaming::Endpoint::shared()
+                                .service()
+                                .ready(Duration::from_secs(2))
+                                .await
+                                .map(|_| ())
+                        } else if command.may_need_local() {
                             match speech
                                 .local_endpoint()
                                 .ok_or_else(|| "Speech settings are invalid".to_string())
@@ -1554,6 +1563,9 @@ impl Shell {
                 "speech_provider" => {
                     let provider = match self.speech.provider() {
                         Some(crate::speech::Provider::LocalWhisper) => {
+                            crate::speech::Provider::LocalStreaming
+                        }
+                        Some(crate::speech::Provider::LocalStreaming) => {
                             crate::speech::Provider::DeepgramThenLocal
                         }
                         Some(crate::speech::Provider::DeepgramThenLocal) => {
@@ -1566,6 +1578,7 @@ impl Shell {
                         .and_then(|path| self.speech.choose(provider, &path))
                     {
                         Ok(()) => {
+                            warm_streaming(self.speech.provider());
                             self.previous_provider = before;
                             self.speech_toggle.set_text(
                                 self.cleanup_menu
@@ -1862,13 +1875,25 @@ impl Shell {
             }
         }
         self.microphone_notice = notice;
-        let look = self.indicator.look_with_microphone(
+        let mut look = self.indicator.look_with_microphone(
             now,
             self.core.phase,
             receiving,
             self.warning.is_some(),
             microphone,
         );
+        // A streaming engine's partial replaces the listening bars while
+        // Control is held (#100). Display only: it is never inserted.
+        if matches!(look, Look::Listening | Look::Starting)
+            && let Some(text) = self.speech_progress.live()
+        {
+            look =
+                self.indicator
+                    .look_live(now, self.core.phase, receiving, self.warning.is_some());
+            if look == Look::Live {
+                self.pill.set_text(&indicator::live_text(&text));
+            }
+        }
         if self.pill.look == Look::Success
             && matches!(look, Look::Idle | Look::Warning | Look::Armed)
         {
@@ -2317,11 +2342,23 @@ pub fn run() -> Result<(), String> {
     Ok(())
 }
 
+/// Load and warm the streaming engine in the background when it is chosen,
+/// at launch or on a switch, so the first dictation needs no Core ML compile.
+/// A helper restart is caught by the next preflight, which reloads it.
+fn warm_streaming(provider: Option<&crate::speech::Provider>) {
+    if provider == Some(&crate::speech::Provider::LocalStreaming) {
+        crate::local_streaming::Endpoint::shared().service().warm();
+    }
+}
+
 fn speech_label(provider: Option<&crate::speech::Provider>) -> &'static str {
     match provider {
         Some(crate::speech::Provider::Deepgram) => "Transcription: Deepgram (click for local)",
         Some(crate::speech::Provider::LocalWhisper) => {
-            "Transcription: Local Whisper (click for cloud → local)"
+            "Transcription: Local Whisper (click for local streaming)"
+        }
+        Some(crate::speech::Provider::LocalStreaming) => {
+            "Transcription: Local streaming (click for cloud → local)"
         }
         Some(crate::speech::Provider::DeepgramThenLocal) => {
             "Transcription: Deepgram → local (click for cloud only)"

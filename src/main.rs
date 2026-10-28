@@ -68,12 +68,19 @@ fn configure_speech() -> Result<(), String> {
                 settings.local_endpoint = url.clone();
             }
         }
+        Some("streaming") => {
+            settings.provider = murmur::speech::Provider::LocalStreaming;
+            if let Some(url) = args.get(3) {
+                settings.local_endpoint = url.clone();
+            }
+        }
+        Some("install-streaming") => return install_streaming(&args[3..]),
         Some("deepgram") => settings.provider = murmur::speech::Provider::Deepgram,
         Some("fallback") => {
             settings.provider = murmur::speech::Provider::DeepgramThenLocal;
             if let Some(url) = args.get(3) { settings.local_endpoint = url.clone(); }
         },
-        _ => return Err("Usage: murmur speech local [http://127.0.0.1:17863] | deepgram | fallback [http://127.0.0.1:17863]".into()),
+        _ => return Err("Usage: murmur speech local [http://127.0.0.1:17863] | streaming [http://127.0.0.1:17863] | install-streaming [--from DIR] | deepgram | fallback [http://127.0.0.1:17863]".into()),
     }
     settings.save(&path)?;
     println!("Saved transcription provider; restart running app to reload CLI changes.");
@@ -170,5 +177,30 @@ fn doctor() -> Result<(), String> {
             );
             Ok(())
         }
+        murmur::speech::Provider::LocalStreaming => {
+            println!(
+                "Local streaming (Nemotron 3.5 through fotw-speechd), falling back to Local Whisper at {}. No cloud credentials required. Install the model with `murmur speech install-streaming`.",
+                settings.local_endpoint
+            );
+            Ok(())
+        }
     }
+}
+
+/// Explicit setup: the only path that downloads the streaming model.
+fn install_streaming(args: &[String]) -> Result<(), String> {
+    let from = match args {
+        [] => None,
+        [flag, dir] if flag == "--from" => Some(std::path::PathBuf::from(dir)),
+        _ => return Err("Usage: murmur speech install-streaming [--from DIR]".into()),
+    };
+    let endpoint = murmur::local_streaming::Endpoint::shared();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| "Cannot start runtime".to_string())?;
+    println!("Installing the streaming model (about 1.2 GB unless --from is given)…");
+    runtime.block_on(endpoint.service().install(from))?;
+    println!("Installed. {}", murmur::local_streaming::ATTRIBUTION);
+    Ok(())
 }

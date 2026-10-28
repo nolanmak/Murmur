@@ -25,14 +25,15 @@ repository.workspace = true
 [dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "stream", "native-tls"] }
 tempfile = "3"
-fotw-audio = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "c99f4bc118ac2976a0b5fabf06ae270e2b63ea59" }
-fotw-stt = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "c99f4bc118ac2976a0b5fabf06ae270e2b63ea59" }
-fotw-secrets = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "c99f4bc118ac2976a0b5fabf06ae270e2b63ea59" }
+fotw-audio = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "c3381866e1726755fa1ec0f6e228df32f0c9a52f" }
+fotw-stt = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "c3381866e1726755fa1ec0f6e228df32f0c9a52f" }
+fotw-secrets = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "c3381866e1726755fa1ec0f6e228df32f0c9a52f" }
+fotw-speechd-client = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "c3381866e1726755fa1ec0f6e228df32f0c9a52f" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-fotw-dsp = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "c99f4bc118ac2976a0b5fabf06ae270e2b63ea59" }
+fotw-dsp = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "c3381866e1726755fa1ec0f6e228df32f0c9a52f" }
 rtrb = "0.3"
 dotenvy = "0.15"
 futures-util = { workspace = true, features = ["sink", "std"] }
@@ -46,10 +47,10 @@ tray-icon = { version = "0.24", default-features = false }
 muda = { version = "0.19", default-features = false }
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
-fotw-dsp = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "c99f4bc118ac2976a0b5fabf06ae270e2b63ea59", features = ["conformance"] }
-fotw-stt = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "c99f4bc118ac2976a0b5fabf06ae270e2b63ea59", features = ["conformance"] }
-fotw-audio = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "c99f4bc118ac2976a0b5fabf06ae270e2b63ea59", features = ["conformance"] }
-fotw-secrets = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "c99f4bc118ac2976a0b5fabf06ae270e2b63ea59", features = ["conformance"] }
+fotw-dsp = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "c3381866e1726755fa1ec0f6e228df32f0c9a52f", features = ["conformance"] }
+fotw-stt = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "c3381866e1726755fa1ec0f6e228df32f0c9a52f", features = ["conformance"] }
+fotw-audio = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "c3381866e1726755fa1ec0f6e228df32f0c9a52f", features = ["conformance"] }
+fotw-secrets = { git = "https://github.com/nolanmak/FlyOnTheWall", rev = "c3381866e1726755fa1ec0f6e228df32f0c9a52f", features = ["conformance"] }
 futures-util = { workspace = true, features = ["sink", "std"] }
 tokio-tungstenite = "0.29"
 [profile.release]

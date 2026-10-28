@@ -12,6 +12,8 @@ pub enum Target {
     Local,
     Deepgram,
     Backup,
+    /// Local streaming dictation (#100).
+    Streaming,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,6 +33,11 @@ impl Command {
     /// worker checks that a key loads. Backup falls back to local without one.
     pub fn may_need_cloud(self) -> bool {
         matches!(self, Command::Undo | Command::Use(Target::Deepgram))
+    }
+    /// Whether the local engine to probe is the streaming one rather than
+    /// Local Whisper.
+    pub fn needs_streaming(self) -> bool {
+        matches!(self, Command::Use(Target::Streaming))
     }
 }
 
@@ -61,6 +68,9 @@ pub fn parse(raw: &str) -> Option<Command> {
     let phrase = rest.join(" ").replace("deep gram", "deepgram");
     Some(match phrase.as_str() {
         "use local" | "switch to local" | "go local" => Command::Use(Target::Local),
+        "use streaming" | "switch to streaming" | "use local streaming" => {
+            Command::Use(Target::Streaming)
+        }
         "use deepgram" | "switch to deepgram" | "use cloud" | "switch to cloud" => {
             Command::Use(Target::Deepgram)
         }
@@ -80,6 +90,7 @@ pub fn label(provider: &Provider) -> &'static str {
         Provider::Deepgram => "Deepgram",
         Provider::LocalWhisper => "Local Whisper",
         Provider::DeepgramThenLocal => "Deepgram with local backup",
+        Provider::LocalStreaming => "Local streaming",
     }
 }
 
@@ -88,6 +99,7 @@ fn provider(target: Target) -> Provider {
         Target::Local => Provider::LocalWhisper,
         Target::Deepgram => Provider::Deepgram,
         Target::Backup => Provider::DeepgramThenLocal,
+        Target::Streaming => Provider::LocalStreaming,
     }
 }
 
@@ -105,11 +117,15 @@ pub fn decide(
     let target = match command {
         Command::Which => {
             // Offline-all overrides the saved engine for every dictation.
-            return Decision::Report(if offline_all {
-                "Using Local Whisper · Offline-all is on".into()
-            } else {
-                format!("Using {current_label}")
-            });
+            return Decision::Report(
+                if offline_all && current == Some(&Provider::LocalStreaming) {
+                    "Using Local streaming · Offline-all is on".into()
+                } else if offline_all {
+                    "Using Local Whisper · Offline-all is on".into()
+                } else {
+                    format!("Using {current_label}")
+                },
+            );
         }
         Command::Use(target) => provider(target),
         Command::Undo => match previous {
@@ -120,7 +136,7 @@ pub fn decide(
     if current == Some(&target) {
         return Decision::Report(format!("Already using {}", label(&target)));
     }
-    let cloud = !matches!(target, Provider::LocalWhisper);
+    let cloud = !matches!(target, Provider::LocalWhisper | Provider::LocalStreaming);
     if cloud && offline_all {
         return Decision::Refuse(format!(
             "Offline-all is on — switch to {} from the menu; staying on {current_label}",

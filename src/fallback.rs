@@ -9,7 +9,20 @@ use tokio::sync::mpsc;
 /// Per-attempt progress; each capture owns a fresh instance so late updates
 /// cannot overwrite a later dictation's UI.
 #[derive(Clone, Default)]
-pub struct Progress(Arc<AtomicU64>);
+pub struct Progress(Arc<AtomicU64>, Live);
+
+/// A streaming engine's running text for one attempt (#100): display only,
+/// never inserted. Once the attempt's stream is over it takes no more text.
+#[derive(Clone, Default)]
+struct Live(Arc<std::sync::Mutex<(Option<String>, bool)>>);
+
+/// Ends the attempt's live text when dropped.
+pub struct LiveGuard(Live);
+impl Drop for LiveGuard {
+    fn drop(&mut self) {
+        self.0.0.lock().unwrap_or_else(|e| e.into_inner()).1 = true;
+    }
+}
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Stage {
     #[default]
@@ -19,6 +32,12 @@ pub enum Stage {
     Local,
     /// Local engine text gets this many vocabulary correction targets (#102).
     LocalCorrections(u32),
+    /// Local streaming dictation (#100).
+    Streaming,
+    /// The stream failed mid-utterance; its audio went to the batch engine.
+    StreamingRetried,
+    /// Streaming was not ready before recording; the batch engine took it.
+    StreamingUnavailable,
 }
 impl Progress {
     pub fn stage(&self) -> Stage {
@@ -28,8 +47,25 @@ impl Progress {
             2 => Stage::Retrying,
             3 => Stage::Local,
             4 => Stage::LocalCorrections((packed >> 8) as u32),
+            5 => Stage::Streaming,
+            6 => Stage::StreamingRetried,
+            7 => Stage::StreamingUnavailable,
             _ => Stage::Preparing,
         }
+    }
+    /// The streaming engine's latest partial text, while the attempt runs.
+    pub fn live(&self) -> Option<String> {
+        self.1.0.lock().unwrap_or_else(|e| e.into_inner()).0.clone()
+    }
+    pub(crate) fn set_live(&self, text: &str) {
+        let mut live = self.1.0.lock().unwrap_or_else(|e| e.into_inner());
+        if !live.1 {
+            live.0 = Some(text.to_owned());
+        }
+    }
+    /// Hold while a stream runs; dropping it ends the live text for good.
+    pub(crate) fn live_guard(&self) -> LiveGuard {
+        LiveGuard(self.1.clone())
     }
     pub(crate) fn set(&self, stage: Stage) {
         let packed = match stage {
@@ -38,6 +74,9 @@ impl Progress {
             Stage::Retrying => 2,
             Stage::Local => 3,
             Stage::LocalCorrections(count) => 4 | u64::from(count) << 8,
+            Stage::Streaming => 5,
+            Stage::StreamingRetried => 6,
+            Stage::StreamingUnavailable => 7,
         };
         self.0.store(packed, std::sync::atomic::Ordering::Release);
     }
@@ -46,7 +85,9 @@ impl Stage {
     /// Keep local vocabulary behavior visible even when a fast local result
     /// completes between two native UI progress polls.
     pub fn completion_message(self, message: &str) -> String {
-        if let Self::LocalCorrections(_) = self {
+        if let Self::LocalCorrections(_) | Self::StreamingRetried | Self::StreamingUnavailable =
+            self
+        {
             format!("{message} · {}", self.label())
         } else {
             message.to_owned()
@@ -58,6 +99,9 @@ impl Stage {
             Self::Cloud => "Deepgram".into(),
             Self::Retrying => "Retrying Deepgram".into(),
             Self::Local => "Local Whisper".into(),
+            Self::Streaming => "Local streaming".into(),
+            Self::StreamingRetried => "Streaming failed; retried on Local Whisper".into(),
+            Self::StreamingUnavailable => "Streaming not ready; used Local Whisper".into(),
             Self::LocalCorrections(count) => format!(
                 "Local: {count} vocabulary correction{} available",
                 if count == 1 { "" } else { "s" }

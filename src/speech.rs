@@ -8,6 +8,9 @@ pub enum Provider {
     Deepgram,
     LocalWhisper,
     DeepgramThenLocal,
+    /// Nemotron 3.5 streaming through the bundled fotw-speechd helper (#100),
+    /// with Local Whisper as its batch fallback. Never cloud.
+    LocalStreaming,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -50,7 +53,15 @@ impl Settings {
             Provider::LocalWhisper => Ok(crate::capture::CaptureProvider::Local(
                 crate::local_stt::LocalEndpoint::new(&self.local_endpoint)?,
             )),
+            Provider::LocalStreaming => Ok(self.streaming()?),
         }
+    }
+
+    fn streaming(&self) -> Result<crate::capture::CaptureProvider, String> {
+        Ok(crate::capture::CaptureProvider::Streaming {
+            stream: crate::local_streaming::Endpoint::shared(),
+            fallback: Some(crate::local_stt::LocalEndpoint::new(&self.local_endpoint)?),
+        })
     }
 
     pub fn path() -> Result<PathBuf, String> {
@@ -99,6 +110,10 @@ impl Selection {
     ) -> Result<crate::capture::CaptureProvider, String> {
         if offline_all {
             let settings = self.0.as_ref().map_err(Clone::clone)?;
+            // Streaming is local already; everything else runs Local Whisper.
+            if settings.provider == Provider::LocalStreaming {
+                return settings.streaming();
+            }
             return Ok(crate::capture::CaptureProvider::Local(
                 crate::local_stt::LocalEndpoint::new(&settings.local_endpoint)?,
             ));
