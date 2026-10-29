@@ -83,6 +83,10 @@ impl Review {
     pub fn cancel(&mut self) {
         self.pending = None;
     }
+    /// A transcript awaits the user's confirmation.
+    pub fn pending(&self) -> bool {
+        self.pending.is_some()
+    }
 }
 
 /// Bundle identities supported by the native RustDesk window observer.

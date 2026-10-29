@@ -65,9 +65,10 @@ pub fn classify(message: &str) -> Kind {
         _ => Kind::Notice,
     }
 }
-const RECOVERY: [&str; 3] = [
+const RECOVERY: [&str; 4] = [
     "Copy Last Transcript",
     "Restore previous clipboard",
+    "click to restart Murmur",
     "reopen Murmur",
 ];
 /// Whole message when it fits; otherwise its first clause, keeping any recovery hint.
@@ -192,8 +193,10 @@ pub fn microphone_notice(
         Mic::Inspecting => {
             Some("Checking microphone availability — no recording; retry when finished")
         }
-        Mic::Unconfirmed => Some("Mic may still be recording — cleanup unconfirmed; reopen Murmur"),
-        Mic::CleanupFailed => Some("Mic stopped — cleanup failed; reopen Murmur"),
+        // Never self-clearing; the pill is clickable and Murmur restarts
+        // itself automatically while idle (crate::self_heal).
+        Mic::Unconfirmed => Some("Mic may be recording — click to restart Murmur"),
+        Mic::CleanupFailed => Some("Mic stopped but stuck — click to restart Murmur"),
         Mic::CleaningUp => Some("Microphone stopped — finishing cleanup"),
         Mic::Stopping if phase != Phase::Idle => Some("Stopping microphone — Esc to cancel"),
         Mic::Preparing if phase == Phase::Idle => {

@@ -21,7 +21,8 @@ A blocked OS call keeps its lease until it returns and cleanup finishes. Repeate
 activations cannot create another preparer or compete with that owner. The async
 handle owns channels, so abandoning it requests cleanup without running native
 destructors on its executor. Native calls cannot be forcibly interrupted; a
-permanently blocked call can require reconnecting the device or reopening Murmur.
+permanently blocked call is released by Murmur restarting itself (see
+[Automatic restart](#automatic-restart-for-stuck-ownership)).
 
 Key release waits at most four seconds for Stop and resource destruction. Escape
 allows a 20 ms cleanup grace period, then returns Cancelled while the native owner
@@ -59,9 +60,11 @@ release and watcher removal. Only confirmed release makes admission available.
 | Native state | Persistent indicator / next action |
 | --- | --- |
 | Stop remains pending | Microphone may still be recording; further preparation is blocked |
+| Still pending 30 s after the shell went idle | Mic stuck — click to restart Murmur |
 | Stop confirmed, cleanup pending | Microphone stopped — finishing cleanup |
-| Stop unconfirmed | Mic may still be recording · reopen Murmur |
-| Stop confirmed, cleanup failed | Mic stopped — cleanup failed; reopen Murmur |
+| Stop unconfirmed | Mic may be recording — click to restart Murmur |
+| Stop confirmed, cleanup failed | Mic stopped but stuck — click to restart Murmur |
+| Automatic restart about to run | Resetting microphone — restarting Murmur… |
 | Cleanup confirmed | Normal ready/processing indicator resumes |
 
 These states outlive transient notices and take priority over readiness and
@@ -71,6 +74,34 @@ still requires a new activation. A teardown error with the shared backend's
 `Released` evidence rejects that utterance but permits a fresh attempt after the
 owned objects drop. `Stopped` or `Unconfirmed` evidence retains ownership and
 keeps admission blocked.
+
+## Automatic restart for stuck ownership
+
+Unconfirmed Stop and failed cleanup never clear in-process: the capture objects
+are already dropped, so nothing is left to re-check, and a call blocked inside
+coreaudiod cannot be interrupted. Process exit is the one release Core Audio
+guarantees, so Murmur restarts itself (`self_heal`):
+
+- Unconfirmed or failed cleanup is stuck immediately; any other non-idle state
+  is stuck after it outlives a 30-second grace period with the shell idle.
+- Only while idle: no recording/processing, pending RustDesk review or model
+  install. Work that begins during the notice cancels that restart. Nothing
+  from the stuck attempt is inserted, resumed or replayed.
+- *Resetting microphone — restarting Murmur…* shows for 1.5 s, then the restart
+  is recorded in `~/Library/Application Support/Murmur/microphone-restarts` and
+  the process exits. A detached `/bin/sh` waits for the old process to vanish
+  (killing it after ~5 s if exit hangs), then reopens the bundle. The next
+  launch shows *Microphone reset — Murmur restarted*.
+- At most two automatic restarts per ten minutes. After that, or if the record
+  cannot be written, or when running outside an app bundle, Murmur stops trying.
+
+While stuck the click-through pill accepts clicks (a click restarts Murmur) and
+the menu's *Restart Murmur (resets stuck microphone)* item moves under the
+status line. Both are manual and not budgeted. A restart drops in-memory
+conveniences: Copy Last Transcript and any pending clipboard restore.
+
+The `fotw-speechd` helper exits on stdin EOF; process exit closes its pipe, so
+it is not orphaned and the new instance spawns its own on first use.
 
 ## Bounded background readiness
 
