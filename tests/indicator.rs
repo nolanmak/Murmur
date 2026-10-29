@@ -282,7 +282,7 @@ fn stopped_cleanup_and_unconfirmed_stop_have_distinct_honest_labels() {
     assert!(
         microphone_notice(Mic::Unconfirmed, Phase::Idle)
             .unwrap()
-            .contains("reopen Murmur")
+            .contains("click to restart Murmur")
     );
     assert_eq!(microphone_notice(Mic::Capturing, Phase::Recording), None);
     assert_eq!(microphone_notice(Mic::Preparing, Phase::Recording), None);
@@ -293,15 +293,15 @@ fn stopped_cleanup_and_unconfirmed_stop_have_distinct_honest_labels() {
 }
 
 #[test]
-fn unconfirmed_cleanup_pill_keeps_the_reopen_action_visible() {
+fn unconfirmed_cleanup_pill_keeps_the_restart_action_visible() {
     let message =
         microphone_notice(murmur::capture::MicrophoneState::Unconfirmed, Phase::Idle).unwrap();
     let pill = shorten(message);
     assert!(
-        pill.contains("reopen Murmur"),
+        pill.contains("click to restart Murmur"),
         "the persistent pill needs an actionable recovery: {pill}"
     );
-    assert!(pill.contains("may still be recording"));
+    assert!(pill.contains("may be recording"));
     assert!(pill.chars().count() <= NOTICE_CHARS);
 }
 
@@ -309,8 +309,8 @@ fn unconfirmed_cleanup_pill_keeps_the_reopen_action_visible() {
 fn confirmed_stop_survives_cleanup_failure_in_the_persistent_ui() {
     let state = murmur::capture::MicrophoneState::CleanupFailed;
     let notice = microphone_notice(state, Phase::Idle).unwrap();
-    assert!(notice.contains("stopped") && notice.contains("reopen Murmur"));
-    assert!(!notice.contains("may still be recording"));
+    assert!(notice.contains("stopped") && notice.contains("click to restart Murmur"));
+    assert!(!notice.contains("may be recording") && !notice.contains("may still be recording"));
     assert_eq!(
         Indicator::default().look_with_microphone(100_000, Phase::Idle, false, false, state),
         Look::Notice

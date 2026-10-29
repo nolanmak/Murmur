@@ -36,3 +36,4 @@ pub mod vocabulary_editor;
 pub mod cleanup;
 pub mod cleanup_config;
 pub mod cleanup_http;
+pub mod self_heal;

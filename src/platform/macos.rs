@@ -18,13 +18,13 @@ use muda::{Menu, MenuEvent, MenuItem};
 use objc2::{MainThreadMarker, MainThreadOnly, rc::Retained};
 use objc2_app_kit::{
     NSAlert, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSBox, NSBoxType,
-    NSButton, NSColor, NSFont, NSFontWeightMedium, NSLineBreakMode, NSPanel, NSPasteboard,
-    NSRunningApplication, NSScreen, NSScrollView, NSTextField, NSTextView, NSTitlePosition, NSView,
-    NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSButton, NSColor, NSEvent, NSEventMask, NSFont, NSFontWeightMedium, NSLineBreakMode, NSPanel,
+    NSPasteboard, NSRunningApplication, NSScreen, NSScrollView, NSTextField, NSTextView,
+    NSTitlePosition, NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSTimer};
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     ffi::{CString, c_char, c_void},
     ptr::{self, NonNull},
     rc::Rc,
@@ -525,6 +525,13 @@ impl Pill {
         self.label.setStringValue(&NSString::from_str(text));
         self.text_width = self.label.intrinsicContentSize().width;
     }
+    /// Click-through except while it offers a restart for stuck microphone
+    /// ownership; the click itself is seen by the shell's event monitor.
+    fn set_clickable(&self, clickable: bool) {
+        if self.panel.ignoresMouseEvents() == clickable {
+            self.panel.setIgnoresMouseEvents(!clickable);
+        }
+    }
     fn set_text(&mut self, text: &str) {
         if self.label.stringValue().to_string() == text {
             return;
@@ -708,6 +715,13 @@ struct Shell {
     receiving: Arc<AtomicBool>,
     microphone_startup: crate::capture::MicrophoneStartup,
     microphone_notice: Option<&'static str>,
+    self_heal: crate::self_heal::SelfHeal,
+    restart_log: crate::self_heal::RestartLog,
+    menu: Menu,
+    reopen: MenuItem,
+    restart_prominent: bool,
+    pill_clicked: Rc<Cell<bool>>,
+    _pill_monitor: Option<Retained<objc2::runtime::AnyObject>>,
     microphone_readiness: crate::readiness::Monitor<fotw_audio::platform::macos::InputSnapshot>,
     readiness_status: crate::readiness::Status,
     readiness_focus: i32,
@@ -905,6 +919,30 @@ impl Shell {
             .build()
             .map_err(|e| e.to_string())?;
         let pill = Pill::new(mtm)?;
+        let pill_clicked = Rc::new(Cell::new(false));
+        let pill_monitor = {
+            let clicked = pill_clicked.clone();
+            let panel = Retained::as_ptr(&pill.panel).cast::<c_void>() as usize;
+            let block = RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
+                // AppKit passes a valid event for the duration of the handler.
+                let window = unsafe { event.as_ref() }.window(mtm);
+                if window.is_some_and(|w| Retained::as_ptr(&w).cast::<c_void>() as usize == panel) {
+                    clicked.set(true);
+                }
+                event.as_ptr() // observe only; AppKit still delivers the click
+            });
+            // The handler returns the event it was given, a valid pointer.
+            unsafe {
+                NSEvent::addLocalMonitorForEventsMatchingMask_handler(
+                    NSEventMask::LeftMouseDown,
+                    &block,
+                )
+            }
+        };
+        let restart_log = crate::self_heal::RestartLog::load(
+            crate::self_heal::RestartLog::default_path()
+                .unwrap_or_else(|_| std::env::temp_dir().join("murmur-microphone-restarts")),
+        );
         let (sender, input) = mpsc::sync_channel(128);
         let tap = EventTap::new(sender.clone());
         let permissions = permission_snapshot(signed_ad_hoc());
@@ -953,6 +991,13 @@ impl Shell {
             receiving: Arc::new(AtomicBool::new(false)),
             microphone_startup: Default::default(),
             microphone_notice: None,
+            self_heal: crate::self_heal::SelfHeal::new(Default::default()),
+            restart_log,
+            menu,
+            reopen,
+            restart_prominent: false,
+            pill_clicked,
+            _pill_monitor: pill_monitor,
             microphone_readiness: crate::readiness::Monitor::new(Duration::from_secs(30)),
             readiness_status: crate::readiness::Status::Inactive,
             readiness_focus: 0,
@@ -1185,8 +1230,9 @@ impl Shell {
         false
     }
     fn ready(&self) -> String {
-        if let Some(message) =
-            indicator::microphone_notice(self.microphone_startup.state(), self.core.phase)
+        if let Some(message) = self
+            .self_heal
+            .notice(self.microphone_startup.state(), self.core.phase)
         {
             return message.into();
         }
@@ -1553,6 +1599,103 @@ impl Shell {
             }
         }
     }
+    /// Exits and reopens the enclosing app bundle; returns only on failure.
+    /// Process exit is the one release Core Audio guarantees for a stuck
+    /// input, and it closes the speech helper's stdin so it exits too. The
+    /// relauncher waits for this process to disappear (killing it if exit
+    /// hangs on a blocked native call), so two instances never share the
+    /// hotkey or the microphone.
+    fn relaunch(&mut self) -> Result<std::convert::Infallible, &'static str> {
+        let bundle = std::env::current_exe()
+            .ok()
+            .and_then(|exe| permissions::app_bundle(&exe))
+            .ok_or("Reopen needs Murmur.app; quit and relaunch it")?;
+        self.control.store(2, Ordering::Release);
+        std::process::Command::new("/bin/sh")
+            .args(["-c", RELAUNCH_SCRIPT])
+            .arg(bundle)
+            .arg(std::process::id().to_string())
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .map_err(|_| "Cannot restart Murmur; quit and open it again")?;
+        std::process::exit(0)
+    }
+    /// Never leave dictation locked behind microphone ownership that cannot
+    /// clear itself: relaunch automatically while idle (bounded), and make
+    /// the pill and menu offer the restart in the meantime.
+    fn heal_microphone(&mut self, microphone: crate::capture::MicrophoneState) {
+        use crate::self_heal::Action;
+        let busy = self.core.phase != Phase::Idle
+            || self.review.pending()
+            || self.install_events.is_some();
+        let wall = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let action = self.self_heal.observe(
+            self.launched.elapsed(),
+            microphone,
+            busy,
+            &mut self.restart_log,
+            wall,
+        );
+        let bundled = || {
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| permissions::app_bundle(&exe))
+                .is_some()
+        };
+        match action {
+            // `cargo run` has no bundle to reopen: offer only the manual path.
+            Action::Announce if !bundled() => {
+                self.self_heal.give_up();
+            }
+            Action::Announce => {
+                eprintln!("microphone ownership stuck ({microphone:?}); restarting")
+            }
+            Action::Relaunch => {
+                let Err(error) = self.relaunch();
+                eprintln!("microphone self-heal: {error}");
+                self.self_heal.give_up();
+            }
+            Action::Manual => {
+                eprintln!("microphone ownership stuck ({microphone:?}); restart budget spent")
+            }
+            Action::Wait => {}
+        }
+        let stuck = self.self_heal.stuck();
+        self.pill.set_clickable(stuck);
+        if self.pill_clicked.replace(false) && stuck {
+            let Err(error) = self.relaunch();
+            self.show(error);
+        }
+        self.set_restart_prominent(stuck);
+    }
+    /// While stuck, the restart leads the menu right under the status line.
+    fn set_restart_prominent(&mut self, prominent: bool) {
+        if prominent == self.restart_prominent {
+            return;
+        }
+        let quit = self
+            .menu
+            .items()
+            .iter()
+            .position(|item| item.id().as_ref() == "quit");
+        if self.menu.remove(&self.reopen).is_err() {
+            return;
+        }
+        let position = if prominent {
+            1
+        } else {
+            quit.map_or(self.menu.items().len(), |at| at.saturating_sub(1))
+        };
+        let _ = self.menu.insert(&self.reopen, position);
+        self.reopen.set_text(if prominent {
+            "Restart Murmur (resets stuck microphone)"
+        } else {
+            "Reopen Murmur"
+        });
+        self.restart_prominent = prominent;
+    }
     fn pump(&mut self) {
         if self.sleep_events.take() {
             self.suspend_for_sleep();
@@ -1855,20 +1998,8 @@ impl Shell {
                 }
                 "reopen" => {
                     // Input Monitoring grants apply only to a newly launched process.
-                    let bundle = std::env::current_exe()
-                        .ok()
-                        .and_then(|exe| permissions::app_bundle(&exe));
-                    match bundle {
-                        Some(bundle) => {
-                            self.control.store(2, Ordering::Release);
-                            let _ = std::process::Command::new("/bin/sh")
-                                .args(["-c", "sleep 1; /usr/bin/open \"$0\""])
-                                .arg(bundle)
-                                .spawn();
-                            std::process::exit(0)
-                        }
-                        None => self.show("Reopen needs Murmur.app; quit and relaunch it"),
-                    }
+                    let Err(error) = self.relaunch();
+                    self.show(error);
                 }
                 "quit" => {
                     self.control.store(2, Ordering::Release);
@@ -1981,7 +2112,8 @@ impl Shell {
         }
         let receiving = self.receiving.load(Ordering::Acquire);
         let microphone = self.microphone_startup.state();
-        let notice = indicator::microphone_notice(microphone, self.core.phase);
+        self.heal_microphone(microphone);
+        let notice = self.self_heal.notice(microphone, self.core.phase);
         if let Some(message) = notice {
             if notice != self.microphone_notice {
                 self.indicator.clear();
@@ -2453,6 +2585,15 @@ pub fn run() -> Result<(), String> {
     let shell = Rc::new(RefCell::new(Shell::new(mtm)?));
     shell.borrow_mut().check_permissions();
     shell.borrow().warm_local_engine();
+    {
+        let mut s = shell.borrow_mut();
+        let wall = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        if s.restart_log.restarted_recently(wall) {
+            s.show(crate::self_heal::RESTARTED);
+        }
+    }
     if shell.borrow().remote_mode {
         shell
             .borrow_mut()
@@ -2471,6 +2612,19 @@ pub fn run() -> Result<(), String> {
     app.run();
     Ok(())
 }
+
+/// `$0` is the app bundle, `$1` this process. Waits up to ~5 s for a clean
+/// exit, then kills it (exit can hang behind a blocked Core Audio call), and
+/// opens the bundle only once the old process is gone or after ~10 s.
+const RELAUNCH_SCRIPT: &str = r#"i=0
+while kill -0 "$1" 2>/dev/null; do
+  i=$((i + 1))
+  [ "$i" -eq 50 ] && kill -9 "$1" 2>/dev/null
+  [ "$i" -ge 100 ] && break
+  sleep 0.1
+done
+sleep 0.5
+exec /usr/bin/open "$0""#;
 
 const INVALID_SPEECH: &str =
     "Speech settings invalid — choose an engine in the Transcription menu to repair";
