@@ -9,6 +9,8 @@ pub mod mcp;
 pub mod reply;
 pub mod speech;
 pub mod terminal;
+#[cfg(unix)]
+pub mod voice;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Agent {
