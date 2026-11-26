@@ -33,6 +33,7 @@ pub mod language_catalog;
 
 pub mod vocabulary_editor;
 
+pub mod agent;
 pub mod cleanup;
 pub mod cleanup_config;
 pub mod cleanup_http;
