@@ -119,7 +119,14 @@ struct Session {
     exited: AtomicBool,
     pending: AtomicBool,
     prompt: Mutex<terminal::Prompt>,
-    busy: AtomicBool,
+    /// Virtual screen, to see whether a voice paste reached the input box.
+    screen: Mutex<terminal::Screen>,
+    /// Voice turn generation; a newer turn supersedes an older watch.
+    turn: std::sync::atomic::AtomicU64,
+    /// Serializes paste-and-Enter so two turns never interleave.
+    input: Mutex<()>,
+    /// The replay buffer has dropped its oldest output.
+    trimmed: AtomicBool,
     /// Attached views that are real terminals and answer queries themselves.
     terminals: std::sync::atomic::AtomicUsize,
 }
@@ -157,6 +164,10 @@ impl Session {
             .retain(|s| s.send(frame.clone()).is_ok());
     }
     fn resize(&self, cols: u16, rows: u16) {
+        self.screen
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .resize(rows.clamp(10, 200), cols.clamp(40, 400));
         let _ = self
             .master
             .lock()
@@ -171,6 +182,23 @@ impl Session {
     fn kill(&self) {
         let _ = self.child.lock().unwrap_or_else(|e| e.into_inner()).kill();
     }
+    /// Follows the native session to a new id (Claude `/clear`, Codex
+    /// `/new`): Claude records its live id in `~/.claude/sessions/<pid>.json`,
+    /// Codex holds the writer lock of its current thread.
+    fn refresh_id(&self, home: &Path) {
+        let current = match self.agent {
+            Agent::Claude => live_claude_id(home, self.pid),
+            Agent::Codex => terminal::codex_thread_from_lsof(&terminal::lsof(self.pid)),
+        };
+        if let Some(id) = current {
+            let mut ids = self.ids.lock().unwrap_or_else(|e| e.into_inner());
+            if ids.last() != Some(&id) {
+                ids.retain(|i| i != &id);
+                ids.push(id);
+            }
+            self.pending.store(false, Ordering::SeqCst);
+        }
+    }
     fn history_path(&self, home: &Path) -> Option<PathBuf> {
         let id = self.id();
         match self.agent {
@@ -179,6 +207,42 @@ impl Session {
             Agent::Codex => history::locate(home, Agent::Codex, &id).ok().flatten(),
         }
     }
+}
+
+/// The live session id Claude Code records for one process, if readable.
+fn live_claude_id(home: &Path, pid: u32) -> Option<String> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let path = home.join(".claude/sessions").join(format!("{pid}.json"));
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .open(path)
+        .ok()?;
+    let meta = file.metadata().ok()?;
+    if !meta.is_file() || meta.uid() != rustix::process::getuid().as_raw() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    Read::by_ref(&mut file)
+        .take(64 * 1024)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    let value: Value = serde_json::from_slice(&bytes).ok()?;
+    let id = value.get("sessionId")?.as_str()?;
+    history::is_uuid(id).then(|| id.to_string())
+}
+
+/// The client closed its end (no request bytes ever follow a send).
+fn hung_up(stream: &UnixStream) -> bool {
+    let mut byte = [0u8; 1];
+    matches!(
+        rustix::net::recv(
+            stream,
+            &mut byte,
+            rustix::net::RecvFlags::PEEK | rustix::net::RecvFlags::DONTWAIT
+        ),
+        Ok((0, _))
+    )
 }
 
 #[derive(Default)]
@@ -191,6 +255,8 @@ struct Daemon {
     config: Config,
     state: Mutex<State>,
     stop: AtomicBool,
+    /// Exclusive lock on `agentd.lock` for the daemon's lifetime.
+    _lock: std::fs::File,
 }
 
 pub struct Handle {
@@ -252,7 +318,20 @@ pub fn start(config: Config) -> Result<Handle, String> {
     if path.as_os_str().len() > 100 {
         return Err("The agent socket path is too long for a Unix socket".into());
     }
-    if UnixStream::connect(&path).is_ok() {
+    // One daemon per directory, even when two start at the same moment.
+    let lock = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .mode(0o600)
+            .open(config.dir.join("agentd.lock"))
+            .map_err(|_| "Cannot open the agent daemon lock")?
+    };
+    if rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive).is_err()
+        || UnixStream::connect(&path).is_ok()
+    {
         return Err("Murmur agent daemon is already running".into());
     }
     let _ = std::fs::remove_file(&path);
@@ -266,6 +345,7 @@ pub fn start(config: Config) -> Result<Handle, String> {
         config,
         state: Mutex::new(State::default()),
         stop: AtomicBool::new(false),
+        _lock: lock,
     });
     let worker = daemon.clone();
     let thread = std::thread::spawn(move || {
@@ -529,11 +609,29 @@ impl Daemon {
             exited: AtomicBool::new(false),
             pending: AtomicBool::new(pending),
             prompt: Mutex::new(terminal::Prompt::default()),
-            busy: AtomicBool::new(false),
+            screen: Mutex::new(terminal::Screen::new(
+                rows.clamp(10, 200),
+                cols.clamp(40, 400),
+            )),
+            turn: std::sync::atomic::AtomicU64::new(0),
+            input: Mutex::new(()),
+            trimmed: AtomicBool::new(false),
             terminals: std::sync::atomic::AtomicUsize::new(0),
         });
         {
             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            // Keep live sessions and only the ten most recent exited ones.
+            let exited: Vec<usize> = (0..state.sessions.len())
+                .filter(|&i| state.sessions[i].exited.load(Ordering::SeqCst))
+                .collect();
+            let drop_count = exited.len().saturating_sub(10);
+            let doomed: Vec<usize> = exited.into_iter().take(drop_count).collect();
+            let mut index = 0;
+            state.sessions.retain(|_| {
+                let keep = !doomed.contains(&index);
+                index += 1;
+                keep
+            });
             state.sessions.push(session.clone());
             state.active = Some(session.clone());
         }
@@ -541,6 +639,7 @@ impl Daemon {
         std::thread::spawn(move || pump(output, reader));
         if pending {
             let resolving = session.clone();
+            let started = Instant::now();
             std::thread::spawn(move || {
                 while !resolving.exited.load(Ordering::SeqCst) {
                     if let Some(real) =
@@ -554,7 +653,10 @@ impl Daemon {
                         resolving.pending.store(false, Ordering::SeqCst);
                         return;
                     }
-                    std::thread::sleep(Duration::from_millis(250));
+                    // Codex creates its thread at the first turn; poll quickly
+                    // for a minute, then slowly.
+                    let slow = started.elapsed() > Duration::from_secs(60);
+                    std::thread::sleep(Duration::from_millis(if slow { 2000 } else { 250 }));
                 }
             });
         }
@@ -590,7 +692,8 @@ impl Daemon {
             // Snapshot and subscribe under the buffer lock so no output is
             // lost or duplicated between the replay and the live stream.
             let buffer = session.buffer.lock().unwrap_or_else(|e| e.into_inner());
-            let replay: Vec<u8> = buffer.iter().copied().collect();
+            let raw: Vec<u8> = buffer.iter().copied().collect();
+            let replay = terminal::replay(&raw, session.trimmed.load(Ordering::SeqCst));
             let _ = sender.send(frame::encode(frame::OUTPUT, &replay));
             if session.exited.load(Ordering::SeqCst) {
                 let _ = sender.send(frame::encode(frame::EXIT, &0i32.to_be_bytes()));
@@ -652,9 +755,6 @@ impl Daemon {
             if session.prompt.lock().unwrap_or_else(|e| e.into_inner()).draft() {
                 return Err("There is unfinished text in the terminal prompt. Send or clear it before speaking.".into());
             }
-            if session.busy.swap(true, Ordering::SeqCst) {
-                return Err("This session is already answering a voice turn".into());
-            }
             Ok((session, bytes))
         });
         let (session, bytes) = match result {
@@ -663,7 +763,6 @@ impl Daemon {
         };
         self.activate(&session);
         let outcome = self.turn(&session, text.trim(), &bytes, &mut stream);
-        session.busy.store(false, Ordering::SeqCst);
         let _ = match outcome {
             Ok(reply) => line(&mut stream, json!({"type": "done", "reply": reply})),
             Err(message) => line(&mut stream, json!({"type": "error", "error": message})),
@@ -678,49 +777,70 @@ impl Daemon {
         stream: &mut UnixStream,
     ) -> Result<String, String> {
         let home = &self.config.home;
-        let mut path = session.history_path(home);
-        let mut offset = path
-            .as_ref()
-            .and_then(|p| std::fs::metadata(p).ok())
-            .map(|m| m.len())
-            .unwrap_or(0);
-        // Watch the screen while pasting: Enter goes only to an input box
-        // that visibly took the paste, never to a native dialog.
-        let (sender, screen) = mpsc::channel::<Vec<u8>>();
-        session
-            .subscribers
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(sender);
-        session.write(bytes)?;
-        let mut shown = Vec::new();
-        let echo_deadline = Instant::now() + Duration::from_secs(2);
-        while !terminal::paste_echoed(&shown, text) {
-            let left = echo_deadline.saturating_duration_since(Instant::now());
-            match screen.recv_timeout(left.max(Duration::from_millis(1))) {
-                Ok(frame) if frame.first() == Some(&frame::OUTPUT) => {
-                    shown.extend_from_slice(&frame[5..])
+        // A newer voice turn supersedes this one's reply watch; the native
+        // agent queues both turns itself.
+        let generation = session.turn.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut path;
+        let mut offset;
+        {
+            let _input = session.input.lock().unwrap_or_else(|e| e.into_inner());
+            session.refresh_id(home);
+            path = session.history_path(home);
+            offset = path
+                .as_ref()
+                .and_then(|p| std::fs::metadata(p).ok())
+                .map(|m| m.len())
+                .unwrap_or(0);
+            // Enter goes only to an input box that visibly took the paste,
+            // never to a native dialog (which does not show it).
+            let before = session
+                .screen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .rows();
+            session.write(bytes)?;
+            // Generous: a TUI still starting up (MCP servers loading) draws late.
+            let echo_deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let after = session
+                    .screen
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .rows();
+                if terminal::Screen::newly_shows(&before, &after, text) {
+                    break;
                 }
-                Ok(_) => {}
-                Err(_) if Instant::now() >= echo_deadline => {
-                    drop(screen);
+                if Instant::now() >= echo_deadline {
+                    // The paste may be sitting somewhere; never let a later
+                    // Enter send it unseen.
+                    session
+                        .prompt
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .mark_draft();
                     return Err(format!(
-                        "The agent is showing a prompt or dialog, so Murmur did not press Enter. Answer it in the terminal: murmur agent run {} --resume {}",
+                        "The agent is showing a prompt or dialog, so Murmur did not press Enter. Answer it and clear the prompt in the terminal: murmur agent run {} --resume {}",
                         session.agent.name(),
                         session.id()
                     ));
                 }
-                Err(_) => {}
+                std::thread::sleep(Duration::from_millis(30));
             }
+            session.write(b"\r")?;
         }
-        drop(screen);
-        session.write(b"\r")?;
         let _ = line(stream, json!({"type": "session", "id": session.id()}));
         let mut watcher = reply::Watcher::new(session.agent, text);
         let mut reply = String::new();
         let deadline = Instant::now() + self.config.deadline;
         while Instant::now() < deadline && !self.stop.load(Ordering::SeqCst) {
+            if session.turn.load(Ordering::SeqCst) != generation {
+                return Err("Superseded by a newer voice turn".into());
+            }
+            if hung_up(stream) {
+                return Err("Client disconnected".into());
+            }
             if path.is_none() {
+                session.refresh_id(home);
                 path = session.history_path(home);
             }
             if let Some(p) = &path
@@ -781,7 +901,15 @@ fn pump(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
             let mut buffer = session.buffer.lock().unwrap_or_else(|e| e.into_inner());
             buffer.extend(data);
             let excess = buffer.len().saturating_sub(BUFFER);
-            buffer.drain(..excess);
+            if excess > 0 {
+                buffer.drain(..excess);
+                session.trimmed.store(true, Ordering::SeqCst);
+            }
+            session
+                .screen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .process(data);
             session.broadcast(frame::encode(frame::OUTPUT, data));
         }
         // Native TUIs (Codex) wait at startup for terminal answers. With no

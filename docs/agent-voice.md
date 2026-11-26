@@ -31,9 +31,11 @@ Keychain credentials and Offline-all policy do that work instead.
   and text containing terminal control characters is refused.
 - The control socket lives in a 0700 directory the user owns and is 0600, so
   other users cannot connect. Nothing listens on TCP.
-- Voice presses Enter only after the native input box visibly shows the
-  pasted text. A dialog (permission, model choice) does not echo it, so voice
-  is refused there instead of answering the dialog.
+- Voice presses Enter only after a row of the session's screen (a virtual
+  terminal Murmur keeps for each session) newly shows the pasted text. A
+  dialog (permission, model choice) does not, even when it repaints words like
+  "Yes", so voice is refused there instead of answering it. A refused paste
+  marks the prompt as holding a draft until the user sends or clears it.
 - A session Murmur starts is a new top-level session: identity markers of a
   parent agent session (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, …) are not
   inherited. User configuration variables are.
@@ -96,7 +98,10 @@ Acceptance:
   native JSONL, streams assistant text, and ends at Codex `task_complete` or
   Claude `end_turn`/`turn_duration`. Exit or a 15-minute deadline fails
   explicitly.
-- Only one voice turn per session runs at a time.
+- A newer voice turn supersedes an older one's reply watch (the native agent
+  queues both turns). Esc interrupts (`turn_aborted`, "[Request interrupted
+  by user]") end a watch, and Murmur follows `/clear` and `/new` to the
+  session's new history file.
 
 ### 3. Menu bar agent voice
 

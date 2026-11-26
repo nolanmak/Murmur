@@ -186,12 +186,74 @@ fn voice_never_presses_enter_on_a_native_dialog() {
     std::fs::create_dir_all(&project).unwrap();
     let id = client::open(&env.dir, Agent::Claude, None, &project, 100, 30).unwrap();
     std::thread::sleep(Duration::from_millis(500));
-    let error = client::send(&env.dir, Some(&id), "yes do it", |_| {}).unwrap_err();
+    // "yes" is on the dialog already; its repaint must not count as an echo.
+    let error = client::send(&env.dir, Some(&id), "yes", |_| {}).unwrap_err();
     assert!(error.contains("prompt"), "{error}");
     std::thread::sleep(Duration::from_millis(500));
+    // The refused paste may sit in the prompt, so voice stays blocked until
+    // the user clears it.
+    let error = client::send(&env.dir, Some(&id), "yes", |_| {}).unwrap_err();
+    assert!(error.contains("unfinished text"), "{error}");
     let home = env._root.path().join("home");
     assert!(!home.join("APPROVED").exists(), "voice approved a dialog");
     env.daemon.shutdown();
+}
+
+#[test]
+fn a_newer_voice_turn_supersedes_one_still_waiting() {
+    let env = start();
+    let project = env.project.join("silent");
+    std::fs::create_dir_all(&project).unwrap();
+    let id = client::open(&env.dir, Agent::Claude, None, &project, 100, 30).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    let dir = env.dir.clone();
+    let first = std::thread::spawn(move || client::send(&dir, None, "think about it", |_| {}));
+    std::thread::sleep(Duration::from_millis(1000));
+    let reply = client::send(&env.dir, Some(&id), "answer now", |_| {}).unwrap();
+    assert_eq!(reply.trim(), "You said: answer now");
+    let error = first.join().unwrap().unwrap_err();
+    assert!(error.contains("newer"), "{error}");
+    env.daemon.shutdown();
+}
+
+#[test]
+fn replies_follow_claude_into_a_cleared_session() {
+    let env = start();
+    let id = client::open(&env.dir, Agent::Claude, None, &env.project, 100, 30).unwrap();
+    let mut attach = client::attach(&env.dir, &id, 100, 30, false).unwrap();
+    wait_for(&mut attach, "fake claude ready");
+    attach.input(b"/clear\r").unwrap();
+    wait_for(&mut attach, "cleared");
+    drop(attach);
+    let reply = client::send(&env.dir, Some(&id), "after clear", |_| {}).unwrap();
+    assert_eq!(reply.trim(), "You said: after clear");
+    env.daemon.shutdown();
+}
+
+#[test]
+fn only_one_daemon_starts_for_a_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("s");
+    let starts: Vec<_> = (0..4)
+        .map(|_| {
+            let (dir, home) = (dir.clone(), root.path().to_path_buf());
+            std::thread::spawn(move || {
+                daemon::start(Config {
+                    dir,
+                    home,
+                    codex: fixture(),
+                    claude: fixture(),
+                    poll: Duration::from_millis(50),
+                    deadline: Duration::from_secs(1),
+                })
+            })
+        })
+        .collect();
+    let results: Vec<_> = starts.into_iter().map(|s| s.join().unwrap()).collect();
+    assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+    for r in results.into_iter().flatten() {
+        r.shutdown();
+    }
 }
 
 #[test]
