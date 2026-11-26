@@ -10,8 +10,8 @@ pub fn main(command: &str, args: &[String]) -> Result<(), String> {
         "speak" => speak(args),
         "mcp" => mcp::serve(
             std::io::stdin().lock(),
-            std::io::stdout().lock(),
-            &mcp::System::default(),
+            std::io::stdout(),
+            std::sync::Arc::new(mcp::System::default()),
         ),
         "agent" => agent(args),
         #[cfg(unix)]
@@ -79,21 +79,17 @@ fn send(args: &[String]) -> Result<(), String> {
         i += 1;
     }
     let text = words.join(" ");
-    let reply = super::client::send(&super::daemon::Config::dir()?, id.as_deref(), &text, |part| {
-        println!("{part}");
-    })?;
+    let reply = super::client::send(
+        &super::daemon::Config::dir()?,
+        id.as_deref(),
+        &text,
+        |part| {
+            println!("{part}");
+        },
+    )?;
     if speak && !reply.trim().is_empty() {
-        let (engine, settings) = speech::configured()?;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|_| "Cannot start speech runtime")?;
-        runtime.block_on(speech::speak(
-            &engine,
-            &speech::Playback::default(),
-            &speech::chunks(&reply, speech::MAX_TEXT).into_iter().next().unwrap_or_default(),
-            settings.speed,
-        ))?;
+        let text: String = reply.chars().take(speech::MAX_TEXT).collect();
+        speech::Voicebox::system().speak(&text, None)?;
     }
     Ok(())
 }
@@ -110,7 +106,8 @@ impl Raw {
         };
         let mut raw = original.clone();
         raw.make_raw();
-        if rustix::termios::tcsetattr(&stdin, rustix::termios::OptionalActions::Now, &raw).is_err() {
+        if rustix::termios::tcsetattr(&stdin, rustix::termios::OptionalActions::Now, &raw).is_err()
+        {
             return Raw(None);
         }
         Raw(Some(original))
@@ -120,7 +117,11 @@ impl Raw {
 impl Drop for Raw {
     fn drop(&mut self) {
         if let Some(original) = &self.0 {
-            let _ = rustix::termios::tcsetattr(std::io::stdin(), rustix::termios::OptionalActions::Now, original);
+            let _ = rustix::termios::tcsetattr(
+                std::io::stdin(),
+                rustix::termios::OptionalActions::Now,
+                original,
+            );
         }
     }
 }
@@ -257,17 +258,7 @@ fn speak(args: &[String]) -> Result<(), String> {
         Some(text)
     })?;
     speech::validate_text(&text)?;
-    let (engine, settings) = speech::configured()?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|_| "Cannot start speech runtime")?;
-    runtime.block_on(speech::speak(
-        &engine,
-        &speech::Playback::default(),
-        &text,
-        speed.unwrap_or(settings.speed),
-    ))?;
-    println!("Spoken ({}).", engine.label());
+    let voice = speech::Voicebox::system().speak(&text, speed)?;
+    println!("Spoken ({voice}).");
     Ok(())
 }

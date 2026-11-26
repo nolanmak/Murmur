@@ -111,15 +111,26 @@ pub fn parse(bytes: &[u8], agent: Agent, truncated: bool) -> Vec<Message> {
 }
 
 pub fn read(path: &Path, agent: Agent) -> Result<Vec<Message>, String> {
-    let mut file = match std::fs::File::open(path) {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Never follow a symlink swapped in after lookup.
+        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    }
+    let mut file = match options.open(path) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(_) => return Err("Cannot read native session history".into()),
     };
-    let size = file
+    let meta = file
         .metadata()
-        .map_err(|_| "Cannot read native session history")?
-        .len();
+        .map_err(|_| "Cannot read native session history")?;
+    if !meta.is_file() || !owned(&meta) {
+        return Err("Native session history is not a regular file you own".into());
+    }
+    let size = meta.len();
     let start = size.saturating_sub(TAIL_BYTES);
     file.seek(SeekFrom::Start(start))
         .map_err(|_| "Cannot read native session history")?;
@@ -130,21 +141,25 @@ pub fn read(path: &Path, agent: Agent) -> Result<Vec<Message>, String> {
     Ok(parse(&bytes, agent, start > 0))
 }
 
-/// A regular file owned by this user; symlinks are refused.
-fn owned_file(path: &Path) -> bool {
-    let Ok(meta) = std::fs::symlink_metadata(path) else {
-        return false;
-    };
-    if !meta.file_type().is_file() {
-        return false;
-    }
+fn owned(meta: &std::fs::Metadata) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
         meta.uid() == rustix::process::getuid().as_raw()
     }
     #[cfg(not(unix))]
-    true
+    {
+        let _ = meta;
+        true
+    }
+}
+
+/// A regular file owned by this user; symlinks are refused.
+fn owned_file(path: &Path) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    meta.file_type().is_file() && owned(&meta)
 }
 
 fn dirs(path: &Path) -> Vec<PathBuf> {

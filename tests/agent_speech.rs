@@ -255,3 +255,79 @@ fn voice_settings_command_round_trips_and_rejects_bad_values() {
     std::fs::write(&path, b"{not json").unwrap();
     assert!(Settings::load(&path).is_err());
 }
+
+#[test]
+fn the_mcp_voice_rereads_offline_all_and_settings_but_caches_the_key() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    let (url, seen) = serve(vec![
+        (200, "audio/mpeg", b"one".to_vec()),
+        (200, "audio/mpeg", b"two".to_vec()),
+    ]);
+    let offline = Arc::new(AtomicBool::new(false));
+    let keys = Arc::new(AtomicUsize::new(0));
+    let player = FakePlayer::default();
+    let (o, k) = (offline.clone(), keys.clone());
+    let voice = speech::Voicebox::new(
+        Box::new(move || Ok((Settings::default(), o.load(Ordering::SeqCst)))),
+        Box::new(move || {
+            k.fetch_add(1, Ordering::SeqCst);
+            Ok(fotw_secrets::SecretString::new("fixture-token"))
+        }),
+        url,
+        Box::new(player.clone()),
+    );
+    voice.speak("First.", None).unwrap();
+    offline.store(true, Ordering::SeqCst);
+    voice.speak("Private.", None).unwrap();
+    offline.store(false, Ordering::SeqCst);
+    voice.speak("Third.", None).unwrap();
+    let calls = player.calls.lock().unwrap();
+    let programs: Vec<_> = calls.iter().map(|c| c.0.clone()).collect();
+    assert_eq!(
+        programs,
+        [
+            PathBuf::from("/usr/bin/afplay"),
+            PathBuf::from("/usr/bin/say"),
+            PathBuf::from("/usr/bin/afplay")
+        ]
+    );
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests.iter().all(|r| !r.contains("Private.")));
+    assert_eq!(
+        keys.load(Ordering::SeqCst),
+        1,
+        "Keychain read more than once"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_stop_during_player_start_still_stops_playback() {
+    // Stop before play: the child must never keep running.
+    let playback = speech::Playback::default();
+    playback.stop();
+    let started = std::time::Instant::now();
+    let result = playback.play(
+        Path::new("/bin/sleep"),
+        &["5".into()],
+        Path::new("/dev/null"),
+    );
+    assert!(result.is_err());
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    // Stop racing a running player.
+    let playback = speech::Playback::default();
+    let stopper = playback.clone();
+    let handle = std::thread::spawn(move || {
+        playback.play(
+            Path::new("/bin/sleep"),
+            &["5".into()],
+            Path::new("/dev/null"),
+        )
+    });
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let started = std::time::Instant::now();
+    stopper.stop();
+    assert!(handle.join().unwrap().is_err());
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+}

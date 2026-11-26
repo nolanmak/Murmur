@@ -44,8 +44,7 @@ impl Config {
     }
     /// The user's installed CLIs; `MURMUR_CODEX`/`MURMUR_CLAUDE` override.
     pub fn system() -> Result<Self, String> {
-        let home =
-            PathBuf::from(std::env::var_os("HOME").ok_or("Cannot locate home directory")?);
+        let home = PathBuf::from(std::env::var_os("HOME").ok_or("Cannot locate home directory")?);
         Ok(Self {
             dir: Self::dir()?,
             codex: binary(&home, "codex", "MURMUR_CODEX"),
@@ -127,10 +126,19 @@ struct Session {
 
 impl Session {
     fn id(&self) -> String {
-        self.ids.lock().unwrap_or_else(|e| e.into_inner()).last().cloned().unwrap_or_default()
+        self.ids
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .last()
+            .cloned()
+            .unwrap_or_default()
     }
     fn has_id(&self, id: &str) -> bool {
-        self.ids.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|i| i == id)
+        self.ids
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .any(|i| i == id)
     }
     fn write(&self, bytes: &[u8]) -> Result<(), String> {
         if self.exited.load(Ordering::SeqCst) {
@@ -149,12 +157,16 @@ impl Session {
             .retain(|s| s.send(frame.clone()).is_ok());
     }
     fn resize(&self, cols: u16, rows: u16) {
-        let _ = self.master.lock().unwrap_or_else(|e| e.into_inner()).resize(PtySize {
-            rows: rows.clamp(10, 200),
-            cols: cols.clamp(40, 400),
-            pixel_width: 0,
-            pixel_height: 0,
-        });
+        let _ = self
+            .master
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .resize(PtySize {
+                rows: rows.clamp(10, 200),
+                cols: cols.clamp(40, 400),
+                pixel_width: 0,
+                pixel_height: 0,
+            });
     }
     fn kill(&self) {
         let _ = self.child.lock().unwrap_or_else(|e| e.into_inner()).kill();
@@ -191,7 +203,14 @@ impl Handle {
     }
     fn stop(&mut self) {
         self.daemon.stop.store(true, Ordering::SeqCst);
-        for session in self.daemon.state.lock().unwrap_or_else(|e| e.into_inner()).sessions.iter() {
+        for session in self
+            .daemon
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .sessions
+            .iter()
+        {
             session.kill();
         }
         if let Some(thread) = self.thread.take() {
@@ -300,19 +319,32 @@ impl Daemon {
             Err(_) => return,
         });
         let mut request = String::new();
-        if reader.by_ref().take(64 * 1024).read_line(&mut request).is_err() {
+        if reader
+            .by_ref()
+            .take(64 * 1024)
+            .read_line(&mut request)
+            .is_err()
+        {
             return;
         }
         let Ok(request) = serde_json::from_str::<Value>(&request) else {
             return error(&mut stream, "Invalid request");
         };
         let result = match request.get("op").and_then(Value::as_str) {
-            Some("open") => self.open(&request).map(|id| json!({"type": "ok", "id": id})),
+            Some("open") => self
+                .open(&request)
+                .map(|id| json!({"type": "ok", "id": id})),
             Some("list") => Ok(json!({"type": "ok", "sessions": self.list()})),
             Some("attach") => return self.attach(&request, stream, reader),
             Some("send") => return self.send(&request, stream),
             Some("shutdown") => {
-                for session in self.state.lock().unwrap_or_else(|e| e.into_inner()).sessions.iter() {
+                for session in self
+                    .state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .sessions
+                    .iter()
+                {
                     session.kill();
                 }
                 self.stop.store(true, Ordering::SeqCst);
@@ -407,8 +439,17 @@ impl Daemon {
                     Some(id) => id.clone(),
                     None => terminal::new_uuid()?,
                 };
-                let flag = if resume.is_some() { "--resume" } else { "--session-id" };
-                (&self.config.claude, vec![flag.to_string(), id.clone()], id, false)
+                let flag = if resume.is_some() {
+                    "--resume"
+                } else {
+                    "--session-id"
+                };
+                (
+                    &self.config.claude,
+                    vec![flag.to_string(), id.clone()],
+                    id,
+                    false,
+                )
             }
             Agent::Codex => {
                 let mut args = Vec::new();
@@ -444,7 +485,10 @@ impl Daemon {
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
         for (name, _) in std::env::vars_os() {
-            if name.to_str().is_some_and(terminal::inherited_session_marker) {
+            if name
+                .to_str()
+                .is_some_and(terminal::inherited_session_marker)
+            {
                 command.env_remove(&name);
             }
         }
@@ -499,8 +543,14 @@ impl Daemon {
             let resolving = session.clone();
             std::thread::spawn(move || {
                 while !resolving.exited.load(Ordering::SeqCst) {
-                    if let Some(real) = terminal::codex_thread_from_lsof(&terminal::lsof(resolving.pid)) {
-                        resolving.ids.lock().unwrap_or_else(|e| e.into_inner()).push(real);
+                    if let Some(real) =
+                        terminal::codex_thread_from_lsof(&terminal::lsof(resolving.pid))
+                    {
+                        resolving
+                            .ids
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .push(real);
                         resolving.pending.store(false, Ordering::SeqCst);
                         return;
                     }
@@ -511,9 +561,17 @@ impl Daemon {
         Ok(id)
     }
 
-    fn attach(self: &Arc<Self>, request: &Value, mut stream: UnixStream, mut reader: BufReader<UnixStream>) {
+    fn attach(
+        self: &Arc<Self>,
+        request: &Value,
+        mut stream: UnixStream,
+        mut reader: BufReader<UnixStream>,
+    ) {
         let id = request.get("id").and_then(Value::as_str);
-        let session = match id.ok_or_else(|| "Provide a session id".to_string()).and_then(|id| self.find(Some(id))) {
+        let session = match id
+            .ok_or_else(|| "Provide a session id".to_string())
+            .and_then(|id| self.find(Some(id)))
+        {
             Ok(s) => s,
             Err(message) => return error(&mut stream, &message),
         };
@@ -537,7 +595,11 @@ impl Daemon {
             if session.exited.load(Ordering::SeqCst) {
                 let _ = sender.send(frame::encode(frame::EXIT, &0i32.to_be_bytes()));
             } else {
-                session.subscribers.lock().unwrap_or_else(|e| e.into_inner()).push(sender);
+                session
+                    .subscribers
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(sender);
             }
         }
         let mut out = match stream.try_clone() {
@@ -555,7 +617,11 @@ impl Daemon {
         while let Ok((kind, payload)) = frame::read(&mut reader) {
             match kind {
                 frame::INPUT => {
-                    session.prompt.lock().unwrap_or_else(|e| e.into_inner()).typed(&payload);
+                    session
+                        .prompt
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .typed(&payload);
                     if session.write(&payload).is_err() {
                         break;
                     }
@@ -604,7 +670,13 @@ impl Daemon {
         };
     }
 
-    fn turn(&self, session: &Arc<Session>, text: &str, bytes: &[u8], stream: &mut UnixStream) -> Result<String, String> {
+    fn turn(
+        &self,
+        session: &Arc<Session>,
+        text: &str,
+        bytes: &[u8],
+        stream: &mut UnixStream,
+    ) -> Result<String, String> {
         let home = &self.config.home;
         let mut path = session.history_path(home);
         let mut offset = path
@@ -615,14 +687,20 @@ impl Daemon {
         // Watch the screen while pasting: Enter goes only to an input box
         // that visibly took the paste, never to a native dialog.
         let (sender, screen) = mpsc::channel::<Vec<u8>>();
-        session.subscribers.lock().unwrap_or_else(|e| e.into_inner()).push(sender);
+        session
+            .subscribers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(sender);
         session.write(bytes)?;
         let mut shown = Vec::new();
         let echo_deadline = Instant::now() + Duration::from_secs(2);
         while !terminal::paste_echoed(&shown, text) {
             let left = echo_deadline.saturating_duration_since(Instant::now());
             match screen.recv_timeout(left.max(Duration::from_millis(1))) {
-                Ok(frame) if frame.first() == Some(&frame::OUTPUT) => shown.extend_from_slice(&frame[5..]),
+                Ok(frame) if frame.first() == Some(&frame::OUTPUT) => {
+                    shown.extend_from_slice(&frame[5..])
+                }
                 Ok(_) => {}
                 Err(_) if Instant::now() >= echo_deadline => {
                     drop(screen);
@@ -656,13 +734,17 @@ impl Daemon {
                     use std::io::{Seek, SeekFrom};
                     let mut bytes = Vec::new();
                     if file.seek(SeekFrom::Start(offset)).is_ok()
-                        && file.take((size - offset).min(1 << 20)).read_to_end(&mut bytes).is_ok()
+                        && file
+                            .take((size - offset).min(1 << 20))
+                            .read_to_end(&mut bytes)
+                            .is_ok()
                     {
                         offset += bytes.len() as u64;
                         for event in watcher.feed_bytes(&bytes) {
                             match event {
                                 reply::Event::Text(text) => {
-                                    if line(stream, json!({"type": "text", "text": text})).is_err() {
+                                    if line(stream, json!({"type": "text", "text": text})).is_err()
+                                    {
                                         // The client went away; the native turn continues.
                                         return Err("Client disconnected".into());
                                     }
@@ -712,7 +794,11 @@ fn pump(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
         }
     }
     let code = loop {
-        let status = session.child.lock().unwrap_or_else(|e| e.into_inner()).try_wait();
+        let status = session
+            .child
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .try_wait();
         match status {
             Ok(Some(status)) => break status.exit_code() as i32,
             Ok(None) => std::thread::sleep(Duration::from_millis(50)),
@@ -722,6 +808,9 @@ fn pump(session: Arc<Session>, mut reader: Box<dyn Read + Send>) {
     let _buffer = session.buffer.lock().unwrap_or_else(|e| e.into_inner());
     session.exited.store(true, Ordering::SeqCst);
     session.broadcast(frame::encode(frame::EXIT, &code.to_be_bytes()));
-    session.subscribers.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    session
+        .subscribers
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
 }
-

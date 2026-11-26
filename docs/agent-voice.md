@@ -29,8 +29,14 @@ Keychain credentials and Offline-all policy do that work instead.
   own arguments only (`--session-id`/`--resume` for Claude, `resume` for Codex).
 - Voice text is refused while the native prompt holds unfinished typed text,
   and text containing terminal control characters is refused.
-- The control socket lives in a 0700 directory, is 0600, and rejects peers
-  with another uid. Nothing listens on TCP.
+- The control socket lives in a 0700 directory the user owns and is 0600, so
+  other users cannot connect. Nothing listens on TCP.
+- Voice presses Enter only after the native input box visibly shows the
+  pasted text. A dialog (permission, model choice) does not echo it, so voice
+  is refused there instead of answering the dialog.
+- A session Murmur starts is a new top-level session: identity markers of a
+  parent agent session (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, …) are not
+  inherited. User configuration variables are.
 - Speech keys stay where Murmur already keeps them; no key is printed,
   logged or sent to the agent.
 - Offline-all forces the local macOS voice; no text leaves the Mac for speech.

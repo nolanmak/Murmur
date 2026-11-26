@@ -70,7 +70,9 @@ impl Watcher {
                 let kind = record.get("type").and_then(Value::as_str);
                 (kind == Some("assistant")
                     && matches!(
-                        record.pointer("/message/stop_reason").and_then(Value::as_str),
+                        record
+                            .pointer("/message/stop_reason")
+                            .and_then(Value::as_str),
                         Some("end_turn" | "stop_sequence")
                     ))
                     || (kind == Some("system")

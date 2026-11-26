@@ -1,6 +1,7 @@
 //! #113: terminal input rules and Codex id discovery. Pure; no PTY.
 use murmur::agent::terminal::{
-    Prompt, codex_thread_from_lsof, paste_echoed, inherited_session_marker, query_answers, voice_bytes,
+    Prompt, codex_thread_from_lsof, inherited_session_marker, paste_echoed, query_answers,
+    voice_bytes,
 };
 
 #[test]
@@ -66,10 +67,20 @@ fn terminal_queries_get_answers_in_order() {
 
 #[test]
 fn only_parent_session_markers_are_removed() {
-    for name in ["CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID"] {
+    for name in [
+        "CLAUDECODE",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_SESSION_ID",
+        "CODEX_THREAD_ID",
+    ] {
         assert!(inherited_session_marker(name), "{name}");
     }
-    for name in ["CLAUDE_CODE_USE_BEDROCK", "ANTHROPIC_API_KEY", "PATH", "HOME"] {
+    for name in [
+        "CLAUDE_CODE_USE_BEDROCK",
+        "ANTHROPIC_API_KEY",
+        "PATH",
+        "HOME",
+    ] {
         assert!(!inherited_session_marker(name), "{name}");
     }
 }

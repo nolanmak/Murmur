@@ -74,7 +74,8 @@ fn agent_voice_settings_are_saved_under_application_support() {
 
 #[cfg(unix)]
 fn agent_cmd(home: &std::path::Path, args: &[&str]) -> Command {
-    let fake = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake_agent.py");
+    let fake =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake_agent.py");
     let mut command = Command::new(env!("CARGO_BIN_EXE_murmur"));
     command
         .args(args)
@@ -106,7 +107,10 @@ fn agent_commands_without_a_daemon_explain_how_to_start_one() {
 #[test]
 fn agent_run_starts_the_daemon_and_detaching_keeps_the_session() {
     // Unix socket paths are limited to ~104 bytes; keep HOME shallow.
-    let root = tempfile::Builder::new().prefix("mh").tempdir_in("/tmp").unwrap();
+    let root = tempfile::Builder::new()
+        .prefix("mh")
+        .tempdir_in("/tmp")
+        .unwrap();
     let home = root.path().join("h");
     std::fs::create_dir_all(&home).unwrap();
     /// Stops the spawned daemon even when an assertion fails.
@@ -136,7 +140,11 @@ fn agent_run_starts_the_daemon_and_detaching_keeps_the_session() {
     stdin.write_all(&[0x1d]).unwrap(); // Ctrl+] detaches
     let out = run.wait_with_output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(out.status.success(), "{stdout} {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{stdout} {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(
         stdout.contains("fake claude ready inherited=CLAUDE_CODE_USE_BEDROCK\r"),
         "{stdout}"
@@ -147,9 +155,18 @@ fn agent_run_starts_the_daemon_and_detaching_keeps_the_session() {
     let list = String::from_utf8_lossy(&list.stdout);
     assert!(list.contains("claude") && list.contains("live"), "{list}");
 
-    let send = agent_cmd(&home, &["agent", "send", "hello", "there"]).output().unwrap();
-    assert!(send.status.success(), "{}", String::from_utf8_lossy(&send.stderr));
-    assert_eq!(String::from_utf8_lossy(&send.stdout).trim(), "You said: hello there");
+    let send = agent_cmd(&home, &["agent", "send", "hello", "there"])
+        .output()
+        .unwrap();
+    assert!(
+        send.status.success(),
+        "{}",
+        String::from_utf8_lossy(&send.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&send.stdout).trim(),
+        "You said: hello there"
+    );
 
     let stop = agent_cmd(&home, &["agent", "stop"]).output().unwrap();
     assert!(stop.status.success());

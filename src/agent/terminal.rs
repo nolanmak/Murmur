@@ -8,7 +8,10 @@ pub struct Prompt {
 }
 impl Prompt {
     pub fn typed(&mut self, bytes: &[u8]) {
-        if bytes.iter().any(|b| matches!(b, b'\r' | b'\n' | 0x03 | 0x15)) {
+        if bytes
+            .iter()
+            .any(|b| matches!(b, b'\r' | b'\n' | 0x03 | 0x15))
+        {
             self.draft = false;
         } else if !bytes.is_empty() && bytes[0] != 0x1b {
             self.draft = true;

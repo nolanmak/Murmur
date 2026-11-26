@@ -36,7 +36,11 @@ fn request(dir: &Path, body: Value) -> Result<(UnixStream, BufReader<UnixStream>
     stream
         .write_all(format!("{body}\n").as_bytes())
         .map_err(|_| "Cannot reach Murmur's agent daemon")?;
-    let reader = BufReader::new(stream.try_clone().map_err(|_| "Cannot reach Murmur's agent daemon")?);
+    let reader = BufReader::new(
+        stream
+            .try_clone()
+            .map_err(|_| "Cannot reach Murmur's agent daemon")?,
+    );
     Ok((stream, reader))
 }
 
@@ -59,7 +63,14 @@ fn ok(value: Value) -> Result<Value, String> {
     Ok(value)
 }
 
-pub fn open(dir: &Path, agent: Agent, resume: Option<&str>, cwd: &Path, cols: u16, rows: u16) -> Result<String, String> {
+pub fn open(
+    dir: &Path,
+    agent: Agent,
+    resume: Option<&str>,
+    cwd: &Path,
+    cols: u16,
+    rows: u16,
+) -> Result<String, String> {
     let (_, mut reader) = request(
         dir,
         json!({"op": "open", "agent": agent.name(), "resume": resume, "cwd": cwd.to_string_lossy(), "cols": cols, "rows": rows}),
@@ -97,7 +108,12 @@ pub fn shutdown(dir: &Path) -> Result<(), String> {
 }
 
 /// Sends one voice turn and streams the native reply text to `on_text`.
-pub fn send(dir: &Path, id: Option<&str>, text: &str, mut on_text: impl FnMut(&str)) -> Result<String, String> {
+pub fn send(
+    dir: &Path,
+    id: Option<&str>,
+    text: &str,
+    mut on_text: impl FnMut(&str),
+) -> Result<String, String> {
     let (_stream, mut reader) = request(dir, json!({"op": "send", "id": id, "text": text}))?;
     loop {
         let event = ok(next(&mut reader)?)?;
@@ -146,16 +162,19 @@ impl Drop for Attachment {
 /// `tty`: the client is a real terminal that answers terminal queries
 /// itself; otherwise the daemon answers them.
 pub fn attach(dir: &Path, id: &str, cols: u16, rows: u16, tty: bool) -> Result<Attachment, String> {
-    let (stream, mut reader) = request(dir, json!({"op": "attach", "id": id, "cols": cols, "rows": rows, "tty": tty}))?;
+    let (stream, mut reader) = request(
+        dir,
+        json!({"op": "attach", "id": id, "cols": cols, "rows": rows, "tty": tty}),
+    )?;
     ok(next(&mut reader)?)?;
     let (sender, frames) = mpsc::channel();
     std::thread::spawn(move || {
         while let Ok((kind, payload)) = frame::read(&mut reader) {
             let frame = match kind {
                 frame::OUTPUT => Frame::Output(payload),
-                frame::EXIT if payload.len() == 4 => {
-                    Frame::Exit(i32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]))
-                }
+                frame::EXIT if payload.len() == 4 => Frame::Exit(i32::from_be_bytes([
+                    payload[0], payload[1], payload[2], payload[3],
+                ])),
                 _ => continue,
             };
             if sender.send(frame).is_err() {
