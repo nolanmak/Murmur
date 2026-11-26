@@ -18,7 +18,7 @@ const MAX_AUDIO: usize = 24 * 1024 * 1024;
 const SAY_RATE: f32 = 175.0;
 
 /// Plays a prepared file with a fixed system program. Tests use a fake.
-pub trait Player {
+pub trait Player: Send + Sync {
     fn play(&self, program: &Path, args: &[String], file: &Path) -> Result<(), String>;
 }
 
@@ -214,16 +214,101 @@ pub fn engine(
     }
 }
 
-/// Engine from saved settings, Offline-all and Murmur's Deepgram credential.
-pub fn configured() -> Result<(Engine, Settings), String> {
+/// Saved voice settings and whether Offline-all is on.
+pub fn saved() -> Result<(Settings, bool), String> {
     let settings = Settings::load(&Settings::path()?)?;
     let offline =
         crate::cleanup_config::NetworkPolicy::load(&crate::cleanup_config::NetworkPolicy::path()?)?
             .offline_all;
-    let engine = engine(&settings, offline, || {
-        crate::config::load().map(|credentials| credentials.key)
-    });
-    Ok((engine, settings))
+    Ok((settings, offline))
+}
+
+pub type SettingsLoader = Box<dyn Fn() -> Result<(Settings, bool), String> + Send + Sync>;
+pub type KeyLoader = Box<dyn Fn() -> Result<SecretString, String> + Send + Sync>;
+
+/// A long-lived voice (MCP server, menu bar). Settings and Offline-all are
+/// re-read for every request; only the Deepgram key is cached, because a
+/// Keychain read takes seconds. One reply plays at a time.
+pub struct Voicebox {
+    settings: SettingsLoader,
+    key: KeyLoader,
+    cache: std::sync::Mutex<Option<SecretString>>,
+    base: String,
+    player: Box<dyn Player>,
+    speaking: std::sync::Mutex<()>,
+}
+
+impl Voicebox {
+    pub fn new(
+        settings: SettingsLoader,
+        key: KeyLoader,
+        base: String,
+        player: Box<dyn Player>,
+    ) -> Self {
+        Self {
+            settings,
+            key,
+            cache: std::sync::Mutex::new(None),
+            base,
+            player,
+            speaking: std::sync::Mutex::new(()),
+        }
+    }
+
+    /// Murmur's saved settings, Offline-all and Deepgram credential.
+    pub fn system() -> Self {
+        Self::new(
+            Box::new(saved),
+            Box::new(|| crate::config::load().map(|credentials| credentials.key)),
+            DEEPGRAM.into(),
+            Box::new(Playback::default()),
+        )
+    }
+
+    /// Speaks with the default player; returns the voice used.
+    pub fn speak(&self, text: &str, speed: Option<f32>) -> Result<&'static str, String> {
+        self.speak_with(text, speed, self.player.as_ref())
+    }
+
+    /// Speaks with `player` (a per-reply [`Playback`] that can be stopped).
+    pub fn speak_with(
+        &self,
+        text: &str,
+        speed: Option<f32>,
+        player: &dyn Player,
+    ) -> Result<&'static str, String> {
+        validate_text(text)?;
+        let _turn = self.speaking.lock().unwrap_or_else(|e| e.into_inner());
+        let (settings, offline) = (self.settings)()?;
+        let engine = engine(&settings, offline, || {
+            let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(key) = cache.as_ref() {
+                return Ok(SecretString::new(key.expose()));
+            }
+            let key = (self.key)()?;
+            *cache = Some(SecretString::new(key.expose()));
+            Ok(key)
+        });
+        let engine = match engine {
+            Engine::Deepgram { key, model, .. } => Engine::Deepgram {
+                base: self.base.clone(),
+                key,
+                model,
+            },
+            Engine::System => Engine::System,
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| "Cannot start speech runtime")?;
+        runtime.block_on(speak(
+            &engine,
+            player,
+            text,
+            speed.unwrap_or(settings.speed),
+        ))?;
+        Ok(engine.label())
+    }
 }
 
 pub async fn speak(
@@ -385,7 +470,18 @@ impl Player for Playback {
             .stderr(std::process::Stdio::null())
             .spawn()
             .map_err(|_| "Cannot start audio playback")?;
-        *self.child.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
+        {
+            // stop() sets the flag before taking this lock: either we see
+            // the flag here, or stop() sees and kills the registered child.
+            let mut slot = self.child.lock().unwrap_or_else(|e| e.into_inner());
+            let mut child = child;
+            if self.stopped() {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Speech stopped".into());
+            }
+            *slot = Some(child);
+        }
         let deadline = std::time::Instant::now() + Duration::from_secs(600);
         loop {
             let mut guard = self.child.lock().unwrap_or_else(|e| e.into_inner());

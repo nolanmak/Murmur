@@ -123,3 +123,14 @@ fn symlinked_history_files_are_not_followed() {
         None
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn reading_refuses_a_symlink_swapped_in_after_lookup() {
+    let home = tempfile::tempdir().unwrap();
+    let outside = home.path().join("outside.jsonl");
+    write(&outside, &codex_lines());
+    let link = home.path().join("swapped.jsonl");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    assert!(history::read(&link, Agent::Codex).is_err());
+}

@@ -144,3 +144,67 @@ fn current_time_reports_utc_and_a_timezone() {
     assert!(utc.ends_with('Z') && utc.len() == 20, "{utc}");
     assert!(now["timezone"].as_str().is_some_and(|tz| !tz.is_empty()));
 }
+
+#[test]
+fn unsupported_protocol_versions_get_a_supported_one() {
+    let fake = Fake::default();
+    for (asked, want) in [
+        ("2024-11-05", "2024-11-05"),
+        ("2025-06-18", "2025-06-18"),
+        ("1900-01-01", mcp::LATEST_PROTOCOL),
+    ] {
+        let init = call(
+            &fake,
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":asked}}),
+        );
+        assert_eq!(init["result"]["protocolVersion"], want, "{asked}");
+    }
+}
+
+/// A speak that blocks until released, to prove the reader stays live.
+struct Slow {
+    release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+}
+impl mcp::Tools for Slow {
+    fn speak(&self, _: &str, _: Option<f32>) -> Result<(), String> {
+        let _ = self
+            .release
+            .lock()
+            .unwrap()
+            .recv_timeout(std::time::Duration::from_secs(5));
+        Ok(())
+    }
+    fn now(&self) -> Value {
+        json!({})
+    }
+    fn history(&self, _: Agent, _: &str) -> Result<Value, String> {
+        Ok(json!({}))
+    }
+}
+
+#[test]
+fn pings_are_answered_while_speech_is_playing() {
+    let (release, wait) = std::sync::mpsc::channel();
+    let tools = std::sync::Arc::new(Slow {
+        release: std::sync::Mutex::new(wait),
+    });
+    let (read_in, mut write_in) = std::io::pipe().unwrap();
+    let (read_out, write_out) = std::io::pipe().unwrap();
+    let server =
+        std::thread::spawn(move || mcp::serve(std::io::BufReader::new(read_in), write_out, tools));
+    use std::io::{BufRead, Write};
+    writeln!(
+        write_in,
+        r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"speak","arguments":{{"text":"long"}}}}}}"#
+    )
+    .unwrap();
+    writeln!(write_in, r#"{{"jsonrpc":"2.0","id":2,"method":"ping"}}"#).unwrap();
+    let mut lines = std::io::BufReader::new(read_out).lines();
+    let first: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    assert_eq!(first["id"], 2, "ping waited for speech: {first}");
+    release.send(()).unwrap();
+    let second: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    assert_eq!(second["id"], 1);
+    drop(write_in);
+    server.join().unwrap().unwrap();
+}

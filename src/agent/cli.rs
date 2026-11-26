@@ -9,8 +9,8 @@ pub fn main(command: &str, args: &[String]) -> Result<(), String> {
         "speak" => speak(args),
         "mcp" => mcp::serve(
             std::io::stdin().lock(),
-            std::io::stdout().lock(),
-            &mcp::System::default(),
+            std::io::stdout(),
+            std::sync::Arc::new(mcp::System::default()),
         ),
         "agent" => agent(args),
         _ => Err("Unknown command; use --help".into()),
@@ -79,17 +79,7 @@ fn speak(args: &[String]) -> Result<(), String> {
         Some(text)
     })?;
     speech::validate_text(&text)?;
-    let (engine, settings) = speech::configured()?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|_| "Cannot start speech runtime")?;
-    runtime.block_on(speech::speak(
-        &engine,
-        &speech::Playback::default(),
-        &text,
-        speed.unwrap_or(settings.speed),
-    ))?;
-    println!("Spoken ({}).", engine.label());
+    let voice = speech::Voicebox::system().speak(&text, speed)?;
+    println!("Spoken ({voice}).");
     Ok(())
 }

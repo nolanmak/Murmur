@@ -3,6 +3,9 @@ use super::{Agent, history, speech};
 use serde_json::{Value, json};
 use std::io::{BufRead, Write};
 
+pub const LATEST_PROTOCOL: &str = "2025-06-18";
+const SUPPORTED_PROTOCOLS: [&str; 3] = ["2024-11-05", "2025-03-26", LATEST_PROTOCOL];
+
 pub trait Tools {
     fn speak(&self, text: &str, speed: Option<f32>) -> Result<(), String>;
     fn now(&self) -> Value;
@@ -90,7 +93,11 @@ pub fn handle(line: &str, tools: &dyn Tools) -> Option<String> {
     let params = message.get("params").cloned().unwrap_or(Value::Null);
     let reply = match method {
         "initialize" => json!({"result": {
-            "protocolVersion": params.get("protocolVersion").cloned().unwrap_or(json!("2024-11-05")),
+            "protocolVersion": params
+                .get("protocolVersion")
+                .and_then(Value::as_str)
+                .filter(|v| SUPPORTED_PROTOCOLS.contains(v))
+                .unwrap_or(LATEST_PROTOCOL),
             "capabilities": {"tools": {}},
             "serverInfo": {"name": "murmur", "version": env!("CARGO_PKG_VERSION")}
         }}),
@@ -114,14 +121,39 @@ pub fn handle(line: &str, tools: &dyn Tools) -> Option<String> {
     Some(reply.to_string())
 }
 
-pub fn serve(input: impl BufRead, mut output: impl Write, tools: &dyn Tools) -> Result<(), String> {
+/// Reads requests until EOF. Tool calls run on their own threads so pings
+/// and other requests are answered while speech plays; replies are written
+/// whole, one per line.
+pub fn serve(
+    input: impl BufRead,
+    output: impl Write + Send + 'static,
+    tools: std::sync::Arc<dyn Tools + Send + Sync>,
+) -> Result<(), String> {
+    let output = std::sync::Arc::new(std::sync::Mutex::new(output));
+    let mut calls = Vec::new();
     for line in input.lines() {
         let line = line.map_err(|_| "Cannot read MCP input")?;
-        if let Some(reply) = handle(&line, tools) {
-            writeln!(output, "{reply}")
-                .and_then(|_| output.flush())
+        let is_call = serde_json::from_str::<Value>(&line)
+            .ok()
+            .is_some_and(|m| m.get("method").and_then(Value::as_str) == Some("tools/call"));
+        if is_call {
+            let (tools, output) = (tools.clone(), output.clone());
+            calls.push(std::thread::spawn(move || {
+                if let Some(reply) = handle(&line, tools.as_ref()) {
+                    let mut out = output.lock().unwrap_or_else(|e| e.into_inner());
+                    let _ = writeln!(out, "{reply}").and_then(|_| out.flush());
+                }
+            }));
+        } else if let Some(reply) = handle(&line, tools.as_ref()) {
+            let mut out = output.lock().unwrap_or_else(|e| e.into_inner());
+            writeln!(out, "{reply}")
+                .and_then(|_| out.flush())
                 .map_err(|_| "Cannot write MCP output")?;
         }
+        calls.retain(|c| !c.is_finished());
+    }
+    for call in calls {
+        let _ = call.join();
     }
     Ok(())
 }
@@ -178,28 +210,19 @@ pub fn current_time() -> Value {
 }
 
 /// Real tools: Murmur's configured voice and the user's native histories.
-/// The voice is resolved once per server: Keychain reads take seconds.
-#[derive(Default)]
 pub struct System {
-    voice: std::sync::Mutex<Option<(speech::Engine, speech::Settings)>>,
+    voice: speech::Voicebox,
+}
+impl Default for System {
+    fn default() -> Self {
+        Self {
+            voice: speech::Voicebox::system(),
+        }
+    }
 }
 impl Tools for System {
     fn speak(&self, text: &str, speed: Option<f32>) -> Result<(), String> {
-        let mut voice = self.voice.lock().unwrap_or_else(|e| e.into_inner());
-        if voice.is_none() {
-            *voice = Some(speech::configured()?);
-        }
-        let (engine, settings) = voice.as_ref().ok_or("Speech is unavailable")?;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|_| "Cannot start speech runtime")?;
-        runtime.block_on(speech::speak(
-            engine,
-            &speech::Playback::default(),
-            text,
-            speed.unwrap_or(settings.speed),
-        ))
+        self.voice.speak(text, speed).map(|_| ())
     }
     fn now(&self) -> Value {
         current_time()
