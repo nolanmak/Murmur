@@ -15,7 +15,7 @@ fn main() {
         "vocabulary" => configure_vocabulary(),
         "language" => configure_language(),
         "doctor" => doctor(),
-        "speak" | "mcp" | "agent" => {
+        "speak" | "mcp" | "agent" | "agentd" => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             murmur::agent::cli::main(&command, &args)
         }
