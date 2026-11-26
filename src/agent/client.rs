@@ -107,6 +107,12 @@ pub fn shutdown(dir: &Path) -> Result<(), String> {
     ok(next(&mut reader)?).map(|_| ())
 }
 
+pub enum Event<'a> {
+    /// The native input box took the turn.
+    Accepted,
+    Text(&'a str),
+}
+
 /// Sends one voice turn and streams the native reply text to `on_text`.
 pub fn send(
     dir: &Path,
@@ -114,11 +120,26 @@ pub fn send(
     text: &str,
     mut on_text: impl FnMut(&str),
 ) -> Result<String, String> {
+    send_events(dir, id, text, |event| {
+        if let Event::Text(text) = event {
+            on_text(text)
+        }
+    })
+}
+
+/// [`send`] with the acceptance event as well.
+pub fn send_events(
+    dir: &Path,
+    id: Option<&str>,
+    text: &str,
+    mut on_event: impl FnMut(Event),
+) -> Result<String, String> {
     let (_stream, mut reader) = request(dir, json!({"op": "send", "id": id, "text": text}))?;
     loop {
         let event = ok(next(&mut reader)?)?;
         match event.get("type").and_then(Value::as_str) {
-            Some("text") => on_text(event["text"].as_str().unwrap_or("")),
+            Some("session") => on_event(Event::Accepted),
+            Some("text") => on_event(Event::Text(event["text"].as_str().unwrap_or(""))),
             Some("done") => return Ok(event["reply"].as_str().unwrap_or("").to_string()),
             _ => {}
         }

@@ -56,6 +56,15 @@ jobs:
           subprocess.run(["target/debug/examples/cleanup_menu_qa", output], check=True, timeout=20)
           PYTHON
       - if: runner.os == 'macOS'
+        name: Test owned agent voice menu toggle
+        run: |
+          cargo build --locked --example agent_menu_qa
+          python3 - <<'PYTHON'
+          import os, subprocess
+          output = os.path.join(os.environ["RUNNER_TEMP"], "native-agent-menu-fixture")
+          subprocess.run(["target/debug/examples/agent_menu_qa", output], check=True, timeout=20)
+          PYTHON
+      - if: runner.os == 'macOS'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: native-vocabulary-fixtures

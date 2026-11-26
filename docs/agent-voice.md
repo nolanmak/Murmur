@@ -100,9 +100,23 @@ Acceptance:
 
 ### 3. Menu bar agent voice
 
-- Menu item "Agent voice: Off/On" (persisted). When on, a finished dictation is
-  sent to the most recently used live Murmur agent session instead of being
-  pasted, and the reply is spoken.
+- Menu item "Agent voice: Off/On" (persisted as `route_dictation` in
+  `agent-voice.json`). When on, a finished local dictation is sent to the most
+  recently used live Murmur agent session instead of being pasted, and the
+  reply is spoken. Remote review mode and RustDesk targets keep their route.
+  Agent voice needs only the microphone permission: nothing is inserted, so
+  no focused text field or Accessibility grant is required.
+
+## Using it
+
+```sh
+ln -sf /path/to/Murmur.app/Contents/MacOS/murmur ~/.local/bin/murmur
+cd ~/project && murmur agent run claude   # answer any startup prompts, Ctrl+] to detach
+# Menu bar: Agent voice: On, then hold Control and speak.
+murmur agent send --speak "summarise the failing tests"   # same thing from a shell
+claude mcp add murmur -- murmur mcp        # replaces the agentflow MCP server
+codex mcp add murmur -- murmur mcp
+```
 
 Acceptance:
 - With agent voice off, delivery is unchanged.

@@ -733,6 +733,14 @@ struct Shell {
     recording_remote_target: Option<RustDeskWindow>,
     remote_toggle: MenuItem,
     remote_profile: MenuItem,
+    /// #114: finished local dictations go to the active agent session.
+    agent_menu: super::macos_agent::AgentMenu,
+    recording_agent: bool,
+    agent_voicebox: Arc<crate::agent::speech::Voicebox>,
+    /// The reply being spoken; a new dictation stops it.
+    agent_playback: Arc<std::sync::Mutex<Option<crate::agent::speech::Playback>>>,
+    agent_stages: mpsc::Receiver<crate::agent::voice::Stage>,
+    agent_stage_sender: mpsc::Sender<crate::agent::voice::Stage>,
     /// Present only when launched from an app bundle; `cargo run` never installs.
     login: Option<(crate::login_item::LoginItem, std::path::PathBuf)>,
     login_toggle: MenuItem,
@@ -833,6 +841,8 @@ impl Shell {
             remote_toggle.set_text("Remote review mode: On");
         }
         let remote_review = MenuItem::with_id("remote_review", "Review for RustDesk…", true, None);
+        let agent_menu = super::macos_agent::AgentMenu::new(super::macos_agent::settings_path());
+        let (agent_stage_sender, agent_stages) = mpsc::channel();
         let remote_profile = MenuItem::with_id(
             "remote_profile",
             "Remote paste shortcut: macOS ⌘V",
@@ -894,6 +904,7 @@ impl Shell {
             &copy,
             &remote_toggle,
             &remote_profile,
+            &agent_menu.item,
             &remote_review,
             &restore,
             &local_restore,
@@ -1009,6 +1020,12 @@ impl Shell {
             recording_remote_target: None,
             remote_toggle,
             remote_profile,
+            agent_menu,
+            recording_agent: false,
+            agent_voicebox: Arc::new(crate::agent::speech::Voicebox::system()),
+            agent_playback: Default::default(),
+            agent_stages,
+            agent_stage_sender,
             login,
             login_toggle,
             login_retry,
@@ -1023,6 +1040,43 @@ impl Shell {
             prewarmed: (0, Instant::now()),
             prewarm_checked: Instant::now(),
         })
+    }
+    fn agent_route(&self) -> bool {
+        crate::agent::voice::destination(
+            self.agent_menu.on(),
+            self.remote_mode,
+            self.recording_remote_target.is_some(),
+        ) == crate::agent::voice::Destination::Agent
+    }
+    fn stop_agent_reply(&self) {
+        if let Some(playback) = self
+            .agent_playback
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
+            playback.stop();
+        }
+    }
+    /// Sends a finished dictation to the active agent session and speaks
+    /// the reply, off the main thread. The text stays in Copy Last Transcript.
+    fn deliver_to_agent(&mut self, text: String) {
+        let Ok(dir) = crate::agent::daemon::Config::dir() else {
+            self.show("Cannot locate Murmur's agent sessions");
+            return;
+        };
+        let playback = crate::agent::speech::Playback::default();
+        *self
+            .agent_playback
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(playback.clone());
+        let voicebox = self.agent_voicebox.clone();
+        let stages = self.agent_stage_sender.clone();
+        std::thread::spawn(move || {
+            crate::agent::voice::deliver(&dir, &text, &voicebox, &playback, |stage| {
+                let _ = stages.send(stage);
+            });
+        });
     }
     fn status(&self, message: &str) {
         eprintln!("status: {message}");
@@ -1302,7 +1356,13 @@ impl Shell {
         // Clear it before preflight so a failed attempt cannot leave a stale
         // "Transcript ready" action that appears to belong to this attempt.
         self.last.begin();
-        let route = if self.recording_remote && self.recording_remote_target.is_none() {
+        // Talking over a reply stops it (half-duplex, explicit interruption).
+        self.stop_agent_reply();
+        self.recording_agent = self.agent_route();
+        // Agent voice inserts nothing, so it needs only the microphone.
+        let route = if self.recording_agent
+            || (self.recording_remote && self.recording_remote_target.is_none())
+        {
             Route::RemoteReview
         } else {
             Route::Local
@@ -1312,7 +1372,11 @@ impl Shell {
         if !self.permitted(route) {
             return;
         }
-        let focus = match self.preflight_focus() {
+        let focus = match if self.recording_agent {
+            Ok(None)
+        } else {
+            self.preflight_focus()
+        } {
             Ok(focus) => focus,
             Err(reason) => {
                 self.cancel();
@@ -1504,7 +1568,13 @@ impl Shell {
         if !self.local_fixture || self.remote_mode || !self.core.start_manual() {
             return;
         }
-        let focus = match self.preflight_focus() {
+        self.stop_agent_reply();
+        self.recording_agent = self.agent_route();
+        let focus = match if self.recording_agent {
+            Ok(None)
+        } else {
+            self.preflight_focus()
+        } {
             Ok(focus) => focus,
             Err(reason) => {
                 self.cancel();
@@ -1794,6 +1864,14 @@ impl Shell {
                     self.show("Finish dictation before changing cleanup or privacy");
                     continue;
                 }
+                if let Some(result) = self.agent_menu.handle(event.id.as_ref()) {
+                    match result {
+                        Ok(message) if self.agent_menu.on() => self.show(message),
+                        Ok(_) => self.status(&self.ready()),
+                        Err(error) => self.show(&error),
+                    }
+                    continue;
+                }
                 if let Some(result) = self.cleanup_menu.handle(event.id.as_ref()) {
                     self.refresh_speech_menu();
                     self.warm_local_engine();
@@ -2019,6 +2097,11 @@ impl Shell {
             self.cancel();
             self.show("Transcription did not finish; no text inserted");
         }
+        while let Ok(stage) = self.agent_stages.try_recv() {
+            if let Some(message) = stage.message() {
+                self.show(&message);
+            }
+        }
         while let Ok(done) = self.result.try_recv() {
             if self.sleep_events.take() {
                 self.suspend_for_sleep();
@@ -2052,7 +2135,9 @@ impl Shell {
                         text.chars().count()
                     );
                     self.last.set(text.clone());
-                    if !self.recording_remote && text.contains('\n') {
+                    if self.recording_agent {
+                        self.deliver_to_agent(text);
+                    } else if !self.recording_remote && text.contains('\n') {
                         self.show("Formatted text ready · choose Copy Last Transcript");
                     } else if self.recording_remote_target.is_some() {
                         self.copy_automatic_remote(&text);
