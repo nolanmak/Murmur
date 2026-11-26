@@ -1,5 +1,7 @@
 //! #113: terminal input rules and Codex id discovery. Pure; no PTY.
-use murmur::agent::terminal::{Prompt, codex_thread_from_lsof, voice_bytes};
+use murmur::agent::terminal::{
+    Prompt, codex_thread_from_lsof, paste_echoed, inherited_session_marker, query_answers, voice_bytes,
+};
 
 #[test]
 fn typed_text_marks_a_draft_until_enter_or_clear() {
@@ -47,4 +49,43 @@ fn codex_thread_id_comes_from_the_writer_lock_it_holds() {
         codex_thread_from_lsof("n/x/thread-writer-locks/../../evil.lock\n"),
         None
     );
+}
+
+#[test]
+fn terminal_queries_get_answers_in_order() {
+    assert_eq!(
+        query_answers(b"x\x1b]11;?\x1b\\y\x1b[6n\x1b[c"),
+        b"\x1b]11;rgb:0000/0000/0000\x1b\\\x1b[1;1R\x1b[?1;2c".to_vec()
+    );
+    assert_eq!(
+        query_answers(b"\x1b]10;?\x07"),
+        b"\x1b]10;rgb:ffff/ffff/ffff\x07".to_vec()
+    );
+    assert!(query_answers(b"plain output \x1b[31mred").is_empty());
+}
+
+#[test]
+fn only_parent_session_markers_are_removed() {
+    for name in ["CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID"] {
+        assert!(inherited_session_marker(name), "{name}");
+    }
+    for name in ["CLAUDE_CODE_USE_BEDROCK", "ANTHROPIC_API_KEY", "PATH", "HOME"] {
+        assert!(!inherited_session_marker(name), "{name}");
+    }
+}
+
+#[test]
+fn a_paste_counts_as_echoed_only_when_the_input_box_shows_it() {
+    let text = "run the full test suite please";
+    // Redrawn with colors and a wrap in the middle.
+    assert!(paste_echoed(
+        b"\x1b[2K\x1b[38;5;12m> run the full te\r\n\x1b[0mst suite please",
+        text
+    ));
+    // Long pastes are collapsed by the native TUIs.
+    assert!(paste_echoed(b"> [Pasted text #1 +12 lines]", text));
+    assert!(paste_echoed(b"> [Pasted Content 1400 chars]", text));
+    // A dialog redraw without the text is not an echo.
+    assert!(!paste_echoed(b"Allow tool? 1. Yes 2. No", text));
+    assert!(!paste_echoed(b"", text));
 }

@@ -1,6 +1,8 @@
 //! Agent voice: Agentflow's features on Murmur's speech stack (#112–#114).
 pub mod cli;
+#[cfg(unix)]
 pub mod client;
+#[cfg(unix)]
 pub mod daemon;
 pub mod history;
 pub mod mcp;

@@ -17,7 +17,32 @@ else:
     lock = open(os.path.join(locks, sid + ".lock"), "w")  # held open, like Codex
     path = os.path.join(home, ".codex/sessions/2026/11/26", f"rollout-2026-11-26T00-00-00-{sid}.jsonl")
 os.makedirs(os.path.dirname(path), exist_ok=True)
-print(f"fake {kind} ready", flush=True)
+if os.path.basename(cwd) == "queries":
+    # Like Codex's TUI: query the terminal and wait for the answers.
+    import select, termios, tty
+    saved = termios.tcgetattr(0)
+    tty.setraw(0)
+    os.write(1, b"\x1b]11;?\x1b\\\x1b[6n\x1b[c")
+    got, deadline = b"", __import__("time").time() + 5
+    while not (b"]11;rgb:" in got and b"R" in got and b"[?" in got) and __import__("time").time() < deadline:
+        if select.select([0], [], [], 0.1)[0]:
+            got += os.read(0, 256)
+    termios.tcsetattr(0, termios.TCSADRAIN, saved)
+    if b"]11;rgb:" not in got or b"R" not in got:
+        print("fake agent got no terminal answers", flush=True)
+        sys.exit(3)
+inherited = sorted(k for k in os.environ if k in ("CLAUDECODE", "CLAUDE_PID", "CODEX_THREAD_ID") or k.startswith("CLAUDE_CODE_"))
+if os.path.basename(cwd) == "dialog":
+    # Like a native permission prompt: raw, no echo, Enter approves.
+    import tty
+    tty.setraw(0)
+    print("Allow tool? 1. Yes  2. No\r", flush=True)
+    while True:
+        b = os.read(0, 1024)
+        if b"\r" in b:
+            open(os.path.join(home, "APPROVED"), "w").close()
+            print("APPROVED\r", flush=True)
+print(f"fake {kind} ready inherited={','.join(inherited) or 'none'}", flush=True)
 for line in sys.stdin:
     text = line.replace("\x1b[200~", "").replace("\x1b[201~", "").strip()
     if not text:

@@ -65,6 +65,22 @@ fn wait_for(attach: &mut client::Attachment, needle: &str) -> String {
 }
 
 #[test]
+fn an_overlong_socket_path_is_refused_clearly() {
+    let root = tempfile::tempdir().unwrap();
+    let error = daemon::start(Config {
+        dir: root.path().join("x".repeat(120)),
+        home: root.path().into(),
+        codex: fixture(),
+        claude: fixture(),
+        poll: Duration::from_millis(50),
+        deadline: Duration::from_secs(1),
+    })
+    .err()
+    .unwrap();
+    assert!(error.contains("too long"), "{error}");
+}
+
+#[test]
 fn socket_directory_and_socket_are_private() {
     use std::os::unix::fs::PermissionsExt;
     let env = start();
@@ -80,7 +96,7 @@ fn claude_session_survives_detach_and_answers_a_voice_turn() {
     let env = start();
     let id = client::open(&env.dir, Agent::Claude, None, &env.project, 100, 30).unwrap();
     assert!(murmur::agent::history::is_uuid(&id), "{id}");
-    let mut attach = client::attach(&env.dir, &id, 100, 30).unwrap();
+    let mut attach = client::attach(&env.dir, &id, 100, 30, false).unwrap();
     wait_for(&mut attach, "fake claude ready");
     drop(attach); // detach
     std::thread::sleep(Duration::from_millis(200));
@@ -88,7 +104,7 @@ fn claude_session_survives_detach_and_answers_a_voice_turn() {
     assert_eq!(sessions.len(), 1);
     assert!(sessions[0].live && sessions[0].active);
     // Reattaching replays recent output.
-    let mut attach = client::attach(&env.dir, &id, 100, 30).unwrap();
+    let mut attach = client::attach(&env.dir, &id, 100, 30, false).unwrap();
     wait_for(&mut attach, "fake claude ready");
     drop(attach);
 
@@ -106,7 +122,7 @@ fn claude_session_survives_detach_and_answers_a_voice_turn() {
 fn pending_typed_text_and_control_characters_block_voice() {
     let env = start();
     let id = client::open(&env.dir, Agent::Claude, None, &env.project, 100, 30).unwrap();
-    let mut attach = client::attach(&env.dir, &id, 100, 30).unwrap();
+    let mut attach = client::attach(&env.dir, &id, 100, 30, false).unwrap();
     wait_for(&mut attach, "fake claude ready");
     attach.input(b"half typed").unwrap();
     std::thread::sleep(Duration::from_millis(200));
@@ -144,10 +160,45 @@ fn codex_provisional_id_is_replaced_by_its_thread_id() {
 }
 
 #[test]
+fn terminal_queries_are_answered_when_no_real_terminal_is_attached() {
+    let env = start();
+    let project = env.project.join("queries");
+    std::fs::create_dir_all(&project).unwrap();
+    // Attached through a pipe-like client (not a terminal), and detached.
+    for attached in [true, false] {
+        let id = client::open(&env.dir, Agent::Claude, None, &project, 100, 30).unwrap();
+        let mut attach = attached.then(|| client::attach(&env.dir, &id, 100, 30, false).unwrap());
+        if let Some(attach) = attach.as_mut() {
+            wait_for(attach, "fake claude ready");
+        } else {
+            std::thread::sleep(Duration::from_millis(1500));
+            let mut view = client::attach(&env.dir, &id, 100, 30, false).unwrap();
+            wait_for(&mut view, "fake claude ready");
+        }
+    }
+    env.daemon.shutdown();
+}
+
+#[test]
+fn voice_never_presses_enter_on_a_native_dialog() {
+    let env = start();
+    let project = env.project.join("dialog");
+    std::fs::create_dir_all(&project).unwrap();
+    let id = client::open(&env.dir, Agent::Claude, None, &project, 100, 30).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    let error = client::send(&env.dir, Some(&id), "yes do it", |_| {}).unwrap_err();
+    assert!(error.contains("prompt"), "{error}");
+    std::thread::sleep(Duration::from_millis(500));
+    let home = env._root.path().join("home");
+    assert!(!home.join("APPROVED").exists(), "voice approved a dialog");
+    env.daemon.shutdown();
+}
+
+#[test]
 fn an_exited_session_fails_explicitly_and_unknown_ids_are_refused() {
     let env = start();
     let id = client::open(&env.dir, Agent::Claude, None, &env.project, 100, 30).unwrap();
-    let mut attach = client::attach(&env.dir, &id, 100, 30).unwrap();
+    let mut attach = client::attach(&env.dir, &id, 100, 30, false).unwrap();
     wait_for(&mut attach, "fake claude ready");
     attach.input(b"exit\r").unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
