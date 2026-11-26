@@ -4,7 +4,8 @@ fn main() {
     let result = match command.as_str() {
         "--help" | "help" => {
             println!(
-                "Murmur — macOS hold-Control dictation\n\nrun     Launch the menu-bar app (use the .app bundle)\ndoctor  Report provider configuration without printing secrets\nspeech  Select parakeet, whisper [URL], local [URL], streaming, deepgram or fallback [parakeet|whisper] [URL];\n        speech install-parakeet [--parakeet-from DIR] [--vad-from DIR] installs the Parakeet model;\n        speech install-streaming [--from DIR] installs the streaming (Nemotron 3.5) model\nlanguage CODE  Select an explicit transcription language (default en)\nvocabulary  Import/export/validate a versioned vocabulary profile\ncleanup  Configure a provider, then explicitly turn text cleanup on/off\nprivacy  Choose offline-all (local speech, no cleanup) or configured providers\n\nHold Control to dictate; release to insert; Esc cancels.\nRun scripts/build-app.sh and launch the resulting .app for capture."
+                "Murmur — macOS hold-Control dictation\n\nrun     Launch the menu-bar app (use the .app bundle)\ndoctor  Report provider configuration without printing secrets\nspeech  Select parakeet, whisper [URL], local [URL], streaming, deepgram or fallback [parakeet|whisper] [URL];\n        speech install-parakeet [--parakeet-from DIR] [--vad-from DIR] installs the Parakeet model;\n        speech install-streaming [--from DIR] installs the streaming (Nemotron 3.5) model\nlanguage CODE  Select an explicit transcription language (default en)\nvocabulary  Import/export/validate a versioned vocabulary profile\ncleanup  Configure a provider, then explicitly turn text cleanup on/off\nprivacy  Choose offline-all (local speech, no cleanup) or configured providers\n{}\n\nHold Control to dictate; release to insert; Esc cancels.\nRun scripts/build-app.sh and launch the resulting .app for capture.",
+                murmur::agent::cli::USAGE
             );
             Ok(())
         }
@@ -14,6 +15,10 @@ fn main() {
         "vocabulary" => configure_vocabulary(),
         "language" => configure_language(),
         "doctor" => doctor(),
+        "speak" | "mcp" | "agent" => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            murmur::agent::cli::main(&command, &args)
+        }
         #[cfg(target_os = "macos")]
         "review-preview" => murmur::platform::macos::preview_remote_review(),
         "run" => {
