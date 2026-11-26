@@ -95,3 +95,25 @@ fn jsonl_stream_handles_partial_lines_across_reads() {
         vec![Event::Started, Event::Text("Yo.".into()), Event::Done]
     );
 }
+
+#[test]
+fn interrupted_turns_end_the_watch() {
+    let mut w = Watcher::new(Agent::Codex, "go");
+    let events = feed(
+        &mut w,
+        &[
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"go"}]}}),
+            json!({"type":"event_msg","payload":{"type":"turn_aborted","reason":"interrupted"}}),
+        ],
+    );
+    assert_eq!(events.last(), Some(&Event::Done));
+    let mut w = Watcher::new(Agent::Claude, "go");
+    let events = feed(
+        &mut w,
+        &[
+            json!({"type":"user","message":{"content":"go"}}),
+            json!({"type":"user","message":{"content":[{"type":"text","text":"[Request interrupted by user]"}]}}),
+        ],
+    );
+    assert_eq!(events.last(), Some(&Event::Done));
+}

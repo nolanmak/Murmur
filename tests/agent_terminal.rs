@@ -1,7 +1,6 @@
 //! #113: terminal input rules and Codex id discovery. Pure; no PTY.
 use murmur::agent::terminal::{
-    Prompt, codex_thread_from_lsof, inherited_session_marker, paste_echoed, query_answers,
-    voice_bytes,
+    Prompt, codex_thread_from_lsof, inherited_session_marker, query_answers, voice_bytes,
 };
 
 #[test]
@@ -18,8 +17,8 @@ fn typed_text_marks_a_draft_until_enter_or_clear() {
     p.typed(b"y");
     p.typed(&[0x03]);
     assert!(!p.draft());
-    // Arrow keys and other escape sequences are not drafts.
-    p.typed(b"\x1b[A");
+    // Cursor movement and other escape sequences are not drafts.
+    p.typed(b"\x1b[C");
     assert!(!p.draft());
 }
 
@@ -85,18 +84,97 @@ fn only_parent_session_markers_are_removed() {
     }
 }
 
+mod screen {
+    use murmur::agent::terminal::Screen;
+
+    fn screen(bytes: &[u8]) -> Screen {
+        let mut s = Screen::new(10, 60);
+        s.process(bytes);
+        s
+    }
+
+    #[test]
+    fn a_new_input_row_with_the_text_counts_as_echo() {
+        let mut s = screen(b"Claude Code\r\n\r\n> ");
+        let before = s.rows();
+        s.process(b"yes please");
+        assert!(Screen::newly_shows(&before, &s.rows(), "yes please"));
+    }
+
+    #[test]
+    fn a_dialog_repaint_that_already_showed_the_word_is_not_an_echo() {
+        // An approval dialog offering "1. Yes", repainted after the paste.
+        let dialog = b"\x1b[H\x1b[2JAllow Bash?\r\n> 1. Yes\r\n  2. No\r\n";
+        let mut s = screen(dialog);
+        let before = s.rows();
+        s.process(dialog);
+        assert!(!Screen::newly_shows(&before, &s.rows(), "yes"));
+        assert!(!Screen::newly_shows(&before, &s.rows(), "1"));
+    }
+
+    #[test]
+    fn text_already_in_the_transcript_does_not_count_again() {
+        let mut s = screen(b"> continue\r\nWorking...\r\n> ");
+        let before = s.rows();
+        s.process(b"\x1b[2J\x1b[H> continue\r\nWorking...\r\n> ");
+        assert!(!Screen::newly_shows(&before, &s.rows(), "continue"));
+        s.process(b"continue");
+        assert!(Screen::newly_shows(&before, &s.rows(), "continue"));
+    }
+
+    #[test]
+    fn a_collapsed_paste_placeholder_counts_only_when_new() {
+        let mut s = screen(b"> ");
+        let before = s.rows();
+        s.process(b"[Pasted text #1 +12 lines]");
+        assert!(Screen::newly_shows(
+            &before,
+            &s.rows(),
+            &"long words ".repeat(200)
+        ));
+        let before = s.rows();
+        assert!(!Screen::newly_shows(
+            &before,
+            &s.rows(),
+            &"long words ".repeat(200)
+        ));
+    }
+}
+
 #[test]
-fn a_paste_counts_as_echoed_only_when_the_input_box_shows_it() {
-    let text = "run the full test suite please";
-    // Redrawn with colors and a wrap in the middle.
-    assert!(paste_echoed(
-        b"\x1b[2K\x1b[38;5;12m> run the full te\r\n\x1b[0mst suite please",
-        text
-    ));
-    // Long pastes are collapsed by the native TUIs.
-    assert!(paste_echoed(b"> [Pasted text #1 +12 lines]", text));
-    assert!(paste_echoed(b"> [Pasted Content 1400 chars]", text));
-    // A dialog redraw without the text is not an echo.
-    assert!(!paste_echoed(b"Allow tool? 1. Yes 2. No", text));
-    assert!(!paste_echoed(b"", text));
+fn pastes_history_recall_and_soft_newlines_are_drafts() {
+    let mut p = Prompt::default();
+    p.typed(b"\x1b[200~pasted\x1b[201~");
+    assert!(p.draft(), "terminal paste");
+    p.typed(&[0x15]);
+    p.typed(b"\x1b[A");
+    assert!(p.draft(), "history recall");
+    p.typed(&[0x03]);
+    p.typed(b"\x1bOA");
+    assert!(p.draft(), "history recall (application mode)");
+    p.typed(&[0x15]);
+    p.typed(b"line one\\");
+    p.typed(b"\r");
+    assert!(p.draft(), "backslash-Enter inserts a newline");
+    p.typed(b"\x1b\r");
+    assert!(p.draft(), "Option+Enter inserts a newline");
+    p.typed(b"\r");
+    assert!(!p.draft());
+    p.typed(&[0x7f]);
+    assert!(!p.draft(), "Backspace on an empty prompt");
+    p.mark_draft();
+    assert!(p.draft());
+}
+
+#[test]
+fn attach_replay_drops_old_terminal_queries_and_a_cut_first_line() {
+    use murmur::agent::terminal::replay;
+    assert_eq!(
+        replay(b"hello\x1b[6n world\x1b]11;?\x1b\\!\x1b[c", false),
+        b"hello world!".to_vec()
+    );
+    assert_eq!(
+        replay(b"[31mcut\r\nwhole line", true),
+        b"whole line".to_vec()
+    );
 }

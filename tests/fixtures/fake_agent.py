@@ -17,6 +17,17 @@ else:
     lock = open(os.path.join(locks, sid + ".lock"), "w")  # held open, like Codex
     path = os.path.join(home, ".codex/sessions/2026/11/26", f"rollout-2026-11-26T00-00-00-{sid}.jsonl")
 os.makedirs(os.path.dirname(path), exist_ok=True)
+
+
+def record_live(sid):
+    if kind == "claude":
+        live = os.path.join(home, ".claude/sessions")
+        os.makedirs(live, exist_ok=True)
+        with open(os.path.join(live, f"{os.getpid()}.json"), "w") as f:
+            json.dump({"pid": os.getpid(), "sessionId": sid, "cwd": cwd}, f)
+
+
+record_live(sid)
 if os.path.basename(cwd) == "queries":
     # Like Codex's TUI: query the terminal and wait for the answers.
     import select, termios, tty
@@ -33,15 +44,19 @@ if os.path.basename(cwd) == "queries":
         sys.exit(3)
 inherited = sorted(k for k in os.environ if k in ("CLAUDECODE", "CLAUDE_PID", "CODEX_THREAD_ID") or k.startswith("CLAUDE_CODE_"))
 if os.path.basename(cwd) == "dialog":
-    # Like a native permission prompt: raw, no echo, Enter approves.
+    # Like a native approval prompt: raw, no echo, repaints on every key
+    # (as Ink does), and Enter approves.
     import tty
     tty.setraw(0)
-    print("Allow tool? 1. Yes  2. No\r", flush=True)
+    dialog = "\x1b[H\x1b[2JAllow tool?\r\n> 1. Yes\r\n  2. No\r\n"
+    os.write(1, dialog.encode())
     while True:
         b = os.read(0, 1024)
         if b"\r" in b:
             open(os.path.join(home, "APPROVED"), "w").close()
-            print("APPROVED\r", flush=True)
+            os.write(1, b"APPROVED\r\n")
+        else:
+            os.write(1, dialog.encode())
 print(f"fake {kind} ready inherited={','.join(inherited) or 'none'}", flush=True)
 for line in sys.stdin:
     text = line.replace("\x1b[200~", "").replace("\x1b[201~", "").strip()
@@ -49,6 +64,14 @@ for line in sys.stdin:
         continue
     if text == "exit":
         sys.exit(0)
+    if text == "/clear" and kind == "claude":
+        sid = str(uuid.uuid4())
+        path = os.path.join(os.path.dirname(path), sid + ".jsonl")
+        record_live(sid)
+        print("cleared", flush=True)
+        continue
+    if os.path.basename(cwd) == "silent" and not text.startswith("answer"):
+        continue  # still working on it
     with open(path, "a") as f:
         if kind == "claude":
             records = [

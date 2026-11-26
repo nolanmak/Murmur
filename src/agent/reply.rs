@@ -63,8 +63,10 @@ impl Watcher {
         let finished = match self.agent {
             Agent::Codex => {
                 record.get("type").and_then(Value::as_str) == Some("event_msg")
-                    && record.pointer("/payload/type").and_then(Value::as_str)
-                        == Some("task_complete")
+                    && matches!(
+                        record.pointer("/payload/type").and_then(Value::as_str),
+                        Some("task_complete" | "turn_aborted")
+                    )
             }
             Agent::Claude => {
                 let kind = record.get("type").and_then(Value::as_str);
@@ -77,6 +79,10 @@ impl Watcher {
                     ))
                     || (kind == Some("system")
                         && record.get("subtype").and_then(Value::as_str) == Some("turn_duration"))
+                    // Esc interrupt: Claude records it as a user message.
+                    || (kind == Some("user")
+                        && history::message(record, Agent::Claude)
+                            .is_some_and(|m| m.text.starts_with("[Request interrupted by user")))
             }
         };
         if finished {
