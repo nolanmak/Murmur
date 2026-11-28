@@ -257,6 +257,36 @@ fn only_one_daemon_starts_for_a_directory() {
 }
 
 #[test]
+fn use_selects_which_session_dictation_goes_to() {
+    let env = start();
+    let first = client::open(&env.dir, Agent::Claude, None, &env.project, 100, 30).unwrap();
+    let second = client::open(&env.dir, Agent::Claude, None, &env.project, 100, 30).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    let active = |dir: &Path| {
+        client::list(dir)
+            .unwrap()
+            .into_iter()
+            .find(|s| s.active)
+            .map(|s| s.id)
+    };
+    assert_eq!(active(&env.dir).as_deref(), Some(second.as_str()));
+    client::activate(&env.dir, &first).unwrap();
+    assert_eq!(active(&env.dir).as_deref(), Some(first.as_str()));
+    // An untargeted voice turn goes to the chosen session.
+    client::send(&env.dir, None, "to the first", |_| {}).unwrap();
+    let home = env._root.path().join("home");
+    let first_file =
+        murmur::agent::history::claude_file(&home, &env.project.canonicalize().unwrap(), &first);
+    assert!(
+        std::fs::read_to_string(first_file)
+            .unwrap()
+            .contains("to the first")
+    );
+    assert!(client::activate(&env.dir, "3f0c6f3e-9a3b-4c55-8d1e-0b6a3c2d1e0f").is_err());
+    env.daemon.shutdown();
+}
+
+#[test]
 fn an_exited_session_fails_explicitly_and_unknown_ids_are_refused() {
     let env = start();
     let id = client::open(&env.dir, Agent::Claude, None, &env.project, 100, 30).unwrap();

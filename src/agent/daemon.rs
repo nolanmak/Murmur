@@ -415,6 +415,18 @@ impl Daemon {
                 .open(&request)
                 .map(|id| json!({"type": "ok", "id": id})),
             Some("list") => Ok(json!({"type": "ok", "sessions": self.list()})),
+            Some("activate") => request
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "Provide a session id".to_string())
+                .and_then(|id| self.find(Some(id)))
+                .and_then(|session| {
+                    if session.exited.load(Ordering::SeqCst) {
+                        return Err("This native session has exited".into());
+                    }
+                    self.activate(&session);
+                    Ok(json!({"type": "ok", "id": session.id()}))
+                }),
             Some("attach") => return self.attach(&request, stream, reader),
             Some("send") => return self.send(&request, stream),
             Some("shutdown") => {

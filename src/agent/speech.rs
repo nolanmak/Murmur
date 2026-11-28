@@ -37,8 +37,9 @@ pub struct Settings {
     pub voice: Voice,
     pub model: String,
     pub speed: f32,
-    /// #114: send finished dictations to the active agent instead of pasting.
-    pub route_dictation: bool,
+    /// Holding Right Option records for the active agent session. Control
+    /// is always plain dictation. On by default; `murmur agent key off`.
+    pub agent_key: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -47,7 +48,7 @@ impl Default for Settings {
             voice: Voice::Deepgram,
             model: "aura-2-helena-en".into(),
             speed: 1.0,
-            route_dictation: false,
+            agent_key: true,
         }
     }
 }

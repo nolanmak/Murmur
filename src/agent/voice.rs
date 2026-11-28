@@ -1,27 +1,11 @@
-//! Dictation routed to the active agent with a spoken reply (#114). The
-//! menu bar calls [`deliver`] off the main thread and shows each [`Stage`].
+//! Talking to the active agent with a spoken reply (#114). The menu bar
+//! records on the agent key (Right Option), calls [`deliver`] off the main
+//! thread and shows each [`Stage`]. Control dictation never comes here.
 use super::{
     client,
     speech::{Player, Settings, Voicebox},
 };
 use std::path::Path;
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum Destination {
-    /// Send to the active Murmur agent session and speak its reply.
-    Agent,
-    /// Murmur's existing delivery (focused field or remote review).
-    Insert,
-}
-
-/// Agent voice takes local dictation only; remote review keeps its route.
-pub fn destination(agent_voice: bool, remote_mode: bool, remote_target: bool) -> Destination {
-    if agent_voice && !remote_mode && !remote_target {
-        Destination::Agent
-    } else {
-        Destination::Insert
-    }
-}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Stage {
@@ -64,6 +48,8 @@ pub fn deliver(
     });
     let reply = match reply {
         Ok(reply) => reply,
+        // A newer agent turn took over; it reports for itself.
+        Err(error) if error.starts_with("Superseded") => return report(Stage::Stopped),
         Err(error) => return report(Stage::Failed(error)),
     };
     let reply: String = reply.trim().chars().take(super::speech::MAX_TEXT).collect();
@@ -78,12 +64,29 @@ pub fn deliver(
     }
 }
 
-pub fn routed(path: &Path) -> bool {
-    Settings::load(path).is_ok_and(|s| s.route_dictation)
+/// `murmur agent key on|off|status`. The running menu bar picks the change
+/// up within a second.
+pub fn key_command(args: &[String], path: &Path) -> Result<String, String> {
+    match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+        ["on"] => set_key_enabled(path, true)?,
+        ["off"] => set_key_enabled(path, false)?,
+        ["status"] | [] => {}
+        _ => return Err(KEY_USAGE.into()),
+    }
+    Ok(if key_enabled(path) {
+        "Agent key: on · hold Right Option to talk to the active Murmur agent session. Control stays dictation.".into()
+    } else {
+        "Agent key: off · Control stays dictation.".into()
+    })
+}
+pub const KEY_USAGE: &str = "Usage: murmur agent key on | off | status";
+
+pub fn key_enabled(path: &Path) -> bool {
+    Settings::load(path).is_ok_and(|s| s.agent_key)
 }
 
-pub fn set_routed(path: &Path, on: bool) -> Result<(), String> {
+pub fn set_key_enabled(path: &Path, on: bool) -> Result<(), String> {
     let mut settings = Settings::load(path)?;
-    settings.route_dictation = on;
+    settings.agent_key = on;
     settings.save(path)
 }
