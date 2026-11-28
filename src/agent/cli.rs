@@ -2,8 +2,8 @@
 use super::{mcp, speech};
 use std::io::Read;
 
-pub const USAGE: &str = "speak   [--speed 0.75..2] [--text TEXT] (or pipe text) reads text aloud\nmcp     Serve speak, current_time and session_history to Codex/Claude over stdio\nagent   run codex|claude [--resume ID]   native session owned by Murmur; Ctrl+] detaches\n        list | send [--id ID] [--speak] TEXT | stop\n        voice status|system|deepgram [MODEL]|speed N";
-const AGENT_USAGE: &str = "Usage: murmur agent run codex|claude [--resume ID] | list | send [--id ID] [--speak] TEXT | stop | voice …";
+pub const USAGE: &str = "speak   [--speed 0.75..2] [--text TEXT] (or pipe text) reads text aloud\nmcp     Serve speak, current_time and session_history to Codex/Claude over stdio\nagent   run codex|claude [--resume ID]   native session owned by Murmur; Ctrl+] detaches\n        list | use ID | send [--id ID] [--speak] TEXT | stop\n        key on|off|status   hold Right Option to talk to the active session (Control stays dictation)\n        voice status|system|deepgram [MODEL]|speed N";
+const AGENT_USAGE: &str = "Usage: murmur agent run codex|claude [--resume ID] | list | use ID | send [--id ID] [--speak] TEXT | stop | key on|off|status | voice …";
 
 pub fn main(command: &str, args: &[String]) -> Result<(), String> {
     match command {
@@ -51,6 +51,21 @@ fn agent(args: &[String]) -> Result<(), String> {
         }
         #[cfg(unix)]
         Some("send") => send(&args[1..]),
+        #[cfg(unix)]
+        Some("key") => {
+            println!(
+                "{}",
+                super::voice::key_command(&args[1..], &speech::Settings::path()?)?
+            );
+            Ok(())
+        }
+        #[cfg(unix)]
+        Some("use") => {
+            let id = args.get(1).ok_or(AGENT_USAGE)?;
+            super::client::activate(&super::daemon::Config::dir()?, id)?;
+            println!("Dictation and untargeted sends now go to {id}.");
+            Ok(())
+        }
         #[cfg(unix)]
         Some("stop") => {
             super::client::shutdown(&super::daemon::Config::dir()?)?;

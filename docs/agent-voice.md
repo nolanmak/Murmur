@@ -18,7 +18,7 @@ Keychain credentials and Offline-all policy do that work instead.
 | `agentflow speak` | `murmur speak` |
 | `terminal.ts` PTY ownership + `agentflow run` | `murmur agentd` + `murmur agent run codex\|claude` |
 | Reply observation from native JSONL | `agent::reply` watcher |
-| Dashboard voice button | Menu bar "Agent voice" route |
+| Dashboard voice button | Agent key: hold Right Option |
 
 ## Boundaries kept from Agentflow
 
@@ -103,21 +103,37 @@ Acceptance:
   by user]") end a watch, and Murmur follows `/clear` and `/new` to the
   session's new history file.
 
-### 3. Menu bar agent voice
+### 3. Agent key
 
-- Menu item "Agent voice: Off/On" (persisted as `route_dictation` in
-  `agent-voice.json`). When on, a finished local dictation is sent to the most
-  recently used live Murmur agent session instead of being pasted, and the
-  reply is spoken. Remote review mode and RustDesk targets keep their route.
-  Agent voice needs only the microphone permission: nothing is inserted, so
-  no focused text field or Accessibility grant is required.
+- **Control is always Murmur's dictation key** and types into the focused
+  field exactly as before. Agent voice never redirects it.
+- **Holding Right Option** (350 ms, like Control) records for the agent: the
+  transcript goes to the active Murmur agent session and the reply is spoken.
+  Quick taps and Option+key shortcuts (accents, symbols) pass through.
+- The key is on by default. Turn it off or on with `murmur agent key off|on`
+  or the menu item "Agent key (hold Right Option)". The running app picks a
+  CLI change up within a second.
+- The active session is the one most recently started, attached or sent to;
+  choose another with `murmur agent use ID` (`murmur agent list` marks it).
+- Agent recordings need only the microphone: nothing is inserted, so no
+  focused text field or Accessibility grant is required.
+
+Acceptance:
+- With the agent key on or off, Control dictation is unchanged.
+- With no live session, nothing is pasted or sent; the status says how to
+  start one (`murmur agent run codex`), and the text stays available through
+  Copy Last Transcript.
+- Starting a new recording stops any reply still being spoken; a turn that a
+  newer one supersedes ends silently.
+- Status shows sending, waiting and replied/failed stages without transcript
+  or reply text.
 
 ## Using it
 
 ```sh
 ln -sf /path/to/Murmur.app/Contents/MacOS/murmur ~/.local/bin/murmur
 cd ~/project && murmur agent run claude   # answer any startup prompts, Ctrl+] to detach
-# Menu bar: Agent voice: On, then hold Control and speak.
+# Hold Right Option and speak (Control stays normal dictation).
 murmur agent send --speak "summarise the failing tests"   # same thing from a shell
 claude mcp add murmur -- murmur mcp        # replaces the agentflow MCP server
 codex mcp add murmur -- murmur mcp

@@ -5,6 +5,7 @@ pub mod client;
 #[cfg(unix)]
 pub mod daemon;
 pub mod history;
+pub mod key;
 pub mod mcp;
 pub mod reply;
 pub mod speech;

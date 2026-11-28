@@ -1,4 +1,4 @@
-//! Owned AppKit menu fixture for the Agent voice toggle (#114). No Shell,
+//! Owned AppKit menu fixture for the Agent key toggle (#114). No Shell,
 //! microphone, credential, agent CLI or audio.
 #[cfg(target_os = "macos")]
 fn main() -> Result<(), String> {
@@ -19,30 +19,48 @@ fn main() -> Result<(), String> {
     app.setActivationPolicy(objc2_app_kit::NSApplicationActivationPolicy::Prohibited);
     let path = root.join("agent-voice.json");
     let mut menu = AgentMenu::new(Ok(path.clone()));
-    if menu.on() || menu.item.text() != "Agent voice: Off" || !menu.item.is_enabled() {
-        return Err("Initial agent voice state wrong".into());
+    // On by default; Control dictation never depends on it.
+    if !menu.on()
+        || menu.item.text() != "Agent key (hold Right Option): On"
+        || !menu.item.is_enabled()
+    {
+        return Err("Initial agent key state wrong".into());
     }
     if menu.handle("cleanup:toggle").is_some() {
         return Err("Agent menu claimed another menu's event".into());
     }
     menu.handle(TOGGLE).ok_or("Missing toggle route")??;
-    if !menu.on() || !voice::routed(&path) || !menu.item.text().starts_with("Agent voice: On") {
-        return Err("Agent voice toggle failed".into());
+    if menu.on()
+        || voice::key_enabled(&path)
+        || menu.item.text() != "Agent key (hold Right Option): Off"
+    {
+        return Err("Agent key off failed".into());
     }
-    // The saved route survives a restart and keeps the voice choice.
+    // The saved choice survives a restart and keeps the voice choice.
     let reopened = AgentMenu::new(Ok(path.clone()));
-    if !reopened.on()
+    if reopened.on()
         || Settings::load(&path)?
             != (Settings {
-                route_dictation: true,
+                agent_key: false,
                 ..Default::default()
             })
     {
-        return Err("Agent voice route was not persisted".into());
+        return Err("Agent key choice was not persisted".into());
     }
     menu.handle(TOGGLE).ok_or("Missing toggle route")??;
-    if menu.on() || voice::routed(&path) || menu.item.text() != "Agent voice: Off" {
-        return Err("Agent voice off failed".into());
+    if !menu.on() || !voice::key_enabled(&path) {
+        return Err("Agent key on failed".into());
+    }
+    // `murmur agent key off|on` while the app runs: the menu follows the file.
+    voice::set_key_enabled(&path, false)?;
+    menu.refresh();
+    if menu.on() || menu.item.text() != "Agent key (hold Right Option): Off" {
+        return Err("CLI key off was not picked up".into());
+    }
+    voice::set_key_enabled(&path, true)?;
+    menu.refresh();
+    if !menu.on() {
+        return Err("CLI key on was not picked up".into());
     }
     // Unusable settings: the item is disabled and a toggle reports the error.
     let mut broken = AgentMenu::new(Err("Cannot locate home directory".into()));
@@ -54,7 +72,7 @@ fn main() -> Result<(), String> {
         b"{\"agent_menu\":\"passed\",\"credentials_read\":false,\"capture\":false,\"agents_started\":false}",
     )
     .map_err(|_| "Cannot save fixture result")?;
-    println!("Owned agent voice menu actions passed");
+    println!("Owned agent key menu actions passed");
     Ok(())
 }
 #[cfg(not(target_os = "macos"))]

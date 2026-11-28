@@ -4,23 +4,13 @@
 use murmur::agent::{
     Agent, client, daemon,
     speech::{Player, Settings, Voice, Voicebox},
-    voice::{self, Destination, Stage},
+    voice::{self, Stage},
 };
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
 };
-
-#[test]
-fn agent_voice_takes_local_dictation_but_never_remote_review() {
-    use Destination::*;
-    assert_eq!(voice::destination(false, false, false), Insert);
-    assert_eq!(voice::destination(true, false, false), Agent);
-    // Remote review mode and a detected RustDesk target keep their routes.
-    assert_eq!(voice::destination(true, true, false), Insert);
-    assert_eq!(voice::destination(true, false, true), Insert);
-}
 
 #[test]
 fn stage_messages_never_contain_transcript_or_reply_text() {
@@ -35,6 +25,37 @@ fn stage_messages_never_contain_transcript_or_reply_text() {
         assert!(!message.contains("secret words"), "{message}");
     }
     assert_eq!(Stage::Stopped.message(), None);
+}
+
+#[test]
+fn a_superseded_turn_is_silent_not_an_error() {
+    let (_root, dir, project, daemon) = setup();
+    let project = project.join("silent");
+    std::fs::create_dir_all(&project).unwrap();
+    client::open(&dir, Agent::Claude, None, &project, 100, 30).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    let first_dir = dir.clone();
+    let first = std::thread::spawn(move || {
+        let mut stages = Vec::new();
+        voice::deliver(
+            &first_dir,
+            "think about it",
+            &offline_voice(),
+            &FakePlayer::default(),
+            |s| stages.push(s),
+        );
+        stages
+    });
+    std::thread::sleep(Duration::from_millis(1000));
+    voice::deliver(
+        &dir,
+        "answer now",
+        &offline_voice(),
+        &FakePlayer::default(),
+        |_| {},
+    );
+    assert_eq!(first.join().unwrap().last(), Some(&Stage::Stopped));
+    daemon.shutdown();
 }
 
 #[derive(Default, Clone)]
@@ -141,17 +162,23 @@ fn without_a_session_nothing_is_sent_or_spoken_and_the_fix_is_named() {
 }
 
 #[test]
-fn route_setting_persists_in_agent_voice_settings() {
+fn the_agent_key_is_on_by_default_and_persists() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("agent-voice.json");
-    assert!(!voice::routed(&path));
-    voice::set_routed(&path, true).unwrap();
-    assert!(voice::routed(&path));
+    assert!(voice::key_enabled(&path));
+    voice::set_key_enabled(&path, false).unwrap();
+    assert!(!voice::key_enabled(&path));
+    voice::set_key_enabled(&path, true).unwrap();
+    assert!(voice::key_enabled(&path));
     assert_eq!(
         Settings::load(&path).unwrap().voice,
         Voice::Deepgram,
-        "toggling the route keeps the voice choice"
+        "toggling the key keeps the voice choice"
     );
-    voice::set_routed(&path, false).unwrap();
-    assert!(!voice::routed(&path));
+    // Files written by the dictation-route build load fine: the old route is
+    // ignored (Control is never redirected) and the key keeps its default.
+    std::fs::write(&path, br#"{"version":1,"route_dictation":true}"#).unwrap();
+    assert!(voice::key_enabled(&path));
+    std::fs::write(&path, br#"{"version":1,"agent_key":false}"#).unwrap();
+    assert!(!voice::key_enabled(&path));
 }

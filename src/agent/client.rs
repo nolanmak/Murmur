@@ -101,6 +101,12 @@ pub fn list(dir: &Path) -> Result<Vec<Session>, String> {
         .collect())
 }
 
+/// Makes `id` the session untargeted voice turns (and dictation) go to.
+pub fn activate(dir: &Path, id: &str) -> Result<(), String> {
+    let (_, mut reader) = request(dir, json!({"op": "activate", "id": id}))?;
+    ok(next(&mut reader)?).map(|_| ())
+}
+
 /// Ends every Murmur-owned session and stops the daemon.
 pub fn shutdown(dir: &Path) -> Result<(), String> {
     let (_, mut reader) = request(dir, json!({"op": "shutdown"}))?;

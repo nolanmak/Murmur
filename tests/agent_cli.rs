@@ -173,3 +173,44 @@ fn agent_run_starts_the_daemon_and_detaching_keeps_the_session() {
     let list = agent_cmd(&home, &["agent", "list"]).output().unwrap();
     assert!(!list.status.success());
 }
+
+#[cfg(unix)]
+#[test]
+fn agent_key_turns_the_right_option_hold_on_and_off() {
+    let home = tempfile::tempdir().unwrap();
+    let settings = home
+        .path()
+        .join("Library/Application Support/Murmur/agent-voice.json");
+    let run = |args: &[&str]| {
+        let out = agent_cmd(home.path(), args).output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).to_string()
+    };
+    let status = run(&["agent", "key", "status"]);
+    assert!(
+        status.contains("on") && status.contains("Control"),
+        "{status}"
+    );
+    assert!(run(&["agent", "key", "off"]).contains("off"));
+    assert!(!murmur::agent::voice::key_enabled(&settings));
+    assert!(run(&["agent", "key", "on"]).contains("Right Option"));
+    assert!(murmur::agent::voice::key_enabled(&settings));
+    run(&["agent", "voice", "system"]);
+    assert!(run(&["agent", "key", "status"]).contains("on"));
+    run(&["agent", "key", "off"]);
+    assert!(!murmur::agent::voice::key_enabled(&settings));
+    assert_eq!(
+        murmur::agent::speech::Settings::load(&settings)
+            .unwrap()
+            .voice,
+        murmur::agent::speech::Voice::System
+    );
+    let bad = agent_cmd(home.path(), &["agent", "key", "maybe"])
+        .output()
+        .unwrap();
+    assert!(!bad.status.success());
+}

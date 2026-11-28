@@ -284,6 +284,8 @@ fn paste_text(
 #[derive(Clone, Copy)]
 enum Input {
     Flags(bool, bool),
+    /// The agent key (hold Right Option); never Control.
+    Agent(crate::space_hotkey::Command),
     HotkeyDown,
     HotkeyAbort,
     Cancel,
@@ -296,6 +298,16 @@ struct TapContext {
     origin: Instant,
     busy: std::cell::Cell<bool>,
     control_down: std::cell::Cell<bool>,
+    /// Agent key: its own edges and hold timer, separate from Control.
+    agent_enabled: std::cell::Cell<bool>,
+    right_option: RefCell<crate::agent::key::RightOption>,
+    agent_space: RefCell<crate::space_hotkey::HoldSpace>,
+}
+impl TapContext {
+    fn suspend(&self) {
+        self.space.borrow_mut().suspend();
+        self.agent_space.borrow_mut().suspend();
+    }
 }
 struct EventTap {
     port: Owned,
@@ -322,6 +334,21 @@ unsafe extern "C" fn callback(_proxy: CF, kind: u32, event: CF, info: *mut c_voi
     }
     let flags = unsafe { CGEventGetFlags(event) };
     let code = unsafe { CGEventGetIntegerValueField(event, 9) };
+    if context.agent_enabled.get()
+        && let Ok(mut right_option) = context.right_option.try_borrow_mut()
+        && let Some(key) = right_option.event(kind, code, flags)
+    {
+        drop(right_option);
+        if let Ok(mut hold) = context.agent_space.try_borrow_mut() {
+            let action = hold.key(key, context.origin.elapsed().as_millis() as u64);
+            drop(hold);
+            if let Some(command) = action.command
+                && context.sender.try_send(Input::Agent(command)).is_err()
+            {
+                context.dropped.store(true, Ordering::Release);
+            }
+        }
+    }
     let other_modifier = flags & ((1 << 17) | (1 << 19) | (1 << 20) | (1 << 23)) != 0;
     let key = match (kind, code) {
         // Control is represented as flagsChanged; use the flag so both left and right
@@ -370,6 +397,9 @@ impl EventTap {
             origin: Instant::now(),
             busy: std::cell::Cell::new(false),
             control_down: std::cell::Cell::new(false),
+            agent_enabled: std::cell::Cell::new(false),
+            right_option: RefCell::new(Default::default()),
+            agent_space: RefCell::new(Default::default()),
         });
         let port = unsafe {
             CGEventTapCreate(
@@ -736,6 +766,8 @@ struct Shell {
     /// #114: finished local dictations go to the active agent session.
     agent_menu: super::macos_agent::AgentMenu,
     recording_agent: bool,
+    /// The agent key asked for the recording that `start` begins.
+    agent_requested: bool,
     agent_voicebox: Arc<crate::agent::speech::Voicebox>,
     /// The reply being spoken; a new dictation stops it.
     agent_playback: Arc<std::sync::Mutex<Option<crate::agent::speech::Playback>>>,
@@ -1022,6 +1054,7 @@ impl Shell {
             remote_profile,
             agent_menu,
             recording_agent: false,
+            agent_requested: false,
             agent_voicebox: Arc::new(crate::agent::speech::Voicebox::system()),
             agent_playback: Default::default(),
             agent_stages,
@@ -1040,13 +1073,6 @@ impl Shell {
             prewarmed: (0, Instant::now()),
             prewarm_checked: Instant::now(),
         })
-    }
-    fn agent_route(&self) -> bool {
-        crate::agent::voice::destination(
-            self.agent_menu.on(),
-            self.remote_mode,
-            self.recording_remote_target.is_some(),
-        ) == crate::agent::voice::Destination::Agent
     }
     fn stop_agent_reply(&self) {
         if let Some(playback) = self
@@ -1324,6 +1350,8 @@ impl Shell {
         }
     }
     fn start(&mut self) {
+        // Only the agent key records for the agent; Control never does.
+        let agent = std::mem::take(&mut self.agent_requested);
         self.microphone_readiness.cancel();
         if self.microphone_startup.state() != crate::capture::MicrophoneState::Idle {
             self.last.begin();
@@ -1358,7 +1386,7 @@ impl Shell {
         self.last.begin();
         // Talking over a reply stops it (half-duplex, explicit interruption).
         self.stop_agent_reply();
-        self.recording_agent = self.agent_route();
+        self.recording_agent = agent;
         // Agent voice inserts nothing, so it needs only the microphone.
         let route = if self.recording_agent
             || (self.recording_remote && self.recording_remote_target.is_none())
@@ -1569,7 +1597,7 @@ impl Shell {
             return;
         }
         self.stop_agent_reply();
-        self.recording_agent = self.agent_route();
+        self.recording_agent = false;
         let focus = match if self.recording_agent {
             Ok(None)
         } else {
@@ -1616,7 +1644,7 @@ impl Shell {
         self.focus = None;
         self.indicator.disarm();
         if let Some(tap) = &self.tap {
-            tap._context.space.borrow_mut().suspend();
+            tap._context.suspend();
         }
         let mut tap_disabled = false;
         for event in self.input.try_iter() {
@@ -1819,6 +1847,15 @@ impl Shell {
             if let Some(command) = action.command {
                 send_command(&tap._context, command);
             }
+            tap._context.agent_enabled.set(self.agent_menu.on());
+            let action = tap
+                ._context
+                .agent_space
+                .borrow_mut()
+                .tick(tap._context.origin.elapsed().as_millis() as u64);
+            if let Some(command) = action.command {
+                let _ = tap._context.sender.try_send(Input::Agent(command));
+            }
         }
 
         if self
@@ -1849,6 +1886,20 @@ impl Shell {
                     }
                     _ => {}
                 },
+                Input::Agent(command) => {
+                    use crate::space_hotkey::Command;
+                    match command {
+                        Command::Start if self.core.start_manual() => {
+                            self.agent_requested = true;
+                            self.start();
+                        }
+                        Command::Finish if self.recording_agent && self.core.stop() => {
+                            self.finish();
+                        }
+                        Command::Cancel if self.recording_agent => self.cancel(),
+                        _ => {}
+                    }
+                }
                 Input::Cancel => self.cancel(),
                 Input::TapDisabled => {
                     self.cancel();
@@ -1866,8 +1917,7 @@ impl Shell {
                 }
                 if let Some(result) = self.agent_menu.handle(event.id.as_ref()) {
                     match result {
-                        Ok(message) if self.agent_menu.on() => self.show(message),
-                        Ok(_) => self.status(&self.ready()),
+                        Ok(message) => self.show(message),
                         Err(error) => self.show(&error),
                     }
                     continue;
@@ -1894,11 +1944,11 @@ impl Shell {
                 self.indicator.disarm();
                 if let Some(tap) = &self.tap {
                     tap._context.busy.set(true);
-                    tap._context.space.borrow_mut().suspend();
+                    tap._context.suspend();
                 }
                 let result = self.vocabulary_menu.handle(event.id.as_ref());
                 if let Some(tap) = &self.tap {
-                    tap._context.space.borrow_mut().suspend();
+                    tap._context.suspend();
                     tap._context.busy.set(
                         self.core.phase != Phase::Idle
                             || self.microphone_startup.state()
@@ -2096,6 +2146,13 @@ impl Shell {
         {
             self.cancel();
             self.show("Transcription did not finish; no text inserted");
+        }
+        if self.agent_menu.poll() {
+            self.show(if self.agent_menu.on() {
+                "Agent key on · hold Right Option to talk to your agent"
+            } else {
+                "Agent key off · Control dictation unchanged"
+            });
         }
         while let Ok(stage) = self.agent_stages.try_recv() {
             if let Some(message) = stage.message() {
