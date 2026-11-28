@@ -284,7 +284,7 @@ fn paste_text(
 #[derive(Clone, Copy)]
 enum Input {
     Flags(bool, bool),
-    /// The agent key (hold Right Option); never Control.
+    /// The agent key (hold Option alone); never Control.
     Agent(crate::space_hotkey::Command),
     HotkeyDown,
     HotkeyAbort,
@@ -300,7 +300,7 @@ struct TapContext {
     control_down: std::cell::Cell<bool>,
     /// Agent key: its own edges and hold timer, separate from Control.
     agent_enabled: std::cell::Cell<bool>,
-    right_option: RefCell<crate::agent::key::RightOption>,
+    option_key: RefCell<crate::agent::key::OptionKey>,
     agent_space: RefCell<crate::space_hotkey::HoldSpace>,
 }
 impl TapContext {
@@ -335,10 +335,10 @@ unsafe extern "C" fn callback(_proxy: CF, kind: u32, event: CF, info: *mut c_voi
     let flags = unsafe { CGEventGetFlags(event) };
     let code = unsafe { CGEventGetIntegerValueField(event, 9) };
     if context.agent_enabled.get()
-        && let Ok(mut right_option) = context.right_option.try_borrow_mut()
-        && let Some(key) = right_option.event(kind, code, flags)
+        && let Ok(mut option_key) = context.option_key.try_borrow_mut()
+        && let Some(key) = option_key.event(kind, code, flags)
     {
-        drop(right_option);
+        drop(option_key);
         if let Ok(mut hold) = context.agent_space.try_borrow_mut() {
             let action = hold.key(key, context.origin.elapsed().as_millis() as u64);
             drop(hold);
@@ -398,7 +398,7 @@ impl EventTap {
             busy: std::cell::Cell::new(false),
             control_down: std::cell::Cell::new(false),
             agent_enabled: std::cell::Cell::new(false),
-            right_option: RefCell::new(Default::default()),
+            option_key: RefCell::new(Default::default()),
             agent_space: RefCell::new(Default::default()),
         });
         let port = unsafe {
@@ -406,7 +406,9 @@ impl EventTap {
                 1,
                 0,
                 1, // Listen only: Control does not need to suppress or replay typing.
-                (1 << 12) | (1 << 10),
+                // flagsChanged, keyDown, and mouse-down so Option-click is
+                // never taken for an agent-key hold.
+                (1 << 12) | (1 << 10) | (1 << 1) | (1 << 3),
                 callback,
                 (&mut *context as *mut TapContext).cast(),
             )
@@ -2149,7 +2151,7 @@ impl Shell {
         }
         if self.agent_menu.poll() {
             self.show(if self.agent_menu.on() {
-                "Agent key on · hold Right Option to talk to your agent"
+                "Agent key on · hold Option to talk to your agent"
             } else {
                 "Agent key off · Control dictation unchanged"
             });

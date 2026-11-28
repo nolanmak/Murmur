@@ -2,7 +2,7 @@
 use super::{mcp, speech};
 use std::io::Read;
 
-pub const USAGE: &str = "speak   [--speed 0.75..2] [--text TEXT] (or pipe text) reads text aloud\nmcp     Serve speak, current_time and session_history to Codex/Claude over stdio\nagent   run codex|claude [--resume ID]   native session owned by Murmur; Ctrl+] detaches\n        list | use ID | send [--id ID] [--speak] TEXT | stop\n        key on|off|status   hold Right Option to talk to the active session (Control stays dictation)\n        voice status|system|deepgram [MODEL]|speed N";
+pub const USAGE: &str = "speak   [--speed 0.75..2] [--text TEXT] (or pipe text) reads text aloud\nmcp     Serve speak, current_time and session_history to Codex/Claude over stdio\nagent   run codex|claude [--resume ID]   native session owned by Murmur; Ctrl+] detaches\n        list | use ID | send [--id ID] [--speak] TEXT | stop\n        key on|off|status   hold Option to talk to the active session (Control stays dictation)\n        voice status|system|deepgram [MODEL]|speed N";
 const AGENT_USAGE: &str = "Usage: murmur agent run codex|claude [--resume ID] | list | use ID | send [--id ID] [--speak] TEXT | stop | key on|off|status | voice …";
 
 pub fn main(command: &str, args: &[String]) -> Result<(), String> {

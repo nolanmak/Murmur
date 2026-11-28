@@ -1,5 +1,5 @@
 //! Talking to the active agent with a spoken reply (#114). The menu bar
-//! records on the agent key (Right Option), calls [`deliver`] off the main
+//! records on the agent key (Option), calls [`deliver`] off the main
 //! thread and shows each [`Stage`]. Control dictation never comes here.
 use super::{
     client,
@@ -74,7 +74,7 @@ pub fn key_command(args: &[String], path: &Path) -> Result<String, String> {
         _ => return Err(KEY_USAGE.into()),
     }
     Ok(if key_enabled(path) {
-        "Agent key: on · hold Right Option to talk to the active Murmur agent session. Control stays dictation.".into()
+        "Agent key: on · hold Option to talk to the active Murmur agent session. Control stays dictation.".into()
     } else {
         "Agent key: off · Control stays dictation.".into()
     })

@@ -37,7 +37,7 @@ pub struct Settings {
     pub voice: Voice,
     pub model: String,
     pub speed: f32,
-    /// Holding Right Option records for the active agent session. Control
+    /// Holding either Option key records for the active agent session. Control
     /// is always plain dictation. On by default; `murmur agent key off`.
     pub agent_key: bool,
 }

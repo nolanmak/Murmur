@@ -20,19 +20,14 @@ fn main() -> Result<(), String> {
     let path = root.join("agent-voice.json");
     let mut menu = AgentMenu::new(Ok(path.clone()));
     // On by default; Control dictation never depends on it.
-    if !menu.on()
-        || menu.item.text() != "Agent key (hold Right Option): On"
-        || !menu.item.is_enabled()
-    {
+    if !menu.on() || menu.item.text() != "Agent key (hold Option): On" || !menu.item.is_enabled() {
         return Err("Initial agent key state wrong".into());
     }
     if menu.handle("cleanup:toggle").is_some() {
         return Err("Agent menu claimed another menu's event".into());
     }
     menu.handle(TOGGLE).ok_or("Missing toggle route")??;
-    if menu.on()
-        || voice::key_enabled(&path)
-        || menu.item.text() != "Agent key (hold Right Option): Off"
+    if menu.on() || voice::key_enabled(&path) || menu.item.text() != "Agent key (hold Option): Off"
     {
         return Err("Agent key off failed".into());
     }
@@ -54,7 +49,7 @@ fn main() -> Result<(), String> {
     // `murmur agent key off|on` while the app runs: the menu follows the file.
     voice::set_key_enabled(&path, false)?;
     menu.refresh();
-    if menu.on() || menu.item.text() != "Agent key (hold Right Option): Off" {
+    if menu.on() || menu.item.text() != "Agent key (hold Option): Off" {
         return Err("CLI key off was not picked up".into());
     }
     voice::set_key_enabled(&path, true)?;

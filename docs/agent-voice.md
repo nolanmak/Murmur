@@ -18,7 +18,7 @@ Keychain credentials and Offline-all policy do that work instead.
 | `agentflow speak` | `murmur speak` |
 | `terminal.ts` PTY ownership + `agentflow run` | `murmur agentd` + `murmur agent run codex\|claude` |
 | Reply observation from native JSONL | `agent::reply` watcher |
-| Dashboard voice button | Agent key: hold Right Option |
+| Dashboard voice button | Agent key: hold Option |
 
 ## Boundaries kept from Agentflow
 
@@ -107,11 +107,12 @@ Acceptance:
 
 - **Control is always Murmur's dictation key** and types into the focused
   field exactly as before. Agent voice never redirects it.
-- **Holding Right Option** (350 ms, like Control) records for the agent: the
+- **Holding either Option key** (350 ms, like Control) records for the agent: the
   transcript goes to the active Murmur agent session and the reply is spoken.
-  Quick taps and Option+key shortcuts (accents, symbols) pass through.
+  Quick taps, Option+key shortcuts (accents, symbols, word navigation),
+  Option-click and Option-drag cancel the hold and pass through.
 - The key is on by default. Turn it off or on with `murmur agent key off|on`
-  or the menu item "Agent key (hold Right Option)". The running app picks a
+  or the menu item "Agent key (hold Option)". The running app picks a
   CLI change up within a second.
 - The active session is the one most recently started, attached or sent to;
   choose another with `murmur agent use ID` (`murmur agent list` marks it).
@@ -133,7 +134,7 @@ Acceptance:
 ```sh
 ln -sf /path/to/Murmur.app/Contents/MacOS/murmur ~/.local/bin/murmur
 cd ~/project && murmur agent run claude   # answer any startup prompts, Ctrl+] to detach
-# Hold Right Option and speak (Control stays normal dictation).
+# Hold Option and speak (Control stays normal dictation).
 murmur agent send --speak "summarise the failing tests"   # same thing from a shell
 claude mcp add murmur -- murmur mcp        # replaces the agentflow MCP server
 codex mcp add murmur -- murmur mcp

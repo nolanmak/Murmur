@@ -217,7 +217,7 @@ fn agent_key_turns_the_right_option_hold_on_and_off() {
     );
     assert!(run(&["agent", "key", "off"]).contains("off"));
     assert!(!murmur::agent::voice::key_enabled(&settings));
-    assert!(run(&["agent", "key", "on"]).contains("Right Option"));
+    assert!(run(&["agent", "key", "on"]).contains("Option"));
     assert!(murmur::agent::voice::key_enabled(&settings));
     run(&["agent", "voice", "system"]);
     assert!(run(&["agent", "key", "status"]).contains("on"));

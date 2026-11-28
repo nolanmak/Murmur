@@ -1,4 +1,4 @@
-//! Native "Agent key" toggle (#114): holding Right Option talks to the
+//! Native "Agent key" toggle (#114): holding Option talks to the
 //! active agent session. Control dictation is never affected. Saved with the
 //! agent voice settings; `murmur agent key on|off` changes it live.
 use crate::agent::{speech::Settings, voice};
@@ -16,9 +16,9 @@ pub struct AgentMenu {
 
 pub fn label(on: bool) -> &'static str {
     if on {
-        "Agent key (hold Right Option): On"
+        "Agent key (hold Option): On"
     } else {
-        "Agent key (hold Right Option): Off"
+        "Agent key (hold Option): Off"
     }
 }
 
@@ -77,7 +77,7 @@ impl AgentMenu {
         self.on = !self.on;
         self.item.set_text(label(self.on));
         Some(Ok(if self.on {
-            "Agent key on · hold Right Option to talk to your agent"
+            "Agent key on · hold Option to talk to your agent"
         } else {
             "Agent key off · Control dictation unchanged"
         }))
