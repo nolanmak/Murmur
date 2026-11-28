@@ -48,5 +48,7 @@ on close; the new dictation adapter intentionally waits for the provider to fini
 A quick Control tap replays its original native keydown before keyup. If another
 modifier arrives first, that deferred Control is replayed before the shortcut.
 Long holds suppress repeated spaces and start dictation once; release finishes.
-Command/Option/Shift/Fn-modified Control is passed through. Fn itself is
-not registered, so Wispr Flow can keep using it.
+Command/Shift/Fn-modified Control is passed through. Control+Option (held
+without another key) is the same dictation with a note asking the agent to
+answer aloud with the speak tool; see [agent voice](agent-voice.md). Fn
+itself is not registered, so Wispr Flow can keep using it.
