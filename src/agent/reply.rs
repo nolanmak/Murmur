@@ -55,9 +55,11 @@ impl Watcher {
             }
             return events;
         }
+        let mut has_text = false;
         if let Some(message) = history::message(record, self.agent)
             && message.role == "assistant"
         {
+            has_text = true;
             events.push(Event::Text(message.text));
         }
         let finished = match self.agent {
@@ -70,7 +72,11 @@ impl Watcher {
             }
             Agent::Claude => {
                 let kind = record.get("type").and_then(Value::as_str);
+                // Claude writes thinking as its own record, already marked
+                // end_turn, before the text: only a record with text (or
+                // turn_duration) ends the reply.
                 (kind == Some("assistant")
+                    && has_text
                     && matches!(
                         record
                             .pointer("/message/stop_reason")

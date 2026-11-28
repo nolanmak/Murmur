@@ -117,3 +117,23 @@ fn interrupted_turns_end_the_watch() {
     );
     assert_eq!(events.last(), Some(&Event::Done));
 }
+
+#[test]
+fn a_thinking_only_end_turn_record_does_not_end_the_claude_reply() {
+    // Claude Code writes thinking as its own record, already marked end_turn,
+    // before the record with the reply text.
+    let mut w = Watcher::new(Agent::Claude, "what is two plus two");
+    let events = feed(
+        &mut w,
+        &[
+            json!({"type":"user","message":{"content":"what is two plus two"}}),
+            json!({"type":"assistant","message":{"content":[{"type":"thinking","thinking":""}],"stop_reason":"end_turn"}}),
+            json!({"type":"assistant","message":{"content":[{"type":"text","text":"Four."}],"stop_reason":"end_turn"}}),
+            json!({"type":"system","subtype":"turn_duration"}),
+        ],
+    );
+    assert_eq!(
+        events,
+        vec![Event::Started, Event::Text("Four.".into()), Event::Done]
+    );
+}
