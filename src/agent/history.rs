@@ -211,15 +211,3 @@ pub fn locate(home: &Path, agent: Agent, id: &str) -> Result<Option<PathBuf>, St
             .find(|path| owned_file(path))),
     }
 }
-
-/// The Claude project file for a session launched in `cwd`.
-pub fn claude_file(home: &Path, cwd: &Path, id: &str) -> PathBuf {
-    let mangled: String = cwd
-        .to_string_lossy()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
-    home.join(".claude/projects")
-        .join(mangled)
-        .join(format!("{id}.jsonl"))
-}

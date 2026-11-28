@@ -1,5 +1,6 @@
 pub mod capture;
 pub mod config;
+pub mod control_key;
 pub mod core;
 pub mod indicator;
 pub mod insertion;

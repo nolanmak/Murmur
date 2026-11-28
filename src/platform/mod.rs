@@ -20,6 +20,3 @@ pub mod macos_cleanup;
 
 #[cfg(target_os = "macos")]
 pub mod macos_transcription;
-
-#[cfg(target_os = "macos")]
-pub mod macos_agent;
