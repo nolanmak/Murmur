@@ -136,10 +136,30 @@ fn agent_run_starts_the_daemon_and_detaching_keeps_the_session() {
         .spawn()
         .unwrap();
     let mut stdin = run.stdin.take().unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(1500));
+    // Detach only once the agent is up (a fixed sleep flaked under load).
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+    let mut pipe = run.stdout.take().unwrap();
+    let sink = seen.clone();
+    let reader = std::thread::spawn(move || {
+        use std::io::Read;
+        let mut chunk = [0u8; 4096];
+        while let Ok(n) = pipe.read(&mut chunk) {
+            if n == 0 {
+                break;
+            }
+            sink.lock().unwrap().extend_from_slice(&chunk[..n]);
+        }
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while !String::from_utf8_lossy(&seen.lock().unwrap()).contains("fake claude ready")
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
     stdin.write_all(&[0x1d]).unwrap(); // Ctrl+] detaches
     let out = run.wait_with_output().unwrap();
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    reader.join().unwrap();
+    let stdout = String::from_utf8_lossy(&seen.lock().unwrap()).to_string();
     assert!(
         out.status.success(),
         "{stdout} {}",
